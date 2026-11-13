@@ -51,3 +51,10 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | User notice after a restore | **Sent manually** by the owner (BCC) until a CLI command exists |
 | Cloudflare proxy fallback | Switched on **only after a security review** |
 | GitGuardian false positives in PR #1 | **Remove literal passwords.** Local and test database passwords are generated, never committed. |
+
+## Round 3 decisions (2026-11-13)
+| Topic | Decision |
+|---|---|
+| Backup heartbeat URL | **Plain env on the job** (not a secret), so the last free Secret Manager slot stays spare. Accepted. |
+| The spend cap pauses backups and purge | **Accepted.** Backups stay in the app project; the backup project and bucket get alerts only, no cap. After the cap lifts, purge and backup are run by hand. |
+| GitGuardian on PR #1 | The literal passwords are removed in a follow-up commit. The original commit's incidents are resolved by the owner in the GitGuardian dashboard, or the PR is squash-merged. |

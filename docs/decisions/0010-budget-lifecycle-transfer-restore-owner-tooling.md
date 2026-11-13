@@ -29,7 +29,7 @@ ADR-0006 had no ownership transfer, so an owner of a shared budget could neither
 4. **Owner tooling (admin-commands.md, Cloud Run jobs only):**
    - `revoke-sessions --all --restore` for the post-restore procedure (F-11). Restore mode also deletes `email_change_cancel` tokens. The user notice is sent manually by the owner (BCC) until a CLI command exists.
    - A read-only `security-events --user-id` for incident response (F-26).
-   - `rewrap-mfa [--dry-run]` for `APP_KEYRING` rotation (data-model.md "Application keyring").
+   - `rewrap-mfa [--dry-run]` for `APP_KEYRING` rotation (data-model.md "Application keyring"), and `rewrap-mfa --retire-recovery-codes <keyId>` to delete recovery codes under a burned key and notify the affected users (F-38).
    - No command reads or edits financial data.
 
 ## Alternatives considered

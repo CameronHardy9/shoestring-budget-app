@@ -259,7 +259,7 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
 - Sign-up and sign-in: `signup`, `login_succeeded`, `login_failed`, `mfa_succeeded`, `mfa_failed`, `mfa_locked`, `recovery_code_used`, `reauth_succeeded`, `reauth_failed`, `logout`.
 - Sessions: `session_revoked`, `sessions_revoked_others`.
 - Password and email: `password_changed`, `password_reset_requested`, `password_reset_completed`, `email_change_requested`, `email_changed`, `email_change_cancelled`.
-- MFA: `mfa_enabled`, `mfa_factor_added`, `mfa_factor_removed`, `mfa_disabled`, `recovery_codes_regenerated`, `passkey_counter_regression`.
+- MFA: `mfa_enabled`, `mfa_factor_added`, `mfa_factor_removed`, `mfa_disabled`, `recovery_codes_regenerated`, `recovery_codes_retired` (owner retired codes on a burned key, F-38), `passkey_counter_regression`.
 - Data rights: `data_exported`, `account_deletion_requested`, `account_deletion_cancelled`.
 - Budgets: `budget_invitation_created`, `budget_invitation_accepted`, `budget_invitation_revoked`, `budget_member_removed`, `budget_ownership_transferred`, `budget_deleted`, `budget_restored`.
 - Admin: `admin_signup_invite_created`, `admin_mfa_reset`, `admin_sessions_revoked`.
@@ -277,7 +277,7 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
   - email-change confirmation (to the new address)
   - email-change notice with the cancel link (to the old address, P)
   - email changed (both addresses, P), email change cancelled (P)
-- **MFA:** MFA factor added or removed (P), recovery code used (P), recovery codes regenerated (P), MFA reset by owner (P).
+- **MFA:** MFA factor added or removed (P), recovery code used (P), recovery codes regenerated (P), **recovery codes retired by the owner because of a key compromise; regenerate them now** (P, F-38), MFA reset by owner (P).
 - **Budgets:**
   - budget invitation (only when the invitee has an account)
   - **invitation accepted** (to the budget owner, P)
@@ -298,4 +298,4 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
 - The sending subdomain publishes SPF, DKIM and DMARC, ramping to `p=reject` (ADR-0007).
 
 ## 16. Owner admin commands
-admin-commands.md defines `create-signup-invite`, `reset-mfa`, `revoke-sessions` (one user, `--all`, or `--all --restore`), `security-events` (read-only), `rewrap-mfa` and `purge`. They are CLI commands run **only as Cloud Run jobs** in the private production project (OD-3), never in GitHub Actions.
+admin-commands.md defines `create-signup-invite`, `reset-mfa`, `revoke-sessions` (one user, `--all`, or `--all --restore`), `security-events` (read-only), `rewrap-mfa` (including `--retire-recovery-codes`) and `purge`. They are CLI commands run **only as Cloud Run jobs** in the private production project (OD-3), never in GitHub Actions.

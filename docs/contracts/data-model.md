@@ -20,7 +20,7 @@ Postgres, plain-SQL migrations (dbmate), Kysely. Decisions behind this: ADR-0004
   - **Versioned uses** (`totp_credentials`, `recovery_codes`): store `key_id`. New rows always use `current`; reads use the row's key.
   - **Unversioned uses** (throttle keys, cursor MACs): always use `current`. Rotating therefore orphans at most 24 h of rate-limit counters and invalidates outstanding cursors (clients restart at page 1).
   - **Rotation check:** `GET /api/readyz` fails if any row references a key ID missing from the keyring, so the deploy gate blocks a keyring that dropped a key still in use. `readyz` is public, so the 503 body is the generic `UNAVAILABLE` message: it never names key IDs, counts or tables. The detail goes only to the server log (key IDs are Internal).
-  - **Rotation procedure:** add a key → make it `current` → `rewrap-mfa` (admin-commands.md) → remove the old key once `rewrap-mfa --dry-run` reports no rows on it. Recovery-code hashes cannot be rewrapped; they move off an old key only when users regenerate codes.
+  - **Rotation procedure:** add a key → make it `current` → `rewrap-mfa` (admin-commands.md) → remove the old key once `rewrap-mfa --dry-run` reports no rows on it. Recovery-code hashes cannot be rewrapped; they move off an old key only when users regenerate codes. For a **burned** key, `rewrap-mfa --retire-recovery-codes <keyId>` deletes the codes under that key and asks the affected users to regenerate (F-38), so the key can be removed at once.
   - **Escrow:** an offline escrow copy of the keyring lives in a password-manager vault separate from the backup `age` key (owner ruling, round 2). It is never stored with backups.
 
 ## Data classification
@@ -157,7 +157,7 @@ Invariants (DB): `CHECK ((purpose = 'password_reset') = (user_token_id IS NOT NU
 | used_at | timestamptz NULL | |
 | created_at | timestamptz | |
 
-Invariants (app): exactly 10 rows per user while MFA is enabled (generated together); 0 rows when no factor remains. Unique `(user_id, code_hash)`.
+Invariants (app): 10 rows per user while MFA is enabled (generated together), or 0 after an owner retirement of a burned key (F-38) until the user regenerates; always 0 when no factor remains. Unique `(user_id, code_hash)`.
 
 ### security_events (audit log)
 | Column | Type | Class |
