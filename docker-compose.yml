@@ -1,0 +1,179 @@
+# Local development stack: `make dev` (do not call docker compose directly; make
+# sets the profiles, host UID and ports).
+#
+# Profiles: services for an area are gated behind a profile named after it and
+# `make` enables a profile only when that area's package.json exists:
+#   db       -> deps + migrate (runs db's `migrate`, then `seed` when SEED=1)
+#   backend  -> deps + backend (runs backend's `dev` script with hot reload)
+#   frontend -> deps + frontend (runs frontend's `dev` script with hot reload)
+# Postgres has no profile and always runs.
+#
+# Exposure: everything binds to 127.0.0.1 on the host. `make dev LAN=1` opens only
+# the frontend dev server to the LAN (for phone testing).
+#
+# Credentials: no password or key is written here. POSTGRES_PASSWORD,
+# APP_DB_PASSWORD, MIGRATOR_DB_PASSWORD and APP_KEYRING are required (${VAR:?}): make dev reads them from the gitignored .env that make
+# setup generates with random values; make test and make e2e export fresh ones
+# per run. Without them compose stops with the message below.
+name: shoestring
+
+x-node-service: &node-service
+  build:
+    context: .
+    dockerfile: Dockerfile.dev
+  image: shoestring-dev:local
+  # make passes the host UID/GID so files written to the bind mount (Vite
+  # timestamps, generated clients) are owned by you, also on Linux CI.
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  working_dir: /app
+  init: true
+  volumes:
+    - .:/app
+    - node_modules:/app/node_modules
+    - node_modules_frontend:/app/frontend/node_modules
+    - node_modules_backend:/app/backend/node_modules
+    - node_modules_db:/app/db/node_modules
+    - node_modules_tests:/app/tests/node_modules
+
+# db's role bootstrap (via DATABASE_ADMIN_URL) sets each role's password from
+# the password in its URL below.
+x-db-urls:
+  &db-urls # app role: what the backend uses (SELECT/INSERT/UPDATE/DELETE only).
+  DATABASE_URL: postgres://app:${APP_DB_PASSWORD:?APP_DB_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
+  # migrator role: owns the schema, runs migrations.
+  MIGRATOR_DATABASE_URL: postgres://migrator:${MIGRATOR_DB_PASSWORD:?MIGRATOR_DB_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
+  # Superuser, local and test only: creates the roles above. Never in production.
+  DATABASE_ADMIN_URL: postgres://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
+
+services:
+  postgres:
+    # Keep the major version in step with production (sre).
+    image: postgres:17.12-trixie@sha256:dbb9623d5121b5d2c2c9e2fba56e40193cbb3510d4af7f035b1ab1823aff3205
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set, run make setup to generate .env}
+      POSTGRES_DB: ${POSTGRES_DB:-shoestring}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+      start_interval: 1s
+
+  # One-shot: installs the workspace into the Linux node_modules volumes.
+  deps:
+    <<: *node-service
+    profiles: [db, backend, frontend]
+    command: ["pnpm", "install", "--frozen-lockfile"]
+    restart: "no"
+
+  # One-shot: migrations, then idempotent seed data (SEED=1 by default in dev).
+  migrate:
+    <<: *node-service
+    profiles: [db]
+    command:
+      - sh
+      - -c
+      - >-
+        pnpm --filter ./db --if-present run migrate &&
+        if [ "$$SEED" = "1" ]; then pnpm --filter ./db --if-present run seed; fi
+    environment:
+      <<: *db-urls
+      SEED: ${SEED:-1}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      deps:
+        condition: service_completed_successfully
+
+  backend:
+    <<: *node-service
+    profiles: [backend]
+    command: ["pnpm", "--filter", "./backend", "run", "dev"]
+    environment:
+      <<: *db-urls
+      NODE_ENV: ${NODE_ENV:-development}
+      HOST: 0.0.0.0
+      PORT: ${BACKEND_PORT:-3000}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:5173}
+      COOKIE_SECURE: "false"
+      TEST_HOOKS: ${TEST_HOOKS:-0}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      APP_RELEASE: ${APP_RELEASE:-dev}
+      # JSON keyring, one random 32-byte key (docs/contracts/data-model.md).
+      APP_KEYRING: ${APP_KEYRING:?APP_KEYRING is not set, run make setup to generate .env}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+process.env.PORT+'/api/readyz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 90s
+      start_interval: 1s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      deps:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+        required: false
+
+  frontend:
+    <<: *node-service
+    profiles: [frontend]
+    command: ["pnpm", "--filter", "./frontend", "run", "dev"]
+    environment:
+      NODE_ENV: development
+      # The dev server must listen on all interfaces inside the container and
+      # proxy /api to the backend so the app stays same-origin.
+      HOST: 0.0.0.0
+      PORT: ${FRONTEND_PORT:-5173}
+      API_PROXY_TARGET: http://backend:${BACKEND_PORT:-3000}
+      VITE_APP_RELEASE: ${APP_RELEASE:-dev}
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:'+process.env.PORT+'/').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 90s
+      start_interval: 1s
+    depends_on:
+      deps:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+        required: false
+
+volumes:
+  pgdata:
+  # Fixed names so the dev, test and e2e projects share one Linux install.
+  node_modules:
+    name: shoestring_node_modules
+  node_modules_frontend:
+    name: shoestring_node_modules_frontend
+  node_modules_backend:
+    name: shoestring_node_modules_backend
+  node_modules_db:
+    name: shoestring_node_modules_db
+  node_modules_tests:
+    name: shoestring_node_modules_tests

@@ -1,5 +1,34 @@
+# Environment files hold real values and never enter the repo.
+# .env.example is the documented template and is committed.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+.vite/
+.sourcemaps/
+
+# Test and audit output (visual baseline snapshots ARE committed)
+coverage/
+playwright-report/
+test-results/
+blob-report/
+playwright/.cache/
+.audit/
+
+# OS, editor and logs
+.DS_Store
+*.log
+*.swp
+.idea/
+
+# Claude Code local state
 .claude/settings.local.json
 .claude/agent-memory-local/
