@@ -1,0 +1,2 @@
+- [MVP contracts state](project_mvp_contracts_v1.md) — rev 3 (2026-11-13): settled owner rulings, keyring + deleted-budget scope design, deviations
+- [Integration watchlist](integration_watchlist.md) — drift points, env-name drift in sre docs, local OpenAPI validation + lint recipe
