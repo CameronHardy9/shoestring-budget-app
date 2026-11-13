@@ -1,0 +1,5 @@
+.env
+.env.local
+.env.*.local
+.claude/settings.local.json
+.claude/agent-memory-local/
