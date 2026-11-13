@@ -1,0 +1,23 @@
+# One pnpm workspace for the whole repo. Each area owner adds a package.json in
+# their folder and it is picked up automatically by make setup/check/e2e.
+packages:
+  - frontend
+  - backend
+  - db
+  - tests
+
+# Supply-chain hardening (owned by ci-engineer; changes need a security review).
+# Dependency install scripts are blocked unless the package is listed here, and an
+# unlisted package with a build script fails the install instead of being skipped
+# silently. Add native modules (for example argon2 or esbuild) by name.
+onlyBuiltDependencies: []
+strictDepBuilds: true
+# Refuse versions published less than 7 days ago (minutes). Most malicious
+# releases are found and pulled within days. For an urgent security fix, add the
+# package to minimumReleaseAgeExclude in the same PR and remove it afterwards.
+minimumReleaseAge: 10080
+# Fail if a new version has weaker publish trust evidence (for example, it lost
+# npm provenance) than earlier versions of the same package.
+trustPolicy: no-downgrade
+# Transitive dependencies may only come from the registry, not git URLs or tarballs.
+blockExoticSubdeps: true
