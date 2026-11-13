@@ -1,0 +1,54 @@
+{
+  "name": "@shoestring/db",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shoestring data layer: plain-SQL dbmate migrations, database roles, deterministic seed data and the typed data-access module (Kysely).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "default": "./src/testing/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "migrations",
+    "roles.sql",
+    "src",
+    "!src/testing",
+    "!src/test-support",
+    "!src/seed",
+    "!src/cli/seed.ts",
+    "!src/**/*.test.ts"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "lint": "eslint --max-warnings=0 .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "migrate": "node src/cli/migrate.ts",
+    "seed": "node src/cli/seed.ts",
+    "new-migration": "dbmate --migrations-dir ./migrations new"
+  },
+  "dependencies": {
+    "dbmate": "2.37.0",
+    "kysely": "0.28.19",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "eslint": "10.14.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "4.1.12"
+  }
+}

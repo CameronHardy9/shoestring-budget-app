@@ -16,6 +16,8 @@ Status values:
 
 **Ops review (2026-11-13, sre runbooks and backup job):** cleared to PR **after one one-line edit**: F-03's checklist must add the passkey-sync account (details under "Ops review" below). New Lows F-38 to F-40 can follow.
 
+**Data-layer review (2026-11-13, branch `feat/db-data-layer`):** the first code review. No Critical or High findings, so the branch is **OK to merge**. New: F-41 (Medium) and F-42 to F-44 (Low). F-25, F-26 and F-35 are now verified in code. Details are under "Data-layer review" below.
+
 ## Summary
 | ID | Sev | Owner → implements | Issue (first review) | Status | Note (re-review 2026-11-13) |
 |---|---|---|---|---|---|
@@ -43,8 +45,8 @@ Status values:
 | F-22 | Low | architect → backend | Enumeration timing | contract-fixed | Deviation 1 accepted: inline send, 700 ms timeout, fixed 1 s |
 | F-23 | Low | architect → frontend, backend | CSP and headers | contract-fixed | CORP, XFO, `report-to`, exact Sentry host, Host check, violation gate in e2e |
 | F-24 | Low | architect → backend | Crypto details | contract-fixed | `APP_KEYRING` accepted; rotate-secret.md's three stages, roll-forward rule, candidate readyz gate and vault-B escrow are correct. The compromise-mode deletion of recovery codes is **not** covered: F-38 |
-| F-25 | Low | architect → data, backend | Deletion/acceptance race | contract-fixed | Row locks and purge re-check. The two checks disagree on deleted budgets: F-35 |
-| F-26 | Low | architect → data, backend | Audit log | contract-fixed | INSERT/SELECT only, `SECURITY DEFINER` purge, new types, `budget_id`; `security-events` command (deviation 6 accepted) |
+| F-25 | Low | architect → data, backend | Deletion/acceptance race | verified | Row locks and purge re-check. The two checks disagree on deleted budgets: F-35. **Verified 2026-11-13** (db tests: acceptance vs deletion request serialized; purge skip-and-fail) |
+| F-26 | Low | architect → data, backend | Audit log | verified | INSERT/SELECT only, `SECURITY DEFINER` purge, new types, `budget_id`; `security-events` command (deviation 6 accepted). **Verified 2026-11-13:** roles.sql verify block plus tests (app cannot UPDATE/DELETE events, function owned by migrator, cascade on user purge) |
 | F-27 | Low | ci, **owner** | Public disclosure | open | Decided (OD-6). SECURITY.md and private vulnerability reporting still to be added before launch |
 | F-28 | Low | architect, ci, sre | Config hygiene | contract-fixed | Migrator URL only on the migrate job; `verify-full` refused otherwise; `.gitignore` still with ci |
 | F-29 | Low | architect → backend, sre | Email content injection, DMARC | contract-fixed | Escaped plain text; DMARC ramps to `p=reject` |
@@ -53,12 +55,16 @@ Status values:
 | F-32 | Low | frontend | bfcache after sign-out | contract-fixed | ARCHITECTURE: re-check on `pageshow.persisted` before rendering |
 | **F-33** | **High** | architect → backend, data | **New (rev 2):** cancelling with a *later* cancel token deleted the victim's earlier one | contract-fixed | auth.md §9 and §14, the OpenAPI descriptions and data-model: an earlier token wins, one change per 24 h (429), both addresses emailed, two regression tests (API, plus a DAL-seeded chain). Verified against the text 2026-11-13 |
 | **F-34** | Medium | architect → backend | **New (rev 2):** new-sign-in notice skipped for a previously seen browser/OS | contract-fixed | auth.md §15: sent on every successful sign-in, no skip rule |
-| F-35 | Low | architect → data | **New (rev 2):** deletion request and purge disagreed on soft-deleted budgets | contract-fixed | Same rule (non-deleted) in both; soft-deleted owned budgets are hard-deleted with the owner; the deletion email says so |
+| F-35 | Low | architect → data | **New (rev 2):** deletion request and purge disagreed on soft-deleted budgets | verified | Same rule (non-deleted) in both; soft-deleted owned budgets are hard-deleted with the owner; the deletion email says so. **Verified 2026-11-13:** one shared function (`lockOwnedBudgetsAndCheckShared`) and tests for both paths |
 | F-36 | Low | architect → data, backend, tests | **New (rev 2):** deleted-budget routes outside the scope machinery | contract-fixed | `x-budget-role: deleted_budget_owner` plus `DeletedBudgetScope` from `requireDeletedBudgetOwnership()`; startup check and permission tests cover it. The list route is user-scoped |
 | F-37 | Low | architect → backend | **New (rev 3):** a restore can push other members past 10 budgets, but `BudgetList.maxItems` is 10 | open | Not blocking; see details |
 | F-38 | Low | architect → backend, sre | **New (ops):** no way to retire recovery codes on a burned keyring key; stage 3 can't remove a compromised key until every user regenerates | open | Not blocking |
 | F-39 | Low | sre | **New (ops):** project-level `roles/run.developer` lets the deployer execute (with env overrides) or delete `shoestring-backup`, undoing its isolation; the restore runbook picks the newest object without a provenance check | open | Not blocking; fix before launch |
 | F-40 | Low | sre | **New (ops):** key material moves through the macOS clipboard (Universal Clipboard and clipboard history) and process arguments; a restore-drill note suggests running the app locally on a copy of production data | open | Not blocking |
+| F-41 | Medium | data-engineer, ci-engineer | **New (data layer):** a scope can be minted outside `requireMembership`. `issueBudgetScope` is exported, and relative imports into `db/src` get around the package boundary and the Semgrep rules | verified | **Verified 2026-11-13 (re-check):** `issueBudgetScope` is module-private, with a test that it is not exported. New Semgrep rules: `shoestring-db-internal-import`, `shoestring-kysely-import-outside-db` and `shoestring-issue-budget-scope-outside-scope-module`. The DeletedBudgetScope cast rule no longer excludes the test. audit.sh now scans `tests/` |
+| F-42 | Low | data-engineer | **New (data layer):** the "local host only" guards in the migrate CLI and `@shoestring/db/testing` can be bypassed with a `?host=` URL parameter; no `verify-full` check on a non-local migrator URL | verified | **Verified 2026-11-13 (re-check):** `db/src/conn.ts` takes the host from pg's own parser, refuses `host`/`hostaddr` and ambiguous hosts, and requires `verify-full` for a remote migrator URL. Used by migrate, seed and testing, with tests |
+| F-43 | Low | data-engineer | **New (data layer):** the seed CLI has no environment guard and ships in the production image (`files: src, dist`) | verified | **Verified 2026-11-13 (re-check):** refuses `NODE_ENV=production` and non-local hosts (tested). `files` and `tsconfig.build.json` exclude the seed, `testing` and test support |
+| F-44 | Low | data-engineer | **New (data layer):** `app` can still create temporary objects (PUBLIC keeps `TEMPORARY` on the database), contrary to "no DDL" | verified | **Verified 2026-11-13 (re-check):** `REVOKE ALL ON DATABASE … FROM PUBLIC` and `REVOKE TEMPORARY` from the three roles. The verify block fails on TEMPORARY, and a test shows temp tables and `pg_temp` functions are refused. Note for sre: on an existing database, run roles.sql as the owner before the next migrate, or the verify block stops the migrate job (it fails closed) |
 
 ## Re-review 2026-11-13: architect deviations
 | # | Deviation | Ruling |
@@ -389,3 +395,108 @@ Scope: deploy/backup/backup.sh; docs/runbooks/README.md (backup design and image
   - Pass the new key to `jq` through `--rawfile` from a pipe or file descriptor rather than `--arg`.
   - restore.md: set `trap 'rm -f "$KEYFILE"' EXIT` right after `mktemp`.
   - restore.md drill: if the app is run against drill data, use the production entry (`node dist/server.js`, `NODE_ENV=production`, no `TEST_HOOKS`), never `make dev`. Delete the drill project the same day (as written).
+
+## Data-layer review 2026-11-13: `feat/db-data-layer`
+Scope: `db/migrations/` (2 migrations), `db/roles.sql`, `db/src/` (the DAL, `scope.ts`, the CLIs, seed, `@shoestring/db/testing`), the `pnpm-lock.yaml` additions, and the ci-engineer's in-progress Semgrep changes. `make check` passed (9 files, 117 tests). `make audit` passed: gitleaks clean, Semgrep 0 findings, zizmor clean. osv-scanner reported one advisory, minimatch 10.2.6 (GHSA-g3hv-75wg-m249, 6.9). It is new in the lockfile but reached only through eslint and typescript-eslint dev tooling, with globs from repo config, so it is not exploitable. Bump it when eslint allows `>=11.0.1`.
+
+**Verdict: OK to merge.** No Critical or High findings. F-41 should be fixed before the backend starts importing `@shoestring/db`.
+
+**Re-check 2026-11-13:** F-41 to F-44 are fixed and verified by reading the code and running `make audit` (Semgrep 0 findings). `make check` was not run in this pass; the coordinator is running it. Still OK to merge.
+
+### What was checked and holds
+- **Privilege model:**
+  - `app` has DML only. On `security_events` it has INSERT and SELECT only; on `schema_migrations`, SELECT only. It has no TRUNCATE, REFERENCES, TRIGGER or MAINTAIN, and EXECUTE only on `purge_security_events()`.
+  - `backup` is SELECT-only. All three roles are NOSUPERUSER, NOCREATEROLE, NOCREATEDB, NOREPLICATION and NOBYPASSRLS. `CREATE` on `public` is revoked from PUBLIC.
+  - `roles.sql` checks this whole end state and fails the migrate run if anything differs, and tests cover it. That closes the F-11 note.
+  - Exception: temporary objects (F-44).
+- **`purge_security_events()`:**
+  - Owned by `migrator`, SECURITY DEFINER, and verified as such.
+  - `search_path = pg_catalog, public, pg_temp`: pg_catalog comes first, pg_temp is explicitly last, and `public` is not writable by `app` or PUBLIC (verified). The table name is schema-qualified.
+  - It takes no arguments and uses the database clock (F-26, intentional). The dry run counts with the same clock. Accepted as is.
+- **Cross-budget isolation:**
+  - Every function that takes a `BudgetScope` calls `assertBudgetScope` or `lockBudget*`. Every sub-resource query filters on `scope.budgetId`, and child tables use composite FKs.
+  - Functions keyed on user or invitation (`acceptInvitation`, export, `listDeletedBudgets`, `createBudget` replay) go through `requireMembership`, `requireDeletedBudgetOwnership` or an email match re-checked under a lock.
+  - F-18 items 3 to 5 and 7 are implemented and tested: a foreign `categoryId` gets a 400 before any write, replays go through the scope, the export calls `requireMembership` for each budget, and the two-household suite has a coverage check.
+  - The scope check is a WeakSet, so a forged object fails at runtime. The one gap is F-41.
+- **Tokens and secrets:**
+  - F-01: every listed revocation event calls `deleteOpenUserTokens`, which keeps cancel tokens. The exception is restore mode, which deletes them too.
+  - F-33: cancelling deletes only later cancel tokens, using `(created_at, id) >` ordering. The reissued cancel token holds the pre-change address. A new change is refused while any cancel token is open. Confirming needs an active session of the same user.
+  - Password hashes are limited to argon2id by a `CHECK`. Session, invite and user tokens are stored only as 32-byte hashes.
+  - TOTP is stored as `key_id` plus ciphertext; the AAD and encryption are the backend's job. Recovery codes are stored as 32-byte HMACs with `key_id`.
+  - The DAL never logs. Error messages are fixed strings. Driver errors propagate unchanged, so the F-07 serializer must handle them.
+- **CSV export:** user-text columns get the `'` prefix for `= + - @ \t \r`. The database's `is_clean_text` also rejects leading whitespace and all control characters, so a leading tab, CR or LF cannot be stored anyway.
+- **Purge (F-35):** the deletion request and the purge re-check share one function. Soft-deleted owned budgets are hard-deleted with the owner. A skipped user sets `failed`.
+- **Migrate CLI:**
+  - URLs reach dbmate through the environment, not argv. Output contains only fixed strings, roles.sql notices (role names and counts) and SQLSTATEs. A test checks that a refused admin URL is not echoed.
+  - `sslmode=disable` is added only for local hostnames that have no `sslmode`. The host check can be bypassed, though: F-42.
+- **Seed:**
+  - Uses example.com addresses. Invite token hashes are deterministic but consumed in the same run. `SEED_USER_PASSWORD` is optional (12+ characters); without it the password is random.
+  - It runs as `app` through the DAL and is never printed. The missing environment guard is F-43.
+- **Supply chain:** no new install scripts (`onlyBuiltDependencies: []`, `strictDepBuilds`). dbmate ships as platform binary packages. The lockfile has integrity hashes.
+
+### Rulings on the data-engineer's deviations
+| # | Deviation | Ruling |
+|---|---|---|
+| 1 | `transaction_splits_category_fkey` is `NO ACTION DEFERRABLE INITIALLY DEFERRED` instead of `RESTRICT`; `deleteCategory` pre-checks splits and sets the constraint `IMMEDIATE` | **Accept.** Integrity is the same at commit, and the composite `(budget_id, category_id)` still makes a cross-budget reference impossible. A direct delete still fails at once, as the test shows. Residual: when a quick-add races a category delete, the **transaction create** now fails at COMMIT with a raw 23503 (a 500 whose detail holds only IDs), where before the category delete would have failed. Conditions: the backend's F-07 serializer test includes a commit-time 23503, and the architect updates data-model.md (it still says `RESTRICT`). |
+| 2 | An expired pending invitation for the same email is **deleted** when the owner re-invites | **Accept.** No security effect: `budget_invitation_created` in `security_events` is the audit record, and the expired row conveyed nothing else. The architect should note it in data-model.md. |
+| 3 | Transferring ownership to a member whose account is pending deletion returns `NOT_FOUND` | **Accept.** It fails closed. The owner learns no more than "that member can't take ownership", about a co-member they already see in the list. The architect should name the code in the OpenAPI description of the transfer endpoint. |
+
+### Tooling changes under review
+- **Semgrep exclusion of `shoestring-budget-scope-cast` (and the DeletedBudgetScope twin) for `/db/src/scope.ts` and `/db/src/isolation.test.ts`: accepted in principle.**
+  - The scope.ts exclusion is narrowed again by `shoestring-scope-cast-outside-constructor`. I confirmed that it works on the `export async function` form: the cast at scope.ts:131 is not flagged. The isolation test needs the forged cast for its negative test.
+  - Conditions:
+    - The exclusions stay file-exact (no globs).
+    - The narrowing rule stays.
+    - F-41 is fixed, because the narrowing rule names `issueBudgetScope` as a legitimate constructor, which is the gap.
+  - Preferred, not required: replace the file-level exclusion of `isolation.test.ts` with one inline `// nosemgrep: shoestring-budget-scope-cast` on the forging line, so the rest of that file stays checked.
+- **ESLint relaxations** (`no-non-null-assertion`, `no-confusing-void-expression`, `require-await` off for `src/**/*.test.ts` and `src/test-support/**`): **acceptable.**
+  - These are type-hygiene rules, not security rules. The security-relevant lint (`sql.raw`/`sql.lit` ban, `no-console` outside the CLIs) still applies to tests.
+  - Both paths are excluded from the build.
+  - Condition: never extend this override to `src/testing/**`. That is shipped code that the backend's dev hooks import.
+
+### F-41 Medium (new, data layer): a BudgetScope can be minted outside `requireMembership`
+- **Location:**
+  - db/src/scope.ts:87–95 (`export function issueBudgetScope`). It is called only at scope.ts:83, despite the comment about create and join functions.
+  - db/package.json `exports` (`.` and `./testing` only).
+  - .github/semgrep/data-access.yml (`shoestring-sql-import-outside-db` matches only `import { sql } from "kysely"`). The narrowing rule's comment names `issueBudgetScope` as a constructor.
+  - db/src/repos/common.ts:54 and :94 (`loadBudgetRecord(budgetId, userId)` and `loadMemberContacts(budgetId)` take a raw `budgetId`).
+- **Scenario:** a backend handler needs a scope where `requireMembership` is awkward, such as a replay, a "switch budget" call or a notification fan-out. It does `import { issueBudgetScope } from "../../db/src/scope.ts"` and calls it with the `{budgetId}` from the path. A relative import is not blocked by the package `exports` map. Nothing flags it:
+  - no cast is written, so the cast rules stay silent;
+  - the scope is registered in the WeakSet, so `assertBudgetScope` passes;
+  - the isolation suite only exercises the DAL.
+
+  Any signed-in user can then read or change any budget whose ID they learn: IDs appear in invitation emails, URLs and exports of ex-members. The same relative-import path reaches `loadMemberContacts(budgetId)`, which returns members' **emails**, and `createKysely`. The contract's ban on Kysely `db` imports outside db/ is only half-implemented: `Kysely` itself is not matched.
+- **Why Medium:** today nothing exploits it, but R-7 (no RLS) was accepted only on the condition that tooling, not review, enforces F-18. This is a gap in exactly that tooling.
+- **Recommended fix:**
+  1. data-engineer: make `issueBudgetScope` module-private (drop `export`, or inline it into `requireMembership`), and fix the comment.
+  2. ci-engineer: outside `/db/**`, ban every import specifier that resolves into db internals, meaning any string matching `\bdb/(src|dist)/` other than the already-reviewed `testing` paths. Also ban any import from `"kysely"`, not just `{ sql }`. Add a rule that flags `issueBudgetScope(` outside `/db/src/scope.ts`, in case it is ever exported again.
+  3. Update the narrowing rule's comment once item 1 is done.
+- **Owner:** data-engineer (1), ci-engineer (2, 3).
+
+### F-42 Low (new, data layer): local-host guards can be bypassed; no TLS check on the migrator URL
+- **Location:** db/src/cli/migrate.ts:88–93 (admin URL check), :117–123 (`dbmateUrl`); db/src/testing/index.ts:17–25 (`assertLocal`).
+- **Issue:** each guard checks `new URL(url).hostname`, but the drivers let a `host` query parameter override the authority. I confirmed that `pg-connection-string` turns `postgres://postgres:pw@localhost/db?host=prod.example.net` into host `prod.example.net`, and lib/pq treats query parameters the same way. A superuser URL that carries `?host=` therefore passes the "local only" check. `resetDatabase` would then TRUNCATE that server, and the role bootstrap would `ALTER ROLE … PASSWORD` there. Separately, a non-local `MIGRATOR_DATABASE_URL` without `sslmode=verify-full` is accepted: node-pg would connect without TLS and dbmate with unverified TLS. The server refuses this for `DATABASE_URL` (ARCHITECTURE.md "Config").
+- **Plausibility:** this needs an operator-supplied URL, so it is defence in depth for an accident-prevention control. Neon refuses non-TLS connections, which limits the TLS half.
+- **Recommended fix:**
+  - Parse with the driver's own parser (`pg-connection-string`'s `parse`). Refuse any URL that has a `host` or `hostaddr` query parameter, or a resolved host outside the local set. Share one helper between the migrate CLI, the seed CLI (F-43) and `testing`.
+  - In `main()`, refuse a non-local `MIGRATOR_DATABASE_URL` whose `sslmode` is not `verify-full`.
+  - Add tests: a `?host=` URL is refused, and a non-local URL without `verify-full` is refused.
+- **Owner:** data-engineer.
+
+### F-43 Low (new, data layer): seed CLI has no environment guard and ships in the production image
+- **Location:** db/src/cli/seed.ts:34–58; db/package.json `files` (`src`, `dist`); db/tsconfig.build.json (builds `dist/cli/seed.js`); Dockerfile `pnpm --filter ./backend deploy --prod` (copies `@shoestring/db` with those files).
+- **Scenario:** an operator runs `node …/@shoestring/db/dist/cli/seed.js` against production, for example as a one-off job with an override, confusing it with `migrate`, or with `DATABASE_URL` pointed at production while `SEED_USER_PASSWORD` is set from the local `.env`. The seed then creates three active accounts with a password the operator's environment knows, one of them owning a "Demo household". They use example.com addresses, so no notification ever reaches anyone. That is a standing backdoor, invisible to the detective controls R-1 relies on.
+- **Recommended fix:** the seed refuses to run unless `DATABASE_URL` resolves (F-42 helper) to a local or compose host, and `NODE_ENV !== "production"`. Also exclude `src/cli/seed.ts`, `src/seed/` and `src/testing/` from what ships. Two ways: a narrower `files` list, or ensure the image's db package carries only `dist` without seed (`tsconfig.build.json` exclude). Add a test that the seed refuses a non-local URL.
+- **Owner:** data-engineer (ci-engineer if the Dockerfile has to change).
+
+### F-44 Low (new, data layer): `app` can create temporary objects
+- **Location:** db/roles.sql:55–67 (database grants; PUBLIC's default `CONNECT, TEMPORARY` on the database are never revoked); the verify block (no TEMPORARY check); db/src/migrations.test.ts:161 (`create table` is tested, `create temp table` is not).
+- **Issue:** data-model.md "Roles" says `app` has no DDL. Through PUBLIC, it can still `CREATE TEMP TABLE` and `CREATE FUNCTION pg_temp.f()`. I found no escalation path: `purge_security_events()` pins `pg_temp` last, and functions are never looked up in pg_temp implicitly. It is still a contract deviation and extra surface for any SQL-injection foothold.
+- **Recommended fix:** in the database-owner block, `REVOKE ALL ON DATABASE … FROM PUBLIC` (the explicit `CONNECT` grants to app and backup stay). In the verify block, fail if `has_database_privilege('app'|'backup', db, 'TEMPORARY')`. Add `create temp table` to the "DML only" test.
+- **Owner:** data-engineer.
+
+### Notes for the backend review (not findings)
+- `completePasswordReset` trusts the caller to have verified MFA first (auth.md §8: reset never bypasses MFA). The backend test must prove that a reset for an MFA user without a factor gives `TOKEN_INVALID` or `MFA_REQUIRED`.
+- `deleteSession(sessionId)` and `createSession({replacesSessionId})` do not filter by user. Pass them only IDs resolved from the caller's own cookie, and use `revokeSession(userId, id)` for `DELETE /me/sessions/{id}`.
+- `updatePasswordHash` (rehash on login) has no F-01 side effects by design. Never use it for a password change.
+- `transferOwnership` does not lock the target's user row. If a transfer races the target's own deletion request, the new owner can end up pending deletion. The purge re-check (F-35) catches this and fails the run, so it is safe. A `lockUser(target)` after the budget lock would close it earlier.

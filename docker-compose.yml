@@ -75,6 +75,10 @@ services:
     restart: "no"
 
   # One-shot: migrations, then idempotent seed data (SEED=1 by default in dev).
+  # SEED_USER_PASSWORD is optional (12+ characters, local only, see .env.example).
+  # Compose passes an unset variable as an empty string, so the command unsets
+  # it when empty and the seed falls back to random passwords instead of
+  # rejecting a too-short one.
   migrate:
     <<: *node-service
     profiles: [db]
@@ -82,11 +86,13 @@ services:
       - sh
       - -c
       - >-
+        if [ -z "$$SEED_USER_PASSWORD" ]; then unset SEED_USER_PASSWORD; fi;
         pnpm --filter ./db --if-present run migrate &&
         if [ "$$SEED" = "1" ]; then pnpm --filter ./db --if-present run seed; fi
     environment:
       <<: *db-urls
       SEED: ${SEED:-1}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
     restart: "no"
     depends_on:
       postgres:

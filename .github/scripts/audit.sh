@@ -72,11 +72,20 @@ semgrep_configs=(
   --config p/dockerfile --config p/docker-compose --config p/github-actions
   --config .github/semgrep
 )
+# Semgrep's built-in .semgrepignore skips any tests/ directory, which would leave
+# test-engineer's suites unscanned (and the project rules that apply to tests/,
+# such as shoestring-db-internal-import, silent). Files named explicitly are
+# always scanned, so pass every file under tests/ that git would commit.
+declare -a semgrep_extra=()
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] && semgrep_extra+=("$f")
+done < <(git ls-files -z --cached --others --exclude-standard -- tests)
 set +e
 docker run --rm "${as_user[@]}" -e SEMGREP_SEND_METRICS=off \
   -v "$ROOT:/src:ro" -v "$OUT:/out" -w /src "$(tool_image semgrep)" \
   semgrep scan --metrics=off --disable-version-check --quiet \
-  "${semgrep_configs[@]}" --text --json-output=/out/semgrep.json
+  "${semgrep_configs[@]}" --text --json-output=/out/semgrep.json \
+  . ${semgrep_extra[@]+"${semgrep_extra[@]}"}
 sg_rc=$?
 set -e
 if [ "$sg_rc" -ne 0 ] || [ ! -s "$OUT/semgrep.json" ]; then

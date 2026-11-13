@@ -196,6 +196,9 @@ ensure_local_env() {
       for v in $DB_PASSWORD_VARS; do echo "$v=$(rand_hex 24)"; done
       # Single quotes: compose reads the JSON literally.
       echo "APP_KEYRING='$(rand_keyring)'"
+      # Optional (not in CREDENTIAL_VARS): sign-in password of the seed users,
+      # read it here to sign in as them. Never printed.
+      echo "SEED_USER_PASSWORD=$(rand_hex 16)"
     } >"$LOCAL_ENV_FILE.tmp.$$"
     mv "$LOCAL_ENV_FILE.tmp.$$" "$LOCAL_ENV_FILE"
   )

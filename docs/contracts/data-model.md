@@ -56,7 +56,7 @@ Derived values: `idempotency_keys.request_hash` is **Internal, derived from Sens
 | deletion_requested_at, purge_after | timestamptz NULL | | |
 | created_at, updated_at | timestamptz | | |
 
-Invariants (DB): `CHECK ((status = 'pending_deletion') = (deletion_requested_at IS NOT NULL AND purge_after IS NOT NULL))`; `CHECK (purge_after IS NULL OR purge_after = deletion_requested_at + interval '30 days')`.
+Invariants (DB): `CHECK ((status = 'pending_deletion') = (deletion_requested_at IS NOT NULL AND purge_after IS NOT NULL))`; `CHECK (status = 'pending_deletion' OR (deletion_requested_at IS NULL AND purge_after IS NULL))` (an active user has no deletion timestamps); `CHECK (purge_after IS NULL OR purge_after = deletion_requested_at + interval '30 days')`.
 Relationships: has many sessions, memberships, MFA rows, tokens. There is **no admin flag**: owner admin actions are CLI commands (admin-commands.md).
 
 ### sessions
@@ -67,7 +67,7 @@ Relationships: has many sessions, memberships, MFA rows, tokens. There is **no a
 | token_hash | bytea UNIQUE NOT NULL | **Secret** | SHA-256 of the 32-byte random cookie token |
 | csrf_token | text NOT NULL | **Secret** | 32 random bytes, base64url |
 | status | enum `mfa_pending` \| `active` | | |
-| created_at, last_seen_at, expires_at | timestamptz NOT NULL | | `expires_at = min(last_seen_at + 30 days, absolute_expires_at)` for active sessions |
+| created_at, updated_at, last_seen_at, expires_at | timestamptz NOT NULL | | `expires_at = min(last_seen_at + 30 days, absolute_expires_at)` for active sessions |
 | absolute_expires_at | timestamptz NOT NULL | | `created_at + 90 days`; never extended (OD-2) |
 | mfa_verified_at | timestamptz NULL | | |
 | reauth_at | timestamptz NULL | | last password(+MFA) proof: login or `/auth/reauth` |
@@ -84,11 +84,11 @@ Created only by the `create-signup-invite` admin command.
 | id | uuid PK | |
 | email | citext NOT NULL | **PII** |
 | token_hash | bytea UNIQUE NOT NULL | **Secret** |
-| created_at, expires_at | timestamptz NOT NULL (`expires_at = created_at + 7 days`) | |
+| created_at, updated_at, expires_at | timestamptz NOT NULL (`expires_at = created_at + 7 days`) | |
 | used_at, revoked_at | timestamptz NULL | |
 | used_by_user_id | uuid NULL FK → users ON DELETE SET NULL | |
 
-Invariants (DB): `CHECK (NOT (used_at IS NOT NULL AND revoked_at IS NOT NULL))`; `CHECK (used_by_user_id IS NULL OR used_at IS NOT NULL)`; partial unique index on `(email) WHERE used_at IS NULL AND revoked_at IS NULL` (creating a new invite revokes the previous open one in the same transaction).
+Invariants (DB): `CHECK (expires_at = created_at + interval '7 days')`; `CHECK (NOT (used_at IS NOT NULL AND revoked_at IS NOT NULL))`; `CHECK (used_by_user_id IS NULL OR used_at IS NOT NULL)`; partial unique index on `(email) WHERE used_at IS NULL AND revoked_at IS NULL` (creating a new invite revokes the previous open one in the same transaction).
 
 ### user_tokens (one-time email tokens)
 | Column | Type | Class | Notes |
@@ -100,10 +100,10 @@ Invariants (DB): `CHECK (NOT (used_at IS NOT NULL AND revoked_at IS NOT NULL))`;
 | email | citext NULL | **PII** | `email_change`: the requested new address. `email_change_cancel`: the previous address to revert to (where the cancel link was sent). |
 | requested_by_session_id | uuid NULL FK → sessions ON DELETE CASCADE | | `email_change` only: revoking the requesting session deletes the token (F-01) |
 | mfa_failed_attempts | smallint NOT NULL DEFAULT 0 | | token is invalidated at 5 |
-| created_at, expires_at | timestamptz NOT NULL | | reset: 30 min; email change and cancel: 24 h |
+| created_at, updated_at, expires_at | timestamptz NOT NULL | | reset: 30 min; email change and cancel: 24 h |
 | used_at | timestamptz NULL | | |
 
-Invariants (DB): `CHECK ((purpose = 'password_reset') = (email IS NULL))`; `CHECK ((purpose = 'email_change') = (requested_by_session_id IS NOT NULL))`; partial unique index `(user_id, purpose) WHERE used_at IS NULL AND purpose <> 'email_change_cancel'` (issuing a new reset or email-change token deletes the open one). Cancel tokens are **not** unique per user: each email change keeps its own cancel link to its own previous address, so a later change cannot replace an earlier victim's link.
+Invariants (DB): `CHECK ((purpose = 'password_reset') = (email IS NULL))`; `CHECK ((purpose = 'email_change') = (requested_by_session_id IS NOT NULL))`; `CHECK` that `expires_at = created_at + interval '30 minutes'` for `password_reset` and `+ interval '24 hours'` for the other purposes; partial unique index `(user_id, purpose) WHERE used_at IS NULL AND purpose <> 'email_change_cancel'` (issuing a new reset or email-change token deletes the open one). Cancel tokens are **not** unique per user: each email change keeps its own cancel link to its own previous address, so a later change cannot replace an earlier victim's link.
 Invariants (app), F-01: these events delete every open `user_tokens` row of the user **except `email_change_cancel`**, in the same transaction: password change, password-reset completion, revoke-others, admin `revoke-sessions`, admin `reset-mfa`, any MFA factor added or removed, account-deletion request, email-change confirm (other tokens), email-change cancel. Cancel tokens survive so that an attacker who controls the account cannot erase the victim's way back; they expire after 24 h. The single exception is `revoke-sessions --all --restore` (F-11), which deletes them too.
 Invariants (app), **F-33 (cancel-token chain):**
 - Using an `email_change_cancel` token deletes the user's open tokens other than cancel tokens, **plus only the cancel tokens with a later `created_at`**. Earlier cancel tokens stay open: the earliest open cancel token always wins. Ties are broken by `id`; ids are UUIDv7, so ordered by creation.
@@ -131,7 +131,8 @@ Invariants (app), **F-33 (cancel-token chain):**
 | sign_count | bigint NOT NULL | |
 | transports | text[] NOT NULL DEFAULT '{}' | |
 | name | text NOT NULL (1–40) | PII (low; user label) |
-| created_at, last_used_at | timestamptz | |
+| created_at, updated_at | timestamptz NOT NULL | |
+| last_used_at | timestamptz NULL | |
 
 ### webauthn_challenges
 Single-use; deleted when consumed or expired (5 minutes).
@@ -143,9 +144,9 @@ Single-use; deleted when consumed or expired (5 minutes).
 | session_id | uuid NULL FK → sessions ON DELETE CASCADE | |
 | user_token_id | uuid NULL FK → user_tokens ON DELETE CASCADE | |
 | challenge | bytea NOT NULL (**Secret**) | |
-| expires_at | timestamptz NOT NULL | |
+| created_at, expires_at | timestamptz NOT NULL | `expires_at = created_at + 5 minutes` |
 
-Invariants (DB): `CHECK ((purpose = 'password_reset') = (user_token_id IS NOT NULL AND session_id IS NULL))`; `CHECK (purpose = 'password_reset' OR session_id IS NOT NULL)`; unique `(session_id)` and unique `(user_token_id)` (one outstanding challenge each).
+Invariants (DB): `CHECK (expires_at = created_at + interval '5 minutes')`; `CHECK ((purpose = 'password_reset') = (user_token_id IS NOT NULL AND session_id IS NULL))`; `CHECK (purpose = 'password_reset' OR session_id IS NOT NULL)`; unique `(session_id)` and unique `(user_token_id)` (one outstanding challenge each).
 
 ### recovery_codes
 | Column | Type | Class |
@@ -155,7 +156,7 @@ Invariants (DB): `CHECK ((purpose = 'password_reset') = (user_token_id IS NOT NU
 | key_id | text NOT NULL CHECK (key_id ~ '^k[0-9]{1,4}$') | `APP_KEYRING` key used for this hash |
 | code_hash | bytea NOT NULL | **Secret**: `HMAC-SHA-256(recovery-code-v1 subkey of key_id, normalized code)`, where normalized = lowercase with the hyphen removed; compared in constant time. Offline brute force needs the app keyring (F-04). Codes have 50 bits of entropy. |
 | used_at | timestamptz NULL | |
-| created_at | timestamptz | |
+| created_at, updated_at | timestamptz | |
 
 Invariants (app): 10 rows per user while MFA is enabled (generated together), or 0 after an owner retirement of a burned key (F-38) until the user regenerates; always 0 when no factor remains. Unique `(user_id, code_hash)`.
 
@@ -181,6 +182,7 @@ Persistent counters for the auth rate limits in auth.md (so limits survive resta
 | key_hash | bytea | `HMAC-SHA-256(throttle-v1 subkey of the current keyring key, key)`; key = full IPv4 address, IPv6 /64 prefix, normalized email, user ID, or a combination (no raw PII) |
 | window_start | timestamptz | |
 | count | integer NOT NULL CHECK (count >= 0) | |
+| created_at, updated_at | timestamptz NOT NULL | |
 PK `(scope, key_hash, window_start)`. Rows older than 24 h are purged.
 
 ### idempotency_keys
@@ -213,9 +215,10 @@ Restore (`POST /me/deleted-budgets/{deletedBudgetId}/restore`, through `DeletedB
 | user_id | uuid FK → users ON DELETE CASCADE | |
 | role | enum `owner` \| `member` NOT NULL | |
 | joined_at | timestamptz NOT NULL | |
+| created_at, updated_at | timestamptz NOT NULL | |
 PK `(budget_id, user_id)`. Index `(user_id)`.
 Invariants (DB): **exactly one owner per budget**: partial unique index `(budget_id) WHERE role = 'owner'` (at most one) plus a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on `budgets` insert and `budget_members` delete/update that fails the transaction if a non-deleted budget has no owner row (at least one). Consequence: the purge must delete a user's owned budgets before the user.
-Invariants (app): ≤ 6 members per budget. **Ownership transfer** (ADR-0010) runs in one transaction with `SELECT … FOR UPDATE` on the `budgets` row: first update the current owner's row to `member`, then the target's row to `owner` (in that order, because the partial unique index is checked per statement); the deferred trigger confirms exactly one owner at commit. The target must be a member whose account `status = 'active'`.
+Invariants (app): ≤ 6 members per budget. **Ownership transfer** (ADR-0010) runs in one transaction with `SELECT … FOR UPDATE` on the `budgets` row: first update the current owner's row to `member`, then the target's row to `owner` (in that order, because the partial unique index is checked per statement); the deferred trigger confirms exactly one owner at commit. The target must be a member whose account `status = 'active'`; a non-member target, or a member whose account is pending deletion, is `NOT_FOUND`.
 
 ### budget_invitations
 | Column | Type | Class | Notes |
@@ -225,12 +228,12 @@ Invariants (app): ≤ 6 members per budget. **Ownership transfer** (ADR-0010) ru
 | email | citext NOT NULL | **PII** | |
 | invited_by_user_id | uuid NULL FK → users ON DELETE SET NULL | | |
 | status | enum `pending` \| `accepted` \| `declined` \| `revoked` | | `expired` is derived, never stored |
-| created_at, expires_at | timestamptz NOT NULL | | `expires_at = created_at + 14 days` |
+| created_at, updated_at, expires_at | timestamptz NOT NULL | | `expires_at = created_at + 14 days` |
 | responded_at | timestamptz NULL | | |
 | accepted_user_id | uuid NULL FK → users ON DELETE SET NULL | | |
 
-Invariants (DB): `CHECK ((status = 'pending') = (responded_at IS NULL))`; `CHECK (status = 'accepted' OR accepted_user_id IS NULL)`; partial unique index `(budget_id, email) WHERE status = 'pending'`.
-Invariants (app): accept requires `status = 'pending'`, `expires_at > now()`, the budget not deleted, the budget owner's `status = 'active'`, the caller's email equal to `email`, the caller not already a member, and member count < 6. Acceptance takes `SELECT … FOR UPDATE` on the invitation's `budgets` row, then inserts the `budget_members` row (`role = 'member'`) and updates the invitation in the same transaction (F-25). ≤ 10 pending invitations per budget and ≤ 20 pending, unexpired invitations per invitee email across all budgets (F-31). There is no invitation token: authorization is the email match.
+Invariants (DB): `CHECK (expires_at = created_at + interval '14 days')`; `CHECK ((status = 'pending') = (responded_at IS NULL))`; `CHECK (status = 'accepted' OR accepted_user_id IS NULL)`; partial unique index `(budget_id, email) WHERE status = 'pending'`.
+Invariants (app): accept requires `status = 'pending'`, `expires_at > now()`, the budget not deleted, the budget owner's `status = 'active'`, the caller's email equal to `email`, the caller not already a member, and member count < 6. Acceptance takes `SELECT … FOR UPDATE` on the invitation's `budgets` row, then inserts the `budget_members` row (`role = 'member'`) and updates the invitation in the same transaction (F-25). ≤ 10 pending, unexpired invitations per budget and ≤ 20 pending, unexpired invitations per invitee email across all budgets (F-31); expired invitations count toward neither. Inviting an email whose pending invitation to this budget has expired deletes that expired row and creates a fresh one in the same transaction (the stored status is still `pending`, so the row would otherwise block the partial unique index); an unexpired pending invitation answers `ALREADY_EXISTS` (`invitation_pending`). There is no invitation token: authorization is the email match.
 
 ### categories
 | Column | Type | Class | Notes |
@@ -243,7 +246,7 @@ Invariants (app): accept requires `status = 'pending'`, `expires_at > now()`, th
 | archived_at | timestamptz NULL | | API `archived = archived_at IS NOT NULL` |
 | created_at, updated_at, version | | | |
 Unique `(budget_id, lower(name))` (archived names stay reserved); unique `(budget_id, id)` (target of composite FKs).
-Invariants (app): ≤ 100 categories per budget. Archived categories cannot receive new splits or plan entries (`CATEGORY_ARCHIVED`). Delete is allowed only when no split references it (FK `RESTRICT` → `CATEGORY_IN_USE`).
+Invariants (app): ≤ 100 categories per budget. Archived categories cannot receive new splits or plan entries (`CATEGORY_ARCHIVED`). Delete is allowed only when no split references it (`CATEGORY_IN_USE`; see the split FK in `transaction_splits`).
 
 ### plan_entries (the monthly plan = all entries for one budget and month)
 | Column | Type | Class | Notes |
@@ -279,18 +282,20 @@ Every transaction has **1 to 20** splits. An ordinary (unsplit) transaction has 
 | id | uuid PK | | |
 | budget_id | uuid NOT NULL | | |
 | transaction_id | uuid NOT NULL | | FK `(budget_id, transaction_id)` → `transactions(budget_id, id)` ON DELETE CASCADE |
-| category_id | uuid NOT NULL | | FK `(budget_id, category_id)` → `categories(budget_id, id)` ON DELETE **RESTRICT** |
+| category_id | uuid NOT NULL | | FK `(budget_id, category_id)` → `categories(budget_id, id)` ON DELETE **NO ACTION `DEFERRABLE INITIALLY DEFERRED`** (see below) |
 | amount_cents | bigint NOT NULL CHECK (1 ≤ amount_cents ≤ 100000000) | **Sensitive** | |
+| created_at | timestamptz NOT NULL | | splits are inserted and deleted, never updated |
 Unique `(transaction_id, category_id)`. Index `(budget_id, category_id)`, `(transaction_id)`.
 Invariants (DB): **splits sum to the parent and there is at least one**, enforced by a `DEFERRABLE INITIALLY DEFERRED` constraint trigger on insert/update/delete of `transaction_splits` and on update of `transactions.amount_cents`, which checks at commit that `count(*) BETWEEN 1 AND 20` and `sum(amount_cents) = transactions.amount_cents` for each affected transaction. The API checks first and returns `SPLITS_DO_NOT_SUM`; the trigger is the backstop (a trigger failure is a 500 and a bug).
+**Split → category FK (owner, 2026-11-13).** Deferred `NO ACTION`, not `RESTRICT`: a budget hard delete (the 30-day purge) cascades to categories and to transactions → splits as separate statements, so `RESTRICT` (or an immediate `NO ACTION`) would fail partway through the cascade. The DAL's `deleteCategory` runs `SET CONSTRAINTS transaction_splits_category_fkey IMMEDIATE`, so deleting a used category directly still fails at once and maps to `CATEGORY_IN_USE`. Accepted residual (security-reviewer): if a transaction create or update races a delete of one of its categories, it fails at `COMMIT` with a foreign-key violation (SQLSTATE 23503). That surfaces as 500 `INTERNAL`, logged only through the F-07 allowlist serializer (constraint name, never `detail`, errors.md).
 
 ## Limits
 | Limit | Value | Error |
 |---|---|---|
 | Budgets a user is a member of (**non-deleted only**; soft-deleted budgets do not count, owner ruling round 2) | 10 soft limit / **20 hard bound** (F-37) | `LIMIT_REACHED`: create and accept stop at 10; restore stops if the owner is at 10 or any other member would exceed 20. `BudgetList.maxItems` = 20. |
 | Members per budget (incl. owner) | 6 | `LIMIT_REACHED` |
-| Pending invitations per budget | 10 | `LIMIT_REACHED` |
-| Pending invitations per invitee email (all budgets) | 20 | `LIMIT_REACHED` |
+| Pending, unexpired invitations per budget | 10 | `LIMIT_REACHED` |
+| Pending, unexpired invitations per invitee email (all budgets) | 20 | `LIMIT_REACHED` |
 | Deleted budgets listed by `GET /me/deleted-budgets` | 20 most recently deleted, newest first (deletions are not capped; older ones stay restorable by ID until their 30-day window ends) | none (list truncated) |
 | Categories per budget | 100 | `LIMIT_REACHED` |
 | Splits per transaction | 20 | `VALIDATION_FAILED` |

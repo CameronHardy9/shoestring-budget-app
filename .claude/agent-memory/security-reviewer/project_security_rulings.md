@@ -34,4 +34,11 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - Open Low: F-37 (BudgetList maxItems 10 vs restore overflow).
   - `make audit` became real (gitleaks, semgrep, osv-scanner, zizmor); the project-specific Semgrep rules (BudgetScope cast, `_test` sentinel) still need code to exist.
 
+- **Data-layer code review 2026-11-13 (`feat/db-data-layer`): OK to merge**, no Critical or High findings.
+  - Accepted three data-engineer deviations. The split→category FK is `NO ACTION DEFERRABLE INITIALLY DEFERRED`, with `deleteCategory` setting it IMMEDIATE (condition: the F-07 serializer covers a commit-time 23503). Expired invites are deleted on re-invite. A transfer to a pending-deletion member gives NOT_FOUND.
+  - Accepted the Semgrep file-exact exclusions (`db/src/scope.ts`, `db/src/isolation.test.ts`) for the scope-cast rules, on these conditions: no globs, the per-function narrowing rule stays, and F-41 gets fixed. An inline `nosemgrep` on the forging line is preferred.
+  - Accepted the ESLint relaxations for tests and test-support (type-hygiene rules only), but never for `src/testing/**`, which is shipped code.
+  - `purge_security_events()` with `search_path = pg_catalog, public, pg_temp` and the DB clock is fine as is; don't reopen it.
+  - The osv advisory for minimatch 10.2.6 (dev-only, via eslint) is not exploitable; just bump it.
+
 Related: [[project-review-hotspots]]
