@@ -54,5 +54,8 @@ ADR-0006 had no ownership transfer, so an owner of a shared budget could neither
   - an owner who soft-deletes a shared budget and then gets purged: the budget is hard-deleted and the purge run passes
   - concurrent deletion request vs acceptance
 - **sre:** a runbook entry for the post-restore sequence: `revoke-sessions --all --restore`, then `purge`, then the manual BCC notice.
-- **ci:** the Semgrep allowlist names `requireDeletedBudgetOwnership` as the only other place that may construct a scope type.
+- **ci:** the Semgrep allowlist names `requireDeletedBudgetOwnership` as the only other place that may construct a scope type. (Amended 2026-11-13, see Amendments.)
 - Co-member trust is unchanged (R-4): a member can still alter or soft-delete transactions. Per-transaction restore is not in the MVP.
+
+## Amendments
+- **2026-11-13 (owner-approved with the data layer, F-41):** the scope issuers are exactly `requireMembership` (`BudgetScope`) and `requireDeletedBudgetOwnership` (`DeletedBudgetScope`) in `db/src/scope.ts`. Behind `requireMembership` sits one module-private helper, `issueBudgetScope`, which is not exported and is the only function in that file allowed to assert `BudgetScope`. Semgrep enforces this (`.github/semgrep/data-access.yml`): scope casts are allowed only inside `issueBudgetScope` and `requireDeletedBudgetOwnership` (plus `db/src/isolation.test.ts`, which forges a scope to prove the runtime check rejects it), `issueBudgetScope` may not be referenced outside `db/src/scope.ts`, and outside `db/` any module path into `db/src` or `db/dist`, and any import of `kysely`, is banned. Other areas reach the data layer only through `@shoestring/db` (and `@shoestring/db/testing` where allowlisted).

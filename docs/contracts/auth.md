@@ -88,17 +88,18 @@ Applied by the backend in `onRequest`, before body parsing:
 - A user who has lost every factor and every recovery code cannot reset by email alone; they ask the owner for `reset-mfa`.
 
 ## 9. Email change (F-01)
-1. `POST /me/email-change {newEmail}` (re-auth) → 202 (same response whether the new address is free or taken). **At most one email change per 24 h (F-33):** while the user has any open `email_change_cancel` token, the request is refused with 429 `RATE_LIMITED` and `Retry-After` = seconds until that token expires. The caller is authenticated, so this reveals nothing about other accounts.
+1. `POST /me/email-change {newEmail}` (re-auth) → 202 (same response whether the new address is free or taken). **At most one email change per 24 h (F-33):** while the user has any open `email_change_cancel` token, the request is refused with 429 `RATE_LIMITED` and `Retry-After` = seconds until the latest of those tokens expires. The caller is authenticated, so this reveals nothing about other accounts.
    - **If the new address is free:** create an `email_change` token (24 h) bound to the requesting session (`requested_by_session_id`) and email the new address a confirmation link. Create an `email_change_cancel` token (24 h, holding the old address) and email the old address a notice with a **"this wasn't me"** link.
    - **If the address is taken:** email the new address that an account already exists, and create no tokens.
 2. `POST /auth/email-change/confirm {token}` requires **an `active` session of the same user** plus the token. A token presented by another user's session, or whose requesting session was revoked, is 400 `TOKEN_INVALID`. Confirming does the following:
    - Swaps the email, with a unique check again at commit, and sets `email_verified_at`.
    - Deletes the user's other open one-time tokens (cancel tokens survive).
    - Revokes every session except the confirming one.
-   - Emails both addresses; the old one gets the cancel link again.
+   - Emails both addresses; the old one gets the cancel link again. The backend may reissue for this: confirm then creates a **fresh** `email_change_cancel` token (24 h from the confirm, holding the old address) next to the original one, which stays open. Both revert to the same address, and the earliest still wins (F-33). The 24 h block in step 1 therefore lasts until the reissued token expires.
 3. `POST /auth/email-change/cancel {token}` is public: the cancel token is the authorization, valid 24 h after the request.
-   - **If the change it belongs to is still pending,** it is cancelled.
-   - **If it was already confirmed,** the email **reverts** to the address the link was sent to (400 `TOKEN_INVALID` if another account now holds it).
+   - **The outcome is decided by one comparison: does the account's current email equal the address this cancel link was sent to** (the address stored on the token)?
+     - **Equal → `cancelled`:** the email is unchanged. Any pending change is abandoned (its `email_change` token is deleted with the other open tokens below).
+     - **Different → `reverted`:** a change away from that address was confirmed (possibly followed by later ones), so the email is set back to the address the link was sent to and `email_verified_at` is set (400 `TOKEN_INVALID` if another account now holds it).
    - Either way, all sessions are revoked.
    - Every open one-time token that is not a cancel token is deleted.
    - **Among cancel tokens, only those of the same user created *after* the one being used are deleted. Cancel tokens created *before* it stay valid until they expire: an earlier cancel token always wins (F-33).**
@@ -109,6 +110,7 @@ Applied by the backend in `onRequest`, before body parsing:
 - **Regression tests (F-33):**
   1. **API:** the user changes A → B and confirms. Requesting B → C within 24 h answers 429 `RATE_LIMITED` with `Retry-After`. `cancel_A` then reverts the email to A, revokes every session, and emails both A and B.
   2. **Chain (seeded through the DAL, because the API refuses to build it):** the user's email is B, with a confirmed A → B and an open `cancel_A`, plus a pending B → C and a newer open `cancel_B`. Using `cancel_B` cancels B → C, leaves the email as B, and **leaves `cancel_A` open**. Using `cancel_A` afterwards reverts to A, revokes every session, and deletes every cancel token created after `cancel_A`.
+- Like every one-time token, change and cancel tokens are stored only as SHA-256 hashes (`user_tokens.token_hash`); the raw token exists only in the emailed link.
 - Pending budget invitations addressed to the old email are not transferred.
 
 ## 10. Re-authentication
@@ -248,7 +250,7 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
 | password-reset-complete | IP | 20 / hour (verify, webauthn-challenge and complete combined); 5 MFA failures per token invalidate it |
 | email-change-request | user | 5 / day; and refused while the user has any open `email_change_cancel` token, so at most one change per 24 h (429, `Retry-After` until that token expires, F-33) |
 | email-change-confirm | IP | 20 / hour (confirm and cancel combined) |
-| budget-invitations | budget / user / invitee email | 20 per budget / day; 30 per user / day; ≤ 20 pending per invitee email (`LIMIT_REACHED`, F-31) |
+| budget-invitations | budget / user / invitee email | 20 per budget / day; 30 per user / day; ≤ 20 pending, unexpired per invitee email (`LIMIT_REACHED`, F-31) |
 | export | user | 10 / hour |
 | email-budget | app-wide, UTC day | `EMAIL_DAILY_QUOTA` is the provider's daily limit (100 on Resend free). Non-priority mail stops at 60% of the quota (60 per day); beyond that only **priority** mail is sent (§15), and the rest is dropped silently. All mail stops at the quota itself. The first time the 60% threshold is hit in a day, a warning-level event goes to Sentry, which alerts the owner (F-09). |
 

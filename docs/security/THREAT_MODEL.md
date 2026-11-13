@@ -1,7 +1,7 @@
 # Threat model
 Owner: security-reviewer. Updated whenever a new endpoint, data flow, integration, or role appears.
 
-- **Version:** v2 (2026-11-13), after the re-review of contract revision 2. v1 (2026-11-12) was the first design review. No application code exists yet.
+- **Version:** v2.3 (2026-11-13), after the first code review (the data layer, §5.6). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review. The backend and frontend do not exist yet.
 - **Sources reviewed:** ARCHITECTURE.md; contracts auth.md (rev 2), data-model.md, errors.md, api.openapi.yaml, admin-commands.md, test-hooks.md; ADR-0001 to ADR-0010; mvp-planning/README.md and 01–10 (10 holds the owner's rulings OD-1 to OD-8 and the hosting decision).
 - **Statuses in §5:** each row's *mitigation* reflects revision 2. Where a row cites a finding, that finding's current status (`contract-fixed`, `partially-fixed`, `open`) is in the FINDINGS.md summary table, which is the source of truth. New threats from revision 2 are T80 to T92 (§5.4).
 - **Findings:** each `F-xx` below is described in [FINDINGS.md](FINDINGS.md). The implementation checklist is in [mvp-security-checklist.md](mvp-security-checklist.md).
@@ -246,6 +246,18 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T99 | Admin args | A comma inside an email injects an extra flag into the comma-joined `--args` | T | Owner types the email; `--expect-user-id` | F-02 note (reject `,` in the CLI) |
 | T100 | Passkey sync account | Apple ID / iCloud Keychain account recovery (for example SMS) bypasses every passkey-based operator factor | S/E | — | **F-03 partially-fixed: blocking row for the ops PR** |
 
+### 5.6 Data layer implementation (code review 2026-11-13, `feat/db-data-layer`)
+New code-level surfaces: the `@shoestring/db` package boundary, the migrate CLI (local role bootstrap, dbmate, roles.sql), the seed CLI, `@shoestring/db/testing` and the database privilege model as built.
+
+| ID | Area | Threat | STRIDE | Mitigation in code | Status |
+|---|---|---|---|---|---|
+| T101 | Tenant isolation | Backend code mints a `BudgetScope` without a membership check (exported `issueBudgetScope`) or calls raw-`budgetId` DAL internals through a relative import into `db/src` | E/I | WeakSet registry, Semgrep cast bans, two-household suite with a coverage check | **F-41** (Medium; tooling gap in the R-7 condition) |
+| T102 | Migrate / testing | A superuser URL that only looks local (`?host=` override) bootstraps roles or TRUNCATEs a remote database; the migrator URL is used without `verify-full` | T/I | Hostname allowlist; refusals never echo the URL | **F-42** |
+| T103 | Seed | Demo accounts with an operator-known password are created in production (seed ships in the image, no environment guard) | S/E | example.com addresses; random password unless `SEED_USER_PASSWORD` is set | **F-43** |
+| T104 | DB roles | `app` creates temporary objects (default PUBLIC `TEMPORARY`) | E | `pg_temp` pinned last in the only SECURITY DEFINER function | **F-44** |
+| T105 | Audit log | `app` deletes or rewrites security events | R/T | INSERT/SELECT only; `purge_security_events()` takes no "now" and uses the database clock | Verified (F-26) |
+| T106 | Category delete vs quick-add race | Deferred split→category FK moves the failure to the transaction's COMMIT (raw 23503) | D/I | Pre-check plus `SET CONSTRAINTS … IMMEDIATE` in `deleteCategory`; composite FK unchanged | Accepted deviation; backend F-07 serializer must cover commit-time errors |
+
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
 
@@ -253,7 +265,7 @@ Rule under test: a caller who is not a member of budget B can neither read nor m
 |---|---|---|---|
 | `GET/PATCH/DELETE /budgets/{b}` | `b` | Non-member and deleted budget both return 404 | OK |
 | `GET /budgets` | — | Must list only the caller's memberships (non-deleted) | OK (test) |
-| `POST /budgets` (idempotent replay) | Idempotency-Key | Replay of a key whose budget has since been deleted must not return the deleted budget | **F-18** (specify) |
+| `POST /budgets` (idempotent replay) | Idempotency-Key | Replay of a key whose budget has since been deleted must not return the deleted budget | OK in the DAL: replay goes through `requireMembership` (db test, 2026-11-13) |
 | `/budgets/{b}/members`, `DELETE …/members/{u}` | `u` | `u` from another budget gives 404; member removing another member gives 403 | OK |
 | `/budgets/{b}/invitations[/{i}]` | `i` | `i` must be looked up within `b`; revoking another budget's invitation gives 404 | OK (test) |
 | `/me/invitations`, `…/{i}/accept`, `…/{i}/decline` | `i` | Email match; returns `budgetName` and inviter only for invitations addressed to me | OK (see §7) |
@@ -262,8 +274,8 @@ Rule under test: a caller who is not a member of budget B can neither read nor m
 | `POST …/plan/copy-previous` | — | Source and target are both within `b` | OK |
 | `GET …/summary` | — | Scoped aggregation | OK (test with two households) |
 | `GET /budgets/{b}/transactions` | `categoryId`, `cursor` | Filter by a foreign category returns nothing; a cursor is meaningless outside its budget. Bind it anyway (MAC over budget and filters) so the error is deterministic | **F-18** (Low part) |
-| `POST/PUT /budgets/{b}/transactions[/{t}]` | `t`, `splits[].categoryId` | Foreign category in a split: the error is **unspecified** (404? 400? FK 500?) | **F-18** |
-| `POST /me/export` | — | Must iterate memberships through `requireMembership` (not a raw join that could include deleted budgets or ex-memberships) | **F-18** |
+| `POST/PUT /budgets/{b}/transactions[/{t}]` | `t`, `splits[].categoryId` | Foreign category in a split: the error is **unspecified** (404? 400? FK 500?) | OK in the DAL: 400 `VALIDATION_FAILED` before any write; foreign `t` is 404 (isolation suite, 2026-11-13) |
+| `POST /me/export` | — | Must iterate memberships through `requireMembership` (not a raw join that could include deleted budgets or ex-memberships) | OK in the DAL: `requireMembership` for each budget (isolation suite, 2026-11-13) |
 | `/me/sessions/{id}`, `/me/mfa/passkeys/{id}` | `id` | Other users' IDs give 404 | OK |
 | Admin CLI, purge | — | Cross-budget by design; never exposed over HTTP | OK |
 
@@ -312,7 +324,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | R-4 | Co-members are fully trusted. Any member can alter or soft-delete all transactions and plans and export everything, including other members' entries and display names. There is no per-transaction undo, and content a user entered in someone else's budget survives their own account purge. | Owner decision: "owner + equal members" (meeting 1). | `updated_by_user_id`; soft delete for 30 days; optimistic versions; budget-level self-service restore by the owner (ADR-0010). | **Accepted, owner sign-off 2026-11-12 (OD-7)** |
 | R-5 | Third parties see PII. Resend sees addresses, names in invitation emails, and live one-time links until they expire. Cloud Run request logs hold client IP, raw UA and URLs for 30 days. HIBP sees a 20-bit hash prefix and the server IP. Sentry sees opaque IDs (IP storage off). Neon holds all data. Cloudflare sees DNS only, or all traffic if the proxy fallback is used. | $0 free-tier services. | No financial data in email, logs or Sentry; short token expiries; tracking off (F-06); Sentry IP storage off (F-07); no sensitive values in URLs; Cloud Run request logs are **excluded** from `_Default` (bootstrap step 4, billing-protection §6), so client IP and raw UA are not kept by our logging. | **Accepted, owner sign-off 2026-11-12 (OD-7)**; list in the privacy notice |
 | R-6 | Client IPs are retained in `security_events.ip` for 90 days, and in `security-events` command output in Cloud Logging for 30 days. | Incident response (account-takeover investigation). | PII class; purged at 90 days; deleted on account purge; command output only when the owner runs it. | **Accepted, owner sign-off 2026-11-12 (OD-7)**; covers deviation 6 |
-| R-7 | No Postgres RLS. Tenant isolation rests on `BudgetScope`, composite FKs and generated tests. | ADR-0006 (accepted by the owner 2026-11-12). | Branded scope; composite FKs; Semgrep rules; startup route check; two-household isolation suite (F-18 written into ADR-0006 and auth.md §12). Deleted-budget routes need their own scope (F-36). | Accepted with ADR-0006 (2026-11-12), **conditional on F-18 being implemented and passing in `make audit`** |
+| R-7 | No Postgres RLS. Tenant isolation rests on `BudgetScope`, composite FKs and generated tests. | ADR-0006 (accepted by the owner 2026-11-12). | Branded scope; composite FKs; Semgrep rules; startup route check; two-household isolation suite (F-18 written into ADR-0006 and auth.md §12). Deleted-budget routes need their own scope (F-36). | Accepted with ADR-0006 (2026-11-12), **conditional on F-18 being implemented and passing in `make audit`**. Progress 2026-11-13: DAL parts done (scope assertions, composite FKs, body-ID 400, scoped replay and export, isolation suite with a coverage check, Semgrep cast bans). Still open: F-41 (scope minting and relative imports), the backend startup route check, the cursor MAC |
 | R-8 | A single human reviewer; agents carry most of the review load. | Team shape. | `make audit` in CI, branch protection, required checks, security review per diff. | **Accepted, owner sign-off 2026-11-12 (OD-7)** |
 | R-9 | Whether the FTC Safeguards Rule (GLBA) or state privacy laws apply has not been assessed by a lawyer. | Out of scope for agents. | US-only free friends-and-family beta, privacy notice, data minimization. | **Accepted as unassessed, owner 2026-11-12 (OD-8)**; revisit before any wider launch |
 | R-10 | Denial of wallet: a request flood could cost a few dollars, up to the low tens, before the Cloud Billing spend cap acts (billing data lags). | $0 constraint with a card on file; no free platform rate limiting on Cloud Run (ADR-0007 R1). | Max 2 instances, concurrency 20, argon2 semaphore, app rate limits, Host check blocks `run.app`, spend cap plus a $0.01 alert; Cloudflare proxy as a fallback. V0 (cap behaviour) is still to be verified. | **Accepted, owner sign-off 2026-11-12 (OD-7; ADR-0007 R1)** |
@@ -326,6 +338,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-13 | v2 | Re-review of contract revision 2. Hosting fixed as Cloud Run + Neon + Cloudflare DNS + Resend. New threats T80–T92 (email-change cancel/revert, ownership transfer, self-service restore, admin jobs, backup workflow, email budget). Owner rulings recorded: R-1 reconfirmed (OD-1); R-3 reduced to a 90-day cap (OD-2); R-4, R-5, R-6, R-8 and R-10 accepted (OD-7, 2026-11-12); R-9 accepted as unassessed (OD-8). New proposed risks R-11 and R-12. New findings F-33 to F-36. |
 | 2026-11-13 | v2.1 | Clearance pass: F-33 and F-34 confirmed in the contract text, so the contracts are cleared for owner approval. R-11 and R-12 accepted by the owner (2026-11-13). Backups moved to a Cloud Run job (T90 resolved). `APP_KEYRING` replaces the two app keys (F-24 note). New Low F-37 (restore vs `BudgetList` bound). |
 | 2026-11-13 | v2.2 | Ops review of the sre runbooks and the backup job: T93–T100; R-5 reduced (request logs excluded); new F-38 to F-40; F-03 checklist gap (blocking for the ops PR); Cloudflare fallback sign-off criteria (§11). |
+| 2026-11-13 | v2.3 | First code review (data layer, `feat/db-data-layer`): §5.6 T101–T106; §6 rows for idempotent replay, split category IDs and export resolved in the DAL; R-7 progress noted; F-25, F-26 and F-35 verified; new F-41 (Medium) and F-42 to F-44 (Low); three data-engineer deviations accepted. |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.

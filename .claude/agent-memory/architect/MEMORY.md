@@ -1,2 +1,2 @@
-- [MVP contracts state](project_mvp_contracts_v1.md) — rev 3 (2026-11-13): settled owner rulings, keyring + deleted-budget scope design, deviations
+- [MVP contracts state](project_mvp_contracts_v1.md) — rev 3 + data-layer reconciliation (2026-11-13): owner rulings, deviations, ADR amendment style
 - [Integration watchlist](integration_watchlist.md) — drift points, env-name drift in sre docs, local OpenAPI validation + lint recipe

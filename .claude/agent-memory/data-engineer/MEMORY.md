@@ -1,0 +1,2 @@
+- [Migration pitfalls](migration-pitfalls.md) — PL/pgSQL field resolution, cascade vs RESTRICT, down order, dbmate sslmode, RI runs as owner
+- [Schema conventions](schema-conventions.md) — roles.sql dual-run, runtime scope check, isolation coverage, type-stripped CLIs, per-file DB clones

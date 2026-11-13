@@ -58,3 +58,12 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Backup heartbeat URL | **Plain env on the job** (not a secret), so the last free Secret Manager slot stays spare. Accepted. |
 | The spend cap pauses backups and purge | **Accepted.** Backups stay in the app project; the backup project and bucket get alerts only, no cap. After the cap lifts, purge and backup are run by hand. |
 | GitGuardian on PR #1 | The literal passwords are removed in a follow-up commit. The original commit's incidents are resolved by the owner in the GitGuardian dashboard, or the PR is squash-merged. |
+
+## Build round 1: data layer (2026-11-13)
+| Topic | Decision |
+|---|---|
+| Split → category FK | **Accepted:** `DEFERRABLE INITIALLY DEFERRED NO ACTION` instead of RESTRICT (RESTRICT breaks the purge cascade). `deleteCategory` still returns CATEGORY_IN_USE. The architect amends data-model.md. |
+| Data-engineer gap resolutions | **All four accepted:** (1) re-inviting an email whose invitation expired replaces it; (2) the pending-invitation limit counts only unexpired invitations; (3) transferring ownership to a member pending account deletion returns NOT_FOUND; (4) cancelling an email change is a "revert" when the account's email is still the address the cancel link was sent to. Recorded in the contracts by the architect. |
+| Production migrate job + restore.md step 5 (roles.sql as DB owner) | **Deferred to the pre-deploy pass** (ci-engineer + sre). |
+| Pacing | **Each area waits for the owner's merge** before the next area's branch starts from `main`. |
+| Security review of db/ | No Critical/High. F-41 (Medium) and F-42–F-44 (Low) fixed in the same PR. |

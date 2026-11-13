@@ -32,6 +32,14 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
    - Operator steps that pipe keys through `pbcopy` leak via Universal Clipboard (F-40).
    - F-03-style operator-MFA checklists must include the passkey-sync account (Apple ID / iCloud Keychain).
 
+10. **Code-level boundary bypasses (first code review, data layer 2026-11-13).**
+    - Brands plus a runtime registry are only as strong as their constructors. Grep for any *exported* function that mints a scope (F-41: `issueBudgetScope`). A registered scope passes both the type checker and the WeakSet.
+    - The package `exports` map does not stop relative imports (`../../db/src/...`). Semgrep must ban specifiers into `db/(src|dist)/` and all `kysely` imports outside db/, not just `{ sql }`.
+    - "Local host only" URL guards that check `new URL().hostname` can be bypassed with `?host=` (pg-connection-string and lib/pq both honor it; verified). Require the driver's own parser (F-42).
+    - Dev-only CLIs (seed, testing) ship in the prod image when `package.json` `files` includes `src`/`dist` and the backend uses `pnpm deploy`. Every such CLI needs its own environment guard (F-43).
+    - Postgres PUBLIC keeps database `TEMPORARY`/`CONNECT` unless revoked. "No DDL" checks must test `create temp table` (F-44).
+    - Deferred FKs move failures to COMMIT. Check that the backend error serializer handles commit-time SQLSTATEs (F-07).
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

@@ -34,15 +34,178 @@ rules:
       cwe: "CWE-89: SQL Injection"
       confidence: HIGH
 
+  # Branded scope types (ADR-0006, ADR-0010 "Scope (F-36)"). A BudgetScope may
+  # only come from requireMembership and a DeletedBudgetScope only from
+  # requireDeletedBudgetOwnership, both in db/src/scope.ts. Reviewed exclusions,
+  # file-exact (security-reviewer accepted them on that condition; any change
+  # needs a new review):
+  #   /db/src/scope.ts            both rules: the constructors. Not a blanket
+  #                               pass: shoestring-scope-cast-outside-constructor
+  #                               below still checks this file, function by function.
+  #   /db/src/isolation.test.ts   BudgetScope rule only: forges a scope on purpose
+  #                               to prove the runtime WeakSet check
+  #                               (assertBudgetScope) rejects it.
   - id: shoestring-budget-scope-cast
     languages: [typescript]
     severity: ERROR
     message: >-
       Do not cast to BudgetScope. A BudgetScope may only come from
       requireMembership, so every budget query is tied to a checked membership
-      (checklist C8.2, ADR-0006).
+      (checklist C8.2, ADR-0006, ADR-0010).
+    paths:
+      exclude:
+        - "/db/src/scope.ts"
+        - "/db/src/isolation.test.ts"
     # Also matches the angle-bracket form (<BudgetScope>x); Semgrep normalizes casts.
     pattern: "$X as BudgetScope"
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      confidence: HIGH
+
+  - id: shoestring-deleted-budget-scope-cast
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Do not cast to DeletedBudgetScope. It may only come from
+      requireDeletedBudgetOwnership, so a restore is tied to a checked owner
+      membership of a recently deleted budget (ADR-0010, F-36).
+    paths:
+      exclude:
+        - "/db/src/scope.ts"
+    pattern: "$X as DeletedBudgetScope"
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      confidence: HIGH
+
+  # Narrows the scope.ts exclusion above to the two function bodies that issue
+  # scopes (ADR-0010): issueBudgetScope (module-private, called only by
+  # requireMembership) and requireDeletedBudgetOwnership.
+  # A cast anywhere else in scope.ts still fails the audit.
+  - id: shoestring-scope-cast-outside-constructor
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Scope cast outside its constructor. In db/src/scope.ts only
+      issueBudgetScope may assert BudgetScope and only
+      requireDeletedBudgetOwnership may assert DeletedBudgetScope (ADR-0010).
+    paths:
+      include:
+        - "/db/src/scope.ts"
+    pattern-either:
+      - patterns:
+          - pattern: "$X as BudgetScope"
+          - pattern-not-inside: |
+              function issueBudgetScope(...) { ... }
+      - patterns:
+          - pattern: "$X as DeletedBudgetScope"
+          - pattern-not-inside: |
+              async function requireDeletedBudgetOwnership(...) { ... }
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      confidence: HIGH
+
+  # @shoestring/db/testing (resetDatabase, createDatabaseClone) needs the
+  # superuser URL and wipes or clones databases: local and test only. Allowed
+  # importers, each reviewed (security-reviewer signs off on any change):
+  #   /tests/**                         test-engineer's suites
+  #   /db/**                            the package itself and its own tests
+  #   /backend/src/dev-server.ts        the dev entry (test-hooks.md, ADR-0009)
+  #   /backend/src/test-hooks.ts        the test-hooks module, as a single file
+  #   /backend/src/test-hooks/**        ...or as a folder (backend picks one)
+  # backend/ does not exist yet; these are the paths test-hooks.md and
+  # ADR-0009 name. Backend unit tests are deliberately NOT allowed: add them only
+  # after review. Matches the module string in any form (import, export from,
+  # dynamic import(), require, vi.mock). Relative or absolute paths into
+  # db/src/testing or db/dist/testing are caught everywhere outside db/ by
+  # shoestring-db-internal-import, including in the allowed paths above.
+  - id: shoestring-db-testing-import
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      @shoestring/db/testing is imported outside tests/, db/ and the backend's
+      dev entry or test-hooks module. It resets and clones databases with the
+      superuser URL and must never reach a production entry point
+      (test-hooks.md, ADR-0009).
+    paths:
+      exclude:
+        - "/tests/**"
+        - "/db/**"
+        - "/backend/src/dev-server.ts"
+        - "/backend/src/test-hooks.ts"
+        - "/backend/src/test-hooks/**"
+    pattern-regex: '[''"`]@shoestring/db/testing(?:/[^''"`]*)?[''"`]'
+    metadata:
+      category: security
+      cwe: "CWE-489: Active Debug Code"
+      confidence: HIGH
+
+  # F-41: db/ is reached only through its package specifiers. Outside db/, any
+  # module path into db/src/ or db/dist/ (relative, absolute, or a package
+  # subpath such as @shoestring/db/src/...) is banned, in every form: import,
+  # export from, dynamic import(), require, vi.mock. No exclusions besides db/.
+  # The only routes are "@shoestring/db" and, in the paths allowlisted by
+  # shoestring-db-testing-import, "@shoestring/db/testing".
+  - id: shoestring-db-internal-import
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Module path into db/src or db/dist outside db/. Import the data layer only
+      through "@shoestring/db" (or "@shoestring/db/testing" where allowlisted),
+      so internals such as scope constructors stay private (F-41, ADR-0006).
+    paths:
+      exclude:
+        - "/db/**"
+    pattern-regex: '[''"`][^''"`\n]*\bdb/(?:src|dist)(?:/[^''"`\n]*)?[''"`]'
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      confidence: HIGH
+
+  # F-41: the backend and every other area never see Kysely (data-model.md:
+  # the DAL exposes intent-level functions only). Bans the "kysely" module and
+  # its subpaths outside db/ in every form, including `import type`. Supersedes
+  # shoestring-sql-import-outside-db, which stays for its specific message.
+  - id: shoestring-kysely-import-outside-db
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      "kysely" is imported outside db/. Only the data-access module may use the
+      query builder; use the DAL's intent-level functions instead (F-41,
+      checklist C1.1, C8.2).
+    paths:
+      exclude:
+        - "/db/**"
+    pattern-regex: '[''"`]kysely(?:/[^''"`\n]*)?[''"`]'
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      confidence: HIGH
+
+  # F-41: issueBudgetScope issues a BudgetScope without a membership query, so
+  # only db/src/scope.ts may use it (it is module-private there; this rule keeps it so).
+  # Catches direct and member calls, imports (also aliased), re-exports and
+  # string-keyed access. Comments are ignored (AST match).
+  - id: shoestring-issue-budget-scope-outside-scope-module
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      issueBudgetScope is used outside db/src/scope.ts. A BudgetScope must come
+      from requireMembership (or a constructor inside scope.ts), never from a
+      direct issueBudgetScope call (F-41, ADR-0006, ADR-0010).
+    paths:
+      exclude:
+        - "/db/src/scope.ts"
+    pattern-either:
+      - pattern: issueBudgetScope(...)
+      - pattern: $O.issueBudgetScope(...)
+      - pattern: import { issueBudgetScope } from "$M"
+      - pattern: import { issueBudgetScope as $A } from "$M"
+      - pattern: export { issueBudgetScope } from "$M"
+      - pattern: export { issueBudgetScope as $A } from "$M"
+      - pattern: '"issueBudgetScope"'
     metadata:
       category: security
       cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"

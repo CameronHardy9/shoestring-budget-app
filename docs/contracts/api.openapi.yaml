@@ -1241,8 +1241,9 @@ paths:
       summary: Hand ownership to another member (owner only). The caller becomes a member.
       description: |
         Atomic role swap under a lock on the budget row (ADR-0010). The target must
-        be a current member with an active account; a non-member target is 404, the
-        caller's own ID is 400 VALIDATION_FAILED (`userId`, `invalid_value`). All
+        be a current member with an active account; a non-member target, or a member
+        whose account is pending deletion, is 404 NOT_FOUND; the caller's own ID is
+        400 VALIDATION_FAILED (`userId`, `invalid_value`). All
         members are emailed. Afterwards the former owner may leave or delete their
         account.
       security:
@@ -1301,7 +1302,11 @@ paths:
         (no enumeration). A notification email is sent only if the account exists;
         otherwise the invitation waits for that email to sign up. Expires in 14 days.
         Requires re-auth (F-13): sharing grants access that outlives session revocation.
-        LIMIT_REACHED also covers the cap of 20 pending invitations per invitee email.
+        LIMIT_REACHED: 10 pending, unexpired invitations per budget, and 20 pending,
+        unexpired invitations per invitee email; expired ones count toward neither.
+        Re-inviting an email whose pending invitation to this budget has expired
+        replaces that invitation with a fresh one; an unexpired one is 409
+        ALREADY_EXISTS (`invitation_pending`).
       security:
         - sessionCookie: []
           csrfToken: []
@@ -2669,7 +2674,7 @@ components:
         items:
           type: array
           maxItems: 20
-          description: Newest first. At most 20 pending invitations can exist per invitee email.
+          description: Newest first. At most 20 pending, unexpired invitations can exist per invitee email.
           items: { $ref: "#/components/schemas/MyInvitation" }
 
     # ------------------------------------------------------------ categories
