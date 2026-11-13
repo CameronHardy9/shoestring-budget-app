@@ -6,7 +6,8 @@
 #   frontend: `build` script writes the SPA to frontend/dist (hidden source maps OK)
 #   backend:  `build` script writes backend/dist with dist/server.js and dist/admin.js,
 #             serves STATIC_DIR at /, and listens on HOST:PORT
-#   The test-hooks module must not be in backend/dist (checked below).
+#   The test-hooks module must not be in backend/dist (checked below). It exports
+#   the sentinel string __SHOESTRING_TEST_HOOKS__ so the check can see it.
 
 # ---- base: Node + the pnpm version pinned in package.json ---------------------
 FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 AS base
@@ -35,8 +36,13 @@ ENV APP_RELEASE=$APP_RELEASE \
 RUN pnpm --filter ./frontend run build \
  && pnpm --filter ./backend run build
 # docs/contracts/test-hooks.md: the production build must not contain test hooks.
-RUN if grep -rIl --include='*.js' --include='*.mjs' --include='*.cjs' -e '/_test/' backend/dist; then \
-      echo "error: test-hook routes found in backend/dist (files above)" >&2; exit 1; \
+# Fails on `_test` as a whole word, however the route is assembled ('/api/_test/x',
+# prefix '/api/_test', "/api/" + "_test"), and on the sentinel string the hooks
+# module exports. Whole-word matching (-w) ignores identifiers such as is_test,
+# _tests or TEST_HOOKS, so normal code does not trip it (security F-10).
+RUN if grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' \
+         -e '_test' -e '__SHOESTRING_TEST_HOOKS__' backend/dist; then \
+      echo "error: test-hook code found in backend/dist (files above)" >&2; exit 1; \
     fi
 # Standalone backend with production dependencies only.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \

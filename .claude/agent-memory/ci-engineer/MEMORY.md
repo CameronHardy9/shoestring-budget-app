@@ -1,2 +1,2 @@
-- [Environment pitfalls](environment-pitfalls.md): bash 3.2/make 3.81, corepack shim, Playwright image has Node 26 and no corepack, rm -rf denied
+- [Environment pitfalls](environment-pitfalls.md): bash 3.2/make 3.81, corepack shim, Playwright Node 26, .env read-deny, compose :? quirks, pg trust
 - [Pipeline timings](pipeline-timings.md): baseline make setup/check/e2e/audit timings with zero packages (2026-11-12)

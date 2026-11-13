@@ -3,7 +3,6 @@
 # the GNU Make 3.81 that ships with macOS. Requires Node 24 (nvm use), pnpm via
 # corepack, and Docker (OrbStack). Run `make help` for the phone-testing recipe.
 SCRIPTS := .github/scripts
-COMPOSE_DEV := docker compose -f docker-compose.yml --profile '*'
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
@@ -33,7 +32,7 @@ help: ## Show targets and the phone-testing recipe
 	@echo "     http://localhost:5173, a secure context where service worker and passkeys work."
 	@echo "  5. Stop exposing the dev server when done: make dev (without LAN=1) or make dev-down."
 
-setup: ## Install all dependencies (frozen lockfile) and, once tests/ needs them, Playwright browsers
+setup: ## Install dependencies, Playwright browsers once tests/ needs them, and a random-credential .env
 	@bash $(SCRIPTS)/setup.sh
 
 dev: ## Start the whole stack in containers and wait until healthy (LAN=1 for phones)
@@ -43,14 +42,13 @@ dev-lan: ## Same as make dev LAN=1
 	@LAN=1 bash $(SCRIPTS)/dev.sh
 
 dev-down: ## Stop the dev stack (keeps the database)
-	@$(COMPOSE_DEV) down --remove-orphans
+	@bash $(SCRIPTS)/dev-ctl.sh down
 
 dev-logs: ## Follow dev stack logs
-	@$(COMPOSE_DEV) logs -f --tail=100
+	@bash $(SCRIPTS)/dev-ctl.sh logs
 
 dev-reset: ## Stop the dev stack and delete the dev database (re-migrated and re-seeded on next make dev)
-	@$(COMPOSE_DEV) down --remove-orphans
-	@docker volume rm -f shoestring_pgdata >/dev/null && echo "dev database deleted"
+	@bash $(SCRIPTS)/dev-ctl.sh reset
 
 lint: ## Lint every package, plus workflows, scripts and CI config
 	@bash $(SCRIPTS)/lint.sh

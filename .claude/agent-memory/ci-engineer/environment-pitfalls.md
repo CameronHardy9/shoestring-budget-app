@@ -14,7 +14,13 @@ Facts verified 2026-11-12 that shaped the pipeline scripts:
 - pnpm `minimumReleaseAge: 10080` refuses versions under 7 days old. Pick older versions, or pass `--config.minimumReleaseAge=0` only in scratch experiments.
 - Settings deny `rm -rf`. Use `docker volume rm` and `pnpm install --force` instead.
 - Semgrep `pattern: $X as T` also matches `<T>x`; the pattern `<T>$X` itself fails to parse.
-- Other agents edit in parallel (sre in infra/ and docs/runbooks/, security in docs/security/). Read their docs for asks aimed at ci-engineer (mvp-security-checklist C1.1, C8.2, C13.x, C15.x; deploy.md wants a GHCR image and deploy.yml).
+- Settings deny Read(./.env), and that blocks ls/awk on it too. Verify generated credentials by behavior: `docker exec <pg> printenv` piped into a login, never printed.
+- Compose interpolates the WHOLE file (all profiles, also for `down`/`logs`), so `${VAR:?}` breaks dev-down without .env. dev-ctl.sh stubs unset vars with random values for those commands.
+- A `${VAR:?msg}` message containing ": " makes the YAML plain scalar invalid. Use commas.
+- The postgres image trusts 127.0.0.1 inside its own container, so a wrong password "works" there. Test auth from a sibling container on the compose network.
+- jq `@base64d` decodes to UTF-8 text, so lengths are wrong for random bytes. Use Node's Buffer.
+- shellcheck SC2155 flags `export X="$(cmd)"`, and `export "$v=$(cmd)"` masks failures without being flagged. Assign first, then export.
+- Other agents edit in parallel (sre in infra/ and docs/runbooks/, security in docs/security/, architect in docs/contracts/ even mid-task: APP_KEYRING replaced two env vars during one run, so re-grep contracts before reporting). Read their docs for asks aimed at ci-engineer (mvp-security-checklist C1.1, C8.2, C13.x, C15.x; deploy.md wants a GHCR image and deploy.yml).
 
 **Why:** each of these cost a failed run once.
 **How to apply:** check this list before writing shell or compose changes; see [[pipeline-timings]].

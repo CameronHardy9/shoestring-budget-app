@@ -1,8 +1,10 @@
 # Project rules for Semgrep, run by make audit together with the registry rulesets.
 # docs/contracts/test-hooks.md: routes under /api/_test/ exist only when
 # TEST_HOOKS=1 and are registered by a separate module the production build does
-# not import. This rule keeps any `_test/` route path inside that module (a file
-# or folder whose path contains "test-hooks").
+# not import. This rule keeps `_test` as a whole word (a route path or prefix,
+# however it is assembled) and the hooks' sentinel string inside that module (a
+# file or folder whose path contains "test-hooks"). The production Dockerfile
+# applies the same match to backend/dist (security F-10).
 rules:
   - id: shoestring-test-hook-route-outside-module
     languages: [typescript, javascript]
@@ -19,7 +21,7 @@ rules:
         - "**/*test-hooks*/**"
         - "**/*.test.*"
         - "**/*.spec.*"
-    pattern-regex: '[''"`](/api)?/_test/'
+    pattern-regex: '(?<![\w$])(_test|__SHOESTRING_TEST_HOOKS__)(?![\w$])'
     metadata:
       category: security
       confidence: HIGH

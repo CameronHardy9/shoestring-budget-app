@@ -9,16 +9,18 @@ require_node
 if has_pkg db; then
   require_docker
   export COMPOSE_PROJECT_NAME=shoestring-test
-  export POSTGRES_PASSWORD=postgres POSTGRES_DB=shoestring_test POSTGRES_PORT="${TEST_POSTGRES_PORT:-55432}"
+  export POSTGRES_DB=shoestring_test POSTGRES_PORT="${TEST_POSTGRES_PORT:-55432}"
+  # Fresh random passwords for this run only; nothing is written to disk.
+  export_throwaway_credentials
   # Only Postgres: no profiles for this project.
   PROFILE_ARGS=()
   cleanup() { compose_test down --remove-orphans >/dev/null 2>&1 || true; }
   trap cleanup EXIT
   log "Starting throwaway Postgres for unit tests (127.0.0.1:$POSTGRES_PORT)"
   compose_test up -d --wait postgres
-  export DATABASE_ADMIN_URL="postgres://postgres:postgres@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
-  export MIGRATOR_DATABASE_URL="postgres://migrator:migrator@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
-  export DATABASE_URL="postgres://app:app@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+  export DATABASE_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+  export MIGRATOR_DATABASE_URL="postgres://migrator:${MIGRATOR_DB_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+  export DATABASE_URL="postgres://app:${APP_DB_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
   if has_script db migrate; then
     log "Applying migrations (db: migrate)"
     pnpm --filter ./db run migrate

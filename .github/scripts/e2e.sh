@@ -12,16 +12,18 @@ require_node
 require_docker
 
 export COMPOSE_PROJECT_NAME=shoestring-e2e
-export POSTGRES_PASSWORD=postgres POSTGRES_DB=shoestring_test
+export POSTGRES_DB=shoestring_test
+# Fresh random passwords and keys for this run only; nothing is written to disk.
+export_throwaway_credentials
 export POSTGRES_PORT="${E2E_POSTGRES_PORT:-55433}"
 export BACKEND_PORT="${E2E_BACKEND_PORT:-53000}"
 export FRONTEND_PORT="${E2E_FRONTEND_PORT:-55173}"
 if has_pkg frontend; then app_port=$FRONTEND_PORT; else app_port=$BACKEND_PORT; fi
 export APP_ORIGIN="http://localhost:$app_port"
 export BASE_URL="$APP_ORIGIN"
-export DATABASE_ADMIN_URL="postgres://postgres:postgres@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
-export MIGRATOR_DATABASE_URL="postgres://migrator:migrator@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
-export DATABASE_URL="postgres://app:app@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+export DATABASE_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+export MIGRATOR_DATABASE_URL="postgres://migrator:${MIGRATOR_DB_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
+export DATABASE_URL="postgres://app:${APP_DB_PASSWORD}@127.0.0.1:$POSTGRES_PORT/$POSTGRES_DB"
 
 cleanup() {
   local rc=$?

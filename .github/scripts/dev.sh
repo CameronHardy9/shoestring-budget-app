@@ -5,6 +5,9 @@
 source "$(dirname "$0")/lib.sh"
 require_docker
 
+# First run: create .env with random local passwords (never overwrites one).
+ensure_local_env
+
 export FRONTEND_PORT="${FRONTEND_PORT:-5173}" BACKEND_PORT="${BACKEND_PORT:-3000}"
 export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 
@@ -23,7 +26,7 @@ log "Starting dev stack (areas: $(active_areas_text))"
 compose_dev up -d --build --remove-orphans --wait --wait-timeout 300
 
 log "make dev: stack is up and healthy in $(elapsed)"
-note "Postgres   postgres://postgres:postgres@localhost:$POSTGRES_PORT/${POSTGRES_DB:-shoestring}"
+note "Postgres   postgres://postgres@localhost:$POSTGRES_PORT/${POSTGRES_DB:-shoestring}   (password: POSTGRES_PASSWORD in .env)"
 has_pkg backend && note "API        http://localhost:$BACKEND_PORT/api/healthz"
 has_pkg frontend && note "App        http://localhost:$FRONTEND_PORT"
 if [ "${LAN:-0}" = "1" ]; then

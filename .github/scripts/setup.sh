@@ -17,4 +17,7 @@ else
   note "tests/ does not use Playwright yet: skipping browser install"
 fi
 
+log "Local credentials (.env)"
+ensure_local_env
+
 log "make setup: done in $(elapsed)"

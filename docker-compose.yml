@@ -10,6 +10,11 @@
 #
 # Exposure: everything binds to 127.0.0.1 on the host. `make dev LAN=1` opens only
 # the frontend dev server to the LAN (for phone testing).
+#
+# Credentials: no password or key is written here. POSTGRES_PASSWORD,
+# APP_DB_PASSWORD, MIGRATOR_DB_PASSWORD and APP_KEYRING are required (${VAR:?}): make dev reads them from the gitignored .env that make
+# setup generates with random values; make test and make e2e export fresh ones
+# per run. Without them compose stops with the message below.
 name: shoestring
 
 x-node-service: &node-service
@@ -30,13 +35,15 @@ x-node-service: &node-service
     - node_modules_db:/app/db/node_modules
     - node_modules_tests:/app/tests/node_modules
 
+# db's role bootstrap (via DATABASE_ADMIN_URL) sets each role's password from
+# the password in its URL below.
 x-db-urls:
   &db-urls # app role: what the backend uses (SELECT/INSERT/UPDATE/DELETE only).
-  DATABASE_URL: postgres://app:app@postgres:5432/${POSTGRES_DB:-shoestring}
+  DATABASE_URL: postgres://app:${APP_DB_PASSWORD:?APP_DB_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
   # migrator role: owns the schema, runs migrations.
-  MIGRATOR_DATABASE_URL: postgres://migrator:migrator@postgres:5432/${POSTGRES_DB:-shoestring}
+  MIGRATOR_DATABASE_URL: postgres://migrator:${MIGRATOR_DB_PASSWORD:?MIGRATOR_DB_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
   # Superuser, local and test only: creates the roles above. Never in production.
-  DATABASE_ADMIN_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-shoestring}
+  DATABASE_ADMIN_URL: postgres://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set, run make setup to generate .env}@postgres:5432/${POSTGRES_DB:-shoestring}
 
 services:
   postgres:
@@ -44,7 +51,7 @@ services:
     image: postgres:17.12-trixie@sha256:dbb9623d5121b5d2c2c9e2fba56e40193cbb3510d4af7f035b1ab1823aff3205
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set, run make setup to generate .env}
       POSTGRES_DB: ${POSTGRES_DB:-shoestring}
       TZ: UTC
       PGTZ: UTC
@@ -101,9 +108,8 @@ services:
       TEST_HOOKS: ${TEST_HOOKS:-0}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       APP_RELEASE: ${APP_RELEASE:-dev}
-      # Dev-only placeholders. The format is the backend's to define.
-      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:-dev-only-not-a-secret-mfa-key-000000}
-      THROTTLE_KEY: ${THROTTLE_KEY:-dev-only-not-a-secret-throttle-key-0000}
+      # JSON keyring, one random 32-byte key (docs/contracts/data-model.md).
+      APP_KEYRING: ${APP_KEYRING:?APP_KEYRING is not set, run make setup to generate .env}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
     healthcheck:
