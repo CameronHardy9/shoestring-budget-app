@@ -1,0 +1,3004 @@
+openapi: 3.1.0
+info:
+  title: Shoestring API
+  version: 0.1.0
+  description: |
+    The HTTP contract between the Shoestring SPA and the backend. Contract-first:
+    this file is the source of truth; backend zod schemas and the generated
+    frontend client must match it. Read with auth.md, errors.md, data-model.md.
+
+    Global rules (apply to every operation; not repeated per operation):
+    - Served same-origin under `/api` on `https://shoestring.<domain>`. No CORS.
+    - Request and response bodies are `application/json` (UTF-8) unless stated.
+      Unsafe requests with a body must send `Content-Type: application/json` (else 415).
+    - Every request may send `X-Request-Id`; every response (success or error)
+      returns `X-Request-Id`. See errors.md.
+    - Every response sets `Cache-Control: no-store`.
+    - Unknown request fields are rejected (`additionalProperties: false`) with
+      400 VALIDATION_FAILED. Responses never contain fields not listed here.
+    - Money is integer USD cents. Dates are `YYYY-MM-DD` calendar dates. Months
+      are `YYYY-MM`. Timestamps are RFC 3339 UTC with `Z`.
+    - Error responses use ErrorBody. The codes each operation can return beyond
+      the implicit set in errors.md are listed in `x-error-codes`.
+
+    Operation extensions (machine-readable; contract and permission tests use them):
+    - `x-session`: `none` (public; any session cookie is ignored), `optional`,
+      `mfa_pending` (only a session awaiting MFA), `active` (fully signed in),
+      `active_or_mfa_pending`.
+    - `x-budget-role`: `none` (not budget-scoped), `member` (owner or member),
+      `owner`, or `deleted_budget_owner` (owner of a soft-deleted budget inside its
+      30-day restore window, via `DeletedBudgetScope`). Non-members get 404. Stated
+      on **every** operation; required to be `member` or `owner` on every path
+      containing `{budgetId}`, and `deleted_budget_owner` on every path containing
+      `{deletedBudgetId}` (and only there).
+    - `x-reauth`: `true` means the session must have re-authenticated in the last
+      10 minutes. Stated on every operation (`false` when not required).
+    - `x-pending-deletion-allowed: true`: callable while the account is pending deletion.
+    - `x-idempotency: required`: the `Idempotency-Key` header is required.
+    - `x-rate-limit`: list of rate-limit rows in auth.md §14 that apply (beyond `global` and `writes`).
+servers:
+  - url: /api
+security:
+  - sessionCookie: []
+tags:
+  - name: health
+  - name: auth
+  - name: me
+  - name: mfa
+  - name: sessions
+  - name: budgets
+  - name: members
+  - name: invitations
+  - name: categories
+  - name: plans
+  - name: summary
+  - name: transactions
+  - name: data-rights
+
+paths:
+  # ---------------------------------------------------------------- health
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness. Process is up; does not touch the database.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+        default: { $ref: "#/components/responses/Error" }
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness. Database reachable within 1 s and migrations applied.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-error-codes: [UNAVAILABLE]
+      responses:
+        "200":
+          description: Ready to serve traffic
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- auth
+  /auth/session:
+    get:
+      tags: [auth]
+      operationId: getAuthSession
+      summary: Current auth state and CSRF token. The SPA calls this on boot.
+      x-session: active_or_mfa_pending
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      responses:
+        "200":
+          description: Signed in, or awaiting MFA
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthState" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Email + password. Returns `mfa_required` if the user has MFA.
+      description: |
+        Sets a new session cookie (any existing session on this browser is revoked).
+        If the user has MFA, the new session is `mfa_pending` (10-minute lifetime)
+        and only the MFA endpoints accept it. Password hashing is queued behind a
+        per-instance limit; if the queue wait exceeds 2 s the answer is 503
+        UNAVAILABLE with Retry-After (auth.md §7). Signup, reauth and password
+        changes share the same queue.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [login]
+      x-error-codes: [INVALID_CREDENTIALS]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+      responses:
+        "200":
+          description: Authenticated, or MFA step required
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/SetSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the current session and clear the cookie. Always 204.
+      security:
+        - {}
+        - sessionCookie: []
+          csrfToken: []
+      x-session: optional
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      responses:
+        "204":
+          description: Signed out (also when there was no session)
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/ClearSessionCookie" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/mfa/verify:
+    post:
+      tags: [auth, mfa]
+      operationId: verifyMfa
+      summary: Complete sign-in with a second factor.
+      description: |
+        On success the session becomes `active`, its token is rotated (new cookie)
+        and a new CSRF token is returned. After 5 failures the pending session is
+        deleted and the user must sign in again.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: mfa_pending
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      x-rate-limit: [mfa-verify, mfa-failures]
+      x-error-codes: [MFA_FAILED, FORBIDDEN]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MfaProof" }
+      responses:
+        "200":
+          description: Signed in
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/SetSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/webauthn/challenge:
+    post:
+      tags: [auth, mfa]
+      operationId: createWebAuthnChallenge
+      summary: Passkey assertion options for the MFA step or for re-authentication.
+      description: |
+        `purpose: mfa` requires an `mfa_pending` session; `purpose: reauth` requires
+        an `active` session (else 403 FORBIDDEN). One outstanding challenge per
+        session; a new call replaces it. Challenges expire after 5 minutes.
+        If the user has no passkeys, returns 409 MFA_NOT_ENABLED.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active_or_mfa_pending
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      x-rate-limit: [mfa-verify, mfa-failures]
+      x-error-codes: [FORBIDDEN, MFA_NOT_ENABLED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebAuthnChallengeRequest" }
+      responses:
+        "200":
+          description: PublicKeyCredentialRequestOptionsJSON
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnRequestOptions" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/reauth:
+    post:
+      tags: [auth]
+      operationId: reauthenticate
+      summary: Step-up for sensitive actions. Password, plus a second factor if enrolled.
+      description: |
+        Opens a 10-minute re-authentication window on the current session.
+        If the user has MFA and `mfa` is omitted, returns 401 MFA_REQUIRED.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      x-rate-limit: [reauth, mfa-failures]
+      x-error-codes: [INVALID_CREDENTIALS, MFA_FAILED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReauthRequest" }
+      responses:
+        "200":
+          description: Re-authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReauthResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/signup/preview:
+    post:
+      tags: [auth]
+      operationId: previewSignupInvite
+      summary: Check a sign-up invite token and show the invited email.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [signup]
+      x-error-codes: [INVITATION_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "200":
+          description: Invite is valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignupPreview" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/signup:
+    post:
+      tags: [auth]
+      operationId: signup
+      summary: Create an account from a sign-up invite (invite-only registration).
+      description: |
+        The email comes from the invite, so holding the emailed token verifies it.
+        Consumes the invite, creates the user and an `active` session (sets cookie).
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [signup]
+      x-error-codes: [INVITATION_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignupRequest" }
+      responses:
+        "201":
+          description: Account created and signed in
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/SetSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthState" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/password-reset/request:
+    post:
+      tags: [auth]
+      operationId: requestPasswordReset
+      summary: Email a reset link if the account exists. Always 202.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [password-reset-request]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmailRequest" }
+      responses:
+        "202":
+          {
+            description: "Accepted (identical whether or not the account exists)",
+          }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/password-reset/verify:
+    post:
+      tags: [auth]
+      operationId: verifyPasswordResetToken
+      summary: Check a reset token and learn whether a second factor will be required.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [password-reset-complete]
+      x-error-codes: [TOKEN_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "200":
+          description: Token is valid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PasswordResetStatus" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/password-reset/webauthn-challenge:
+    post:
+      tags: [auth, mfa]
+      operationId: createPasswordResetWebAuthnChallenge
+      summary: Passkey assertion options bound to a reset token.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [password-reset-complete]
+      x-error-codes: [TOKEN_INVALID, MFA_NOT_ENABLED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "200":
+          description: PublicKeyCredentialRequestOptionsJSON
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnRequestOptions" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/password-reset/complete:
+    post:
+      tags: [auth]
+      operationId: completePasswordReset
+      summary: Set a new password. Requires a second factor when MFA is enabled.
+      description: |
+        Never bypasses MFA: if the user has any MFA factor, `mfa` is required
+        (401 MFA_REQUIRED if missing, 401 MFA_FAILED if wrong; 5 failures
+        invalidate the token). Success consumes the token and revokes all of
+        the user's sessions. The user then signs in normally.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [password-reset-complete, mfa-failures]
+      x-error-codes: [TOKEN_INVALID, MFA_FAILED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordResetComplete" }
+      responses:
+        "204": { description: "Password changed; all sessions revoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/email-change/confirm:
+    post:
+      tags: [auth]
+      operationId: confirmEmailChange
+      summary: Confirm a new email address from the link sent to it (signed in as the same user).
+      description: |
+        Requires the token **and** an `active` session of the user who requested the
+        change (auth.md §9). A token for another user, or one whose requesting
+        session has since been revoked, is 400 TOKEN_INVALID. Success swaps the
+        email, deletes the user's other open one-time tokens (except
+        `email_change_cancel`) and revokes every session except the confirming one.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [email-change-confirm]
+      x-error-codes: [TOKEN_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "204": { description: "Email changed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /auth/email-change/cancel:
+    post:
+      tags: [auth]
+      operationId: cancelEmailChange
+      summary: '"This wasn''t me": cancel or revert an email change from the link sent to the old address.'
+      description: |
+        Public; the token is the authorization. Valid for 24 hours after the change
+        was requested. If the change is still pending it is cancelled; if it was
+        already confirmed, the account's email reverts to the address this link
+        was sent to (unless another account now uses it: then TOKEN_INVALID).
+        Either way: every session is revoked; every open one-time token that is
+        not a cancel token is deleted; and, among cancel tokens, only those
+        created AFTER this one are deleted. Earlier cancel tokens stay valid, so
+        an earlier cancel always wins (F-33). Both addresses (the one restored or
+        kept and the one abandoned) are emailed. The user signs in again and
+        should reset the password. See auth.md §9 for the regression tests.
+      security: []
+      x-session: none
+      x-budget-role: none
+      x-reauth: false
+      x-rate-limit: [email-change-confirm]
+      x-error-codes: [TOKEN_INVALID]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenRequest" }
+      responses:
+        "204":
+          { description: "Change cancelled or reverted; all sessions revoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- me
+  /me:
+    get:
+      tags: [me]
+      operationId: getMe
+      summary: The signed-in user.
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [me]
+      operationId: updateMe
+      summary: Update the display name.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MeUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/password:
+    post:
+      tags: [me]
+      operationId: changePassword
+      summary: Change password. Revokes all other sessions.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordChange" }
+      responses:
+        "204": { description: "Changed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/email-change:
+    post:
+      tags: [me]
+      operationId: requestEmailChange
+      summary: Send a confirmation link to a new address; notify the old one.
+      description: |
+        202, including when the new address belongs to another account. At most
+        one email change per 24 h: while the user has any open
+        `email_change_cancel` token, the answer is 429 RATE_LIMITED with
+        Retry-After until that token expires (F-33).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-rate-limit: [email-change-request]
+      x-error-codes: [REAUTH_REQUIRED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmailChangeRequest" }
+      responses:
+        "202": { description: "Accepted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- sessions
+  /me/sessions:
+    get:
+      tags: [sessions]
+      operationId: listSessions
+      summary: The user's active sessions (devices).
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: Sessions, most recently seen first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/SessionId"
+    delete:
+      tags: [sessions]
+      operationId: revokeSession
+      summary: Revoke one of the user's sessions. Revoking the current one signs out.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "204": { description: "Revoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/sessions/revoke-others:
+    post:
+      tags: [sessions]
+      operationId: revokeOtherSessions
+      summary: Sign out everywhere else.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "204": { description: "All other sessions revoked" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- mfa
+  /me/mfa:
+    get:
+      tags: [mfa]
+      operationId: getMfa
+      summary: MFA factors and recovery-code count.
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: MFA detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MfaDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/totp:
+    post:
+      tags: [mfa]
+      operationId: beginTotpSetup
+      summary: Start TOTP enrollment. Not active until confirmed.
+      description: Replaces any unconfirmed setup. Unconfirmed setups expire after 15 minutes.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, ALREADY_EXISTS]
+      responses:
+        "201":
+          description: Secret to add to an authenticator app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TotpSetup" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [mfa]
+      operationId: removeTotp
+      summary: Remove TOTP. If no factor remains, MFA is off and recovery codes are deleted.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, NOT_FOUND]
+      responses:
+        "204": { description: "Removed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/totp/confirm:
+    post:
+      tags: [mfa]
+      operationId: confirmTotpSetup
+      summary: Activate TOTP with a current code.
+      description: Returns recovery codes only when this is the user's first MFA factor.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-rate-limit: [mfa-verify]
+      x-error-codes: [REAUTH_REQUIRED, NOT_FOUND, MFA_FAILED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TotpConfirm" }
+      responses:
+        "200":
+          description: TOTP active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MfaEnrollResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/passkeys/options:
+    post:
+      tags: [mfa]
+      operationId: createPasskeyRegistrationOptions
+      summary: WebAuthn creation options for registering a passkey.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, LIMIT_REACHED]
+      responses:
+        "200":
+          description: PublicKeyCredentialCreationOptionsJSON
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebAuthnCreationOptions" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/passkeys:
+    post:
+      tags: [mfa]
+      operationId: registerPasskey
+      summary: Register a passkey as a second factor.
+      description: Returns recovery codes only when this is the user's first MFA factor.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes:
+        [REAUTH_REQUIRED, MFA_FAILED, ALREADY_EXISTS, LIMIT_REACHED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasskeyRegistration" }
+      responses:
+        "201":
+          description: Passkey registered
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PasskeyEnrollResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/passkeys/{passkeyId}:
+    parameters:
+      - $ref: "#/components/parameters/PasskeyId"
+    delete:
+      tags: [mfa]
+      operationId: removePasskey
+      summary: Remove a passkey. If no factor remains, MFA is off and recovery codes are deleted.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, NOT_FOUND]
+      responses:
+        "204": { description: "Removed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/mfa/recovery-codes:
+    post:
+      tags: [mfa]
+      operationId: regenerateRecoveryCodes
+      summary: Replace all recovery codes with 10 new ones (shown once).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, MFA_NOT_ENABLED]
+      responses:
+        "200":
+          description: New codes; old codes no longer work
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecoveryCodes" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- my invitations
+  /me/invitations:
+    get:
+      tags: [invitations]
+      operationId: listMyInvitations
+      summary: Pending, unexpired budget invitations addressed to my email.
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: Invitations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MyInvitationList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/invitations/{invitationId}/accept:
+    parameters:
+      - $ref: "#/components/parameters/InvitationId"
+    post:
+      tags: [invitations]
+      operationId: acceptInvitation
+      summary: Join the budget. Returns the budget.
+      description: 404 if the invitation is not addressed to my email.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-error-codes:
+        [NOT_FOUND, INVITATION_INVALID, ALREADY_EXISTS, LIMIT_REACHED]
+      responses:
+        "200":
+          description: Joined
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/invitations/{invitationId}/decline:
+    parameters:
+      - $ref: "#/components/parameters/InvitationId"
+    post:
+      tags: [invitations]
+      operationId: declineInvitation
+      summary: Decline the invitation.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-error-codes: [NOT_FOUND, INVITATION_INVALID]
+      responses:
+        "204": { description: "Declined" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /me/deleted-budgets:
+    get:
+      tags: [budgets]
+      operationId: listDeletedBudgets
+      summary: Budgets I own that were deleted in the last 30 days and can still be restored (at most the 20 most recent, newest first).
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: Deleted budgets, most recently deleted first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletedBudgetList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/deleted-budgets/{deletedBudgetId}/restore:
+    parameters:
+      - $ref: "#/components/parameters/DeletedBudgetId"
+    post:
+      tags: [budgets]
+      operationId: restoreDeletedBudget
+      summary: Undo a budget deletion within the 30-day grace period (owner only).
+      description: |
+        Clears the soft delete. The caller must hold the `owner` membership of the
+        deleted budget; anyone else, an unknown ID, a budget that is not deleted,
+        or one deleted more than 30 days ago is 404. Memberships, categories,
+        plans and transactions come back as they were at deletion. All members
+        are emailed. Authorized only through `requireDeletedBudgetOwnership`, which
+        yields a `DeletedBudgetScope` (F-36, ADR-0010); the owner's account must not
+        be pending deletion. Refused with 422 LIMIT_REACHED when the owner is
+        already a member of 10 non-deleted budgets, or when restoring would put
+        any other member of the budget above the hard bound of 20 non-deleted
+        budgets (F-37). The response never says which member. Soft-deleted
+        budgets do not count toward either limit.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: deleted_budget_owner
+      x-reauth: false
+      x-error-codes: [NOT_FOUND, LIMIT_REACHED]
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- data rights
+  /me/export:
+    post:
+      tags: [data-rights]
+      operationId: exportMyData
+      summary: CSV export of every budget I am a member of.
+      description: |
+        `kind: transactions` returns one row per split; `kind: plans` one row per
+        plan entry. Columns are defined in data-model.md "CSV export". Cells that
+        start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'`.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-pending-deletion-allowed: true
+      x-rate-limit: [export]
+      x-error-codes: [REAUTH_REQUIRED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExportRequest" }
+      responses:
+        "200":
+          description: CSV file (RFC 4180, UTF-8, header row)
+          headers:
+            Content-Disposition:
+              description: '`attachment; filename="shoestring-<kind>-<YYYY-MM-DD>.csv"`'
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /me/deletion:
+    post:
+      tags: [data-rights]
+      operationId: requestAccountDeletion
+      summary: Schedule account deletion (30-day grace), revoke all sessions.
+      description: |
+        Blocked with 409 OWNS_SHARED_BUDGET while the user owns a non-deleted
+        budget that has other members: transfer ownership, remove the members, or
+        delete the budget first. Locks the owned budgets (data-model.md). On
+        success every session, including this one, is revoked, every open one-time
+        token is deleted, and the cookie is cleared.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: true
+      x-error-codes: [REAUTH_REQUIRED, OWNS_SHARED_BUDGET]
+      responses:
+        "202":
+          description: Deletion scheduled
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/ClearSessionCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeletionStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [data-rights]
+      operationId: cancelAccountDeletion
+      summary: Cancel a scheduled deletion during the grace period.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-pending-deletion-allowed: true
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Deletion cancelled; account active again
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- budgets
+  /budgets:
+    get:
+      tags: [budgets]
+      operationId: listBudgets
+      summary: Budgets I am a member of.
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      responses:
+        "200":
+          description: Budgets, by name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BudgetList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [budgets]
+      operationId: createBudget
+      summary: Create a budget (caller becomes owner), optionally with starter categories.
+      description: |
+        Atomic. `plannedCents` on a starter category creates a plan entry for the
+        budget's current month (in the budget timezone).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: none
+      x-reauth: false
+      x-idempotency: required
+      x-error-codes: [IDEMPOTENCY_KEY_REUSED, LIMIT_REACHED]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BudgetCreate" }
+      responses:
+        "201":
+          description: Created (or replayed for the same Idempotency-Key)
+          headers:
+            Idempotent-Replayed:
+              { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    get:
+      tags: [budgets]
+      operationId: getBudget
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Budget
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [budgets]
+      operationId: updateBudget
+      summary: Rename or change timezone (owner only).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: owner
+      x-error-codes: [NOT_FOUND, FORBIDDEN, VERSION_CONFLICT]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BudgetUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [budgets]
+      operationId: deleteBudget
+      summary: Delete the budget for every member (owner only; soft delete, purged after 30 days).
+      description: |
+        Every member is emailed a deletion notice. The owner can restore it for 30
+        days with `POST /me/deleted-budgets/{deletedBudgetId}/restore` (ADR-0010).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: owner
+      x-reauth: true
+      x-error-codes: [NOT_FOUND, FORBIDDEN, REAUTH_REQUIRED, VERSION_CONFLICT]
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
+      responses:
+        "204": { description: "Deleted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- members
+  /budgets/{budgetId}/members:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    get:
+      tags: [members]
+      operationId: listMembers
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Members, owner first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemberList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/members/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/UserId"
+    delete:
+      tags: [members]
+      operationId: removeMember
+      summary: Owner removes a member, or a member removes themself (leave).
+      description: |
+        The owner cannot remove themself (409 OWNER_CANNOT_LEAVE): transfer
+        ownership first. The removed member is emailed a notice.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, FORBIDDEN, OWNER_CANNOT_LEAVE]
+      responses:
+        "204": { description: "Removed" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  /budgets/{budgetId}/transfer-ownership:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    post:
+      tags: [members]
+      operationId: transferOwnership
+      summary: Hand ownership to another member (owner only). The caller becomes a member.
+      description: |
+        Atomic role swap under a lock on the budget row (ADR-0010). The target must
+        be a current member with an active account; a non-member target is 404, the
+        caller's own ID is 400 VALIDATION_FAILED (`userId`, `invalid_value`). All
+        members are emailed. Afterwards the former owner may leave or delete their
+        account.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: owner
+      x-reauth: true
+      x-error-codes: [NOT_FOUND, FORBIDDEN, REAUTH_REQUIRED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OwnershipTransfer" }
+      responses:
+        "200":
+          description: Ownership transferred; the budget as the caller now sees it (myRole member)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Budget" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- budget invitations
+  /budgets/{budgetId}/invitations:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    get:
+      tags: [invitations]
+      operationId: listBudgetInvitations
+      summary: Pending invitations and those answered in the last 30 days (owner only).
+      x-session: active
+      x-reauth: false
+      x-budget-role: owner
+      x-error-codes: [NOT_FOUND, FORBIDDEN]
+      responses:
+        "200":
+          description: Invitations, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InvitationList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [invitations]
+      operationId: createBudgetInvitation
+      summary: Invite an existing (or future) Shoestring user by email (owner only).
+      description: |
+        The response is identical whether or not an account exists for the email
+        (no enumeration). A notification email is sent only if the account exists;
+        otherwise the invitation waits for that email to sign up. Expires in 14 days.
+        Requires re-auth (F-13): sharing grants access that outlives session revocation.
+        LIMIT_REACHED also covers the cap of 20 pending invitations per invitee email.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-budget-role: owner
+      x-reauth: true
+      x-rate-limit: [budget-invitations]
+      x-error-codes:
+        [NOT_FOUND, FORBIDDEN, REAUTH_REQUIRED, ALREADY_EXISTS, LIMIT_REACHED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InvitationCreate" }
+      responses:
+        "201":
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Invitation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/invitations/{invitationId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/InvitationId"
+    delete:
+      tags: [invitations]
+      operationId: revokeBudgetInvitation
+      summary: Revoke a pending invitation (owner only).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: owner
+      x-error-codes: [NOT_FOUND, FORBIDDEN, INVITATION_INVALID]
+      responses:
+        "204": { description: "Revoked" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- categories
+  /budgets/{budgetId}/categories:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    get:
+      tags: [categories]
+      operationId: listCategories
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      parameters:
+        - name: includeArchived
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Categories by sortOrder, then name
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CategoryList" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [categories]
+      operationId: createCategory
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, ALREADY_EXISTS, LIMIT_REACHED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CategoryCreate" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/categories/{categoryId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/CategoryId"
+    patch:
+      tags: [categories]
+      operationId: updateCategory
+      summary: Rename, reorder, archive or unarchive. `kind` is immutable.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, ALREADY_EXISTS, VERSION_CONFLICT]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CategoryUpdate" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [categories]
+      operationId: deleteCategory
+      summary: Hard-delete an unused category. Use archive if any transaction uses it.
+      description: |
+        409 CATEGORY_IN_USE if any split (including on a soft-deleted transaction
+        not yet purged) references it. Its plan entries are deleted with it.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, VERSION_CONFLICT, CATEGORY_IN_USE]
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
+      responses:
+        "204": { description: "Deleted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- plans
+  /budgets/{budgetId}/months/{month}/plan:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/Month"
+    get:
+      tags: [plans]
+      operationId: getMonthPlan
+      summary: Plan entries (monthly limits) for a month. Missing entry means 0.
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonthPlan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/months/{month}/plan/{categoryId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/Month"
+      - $ref: "#/components/parameters/CategoryId"
+    put:
+      tags: [plans]
+      operationId: putPlanEntry
+      summary: Set a category's planned amount for the month (create or replace).
+      description: |
+        `version: null` means "I expect no entry yet" (create, 201). Otherwise the
+        entry's current version (replace, 200). Mismatch is 409 VERSION_CONFLICT.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, VERSION_CONFLICT, CATEGORY_ARCHIVED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanEntryPut" }
+      responses:
+        "200":
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanEntry" }
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanEntry" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/months/{month}/plan/copy-previous:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/Month"
+    post:
+      tags: [plans]
+      operationId: copyPreviousMonthPlan
+      summary: Copy the previous month's plan into this month (J5).
+      description: |
+        Copies entries from month-1 for non-archived categories. With
+        `overwrite: false` (default) only categories with no entry this month are
+        filled; with `overwrite: true` existing entries are replaced (no version
+        check; this is an explicit bulk action). Atomic. An empty previous month
+        returns 200 with `copiedCount: 0`.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PlanCopyRequest" }
+      responses:
+        "200":
+          description: Resulting plan for the month
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlanCopyResult" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- summary
+  /budgets/{budgetId}/months/{month}/summary:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/Month"
+    get:
+      tags: [summary]
+      operationId: getMonthSummary
+      summary: Planned, actual and remaining per category, with totals (J3).
+      description: Formulas are in ADR-0004. All arithmetic is done on the server.
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonthSummary" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+
+  # ---------------------------------------------------------------- transactions
+  /budgets/{budgetId}/transactions:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+    get:
+      tags: [transactions]
+      operationId: listTransactions
+      summary: Transactions, newest first, cursor-paginated (J4).
+      description: |
+        Order is `date DESC, id DESC` (id is UUIDv7, so ties break by creation
+        time). Cursors carry a MAC over budget ID, filters and position; a cursor
+        used with another budget or other filters, or tampered with, is 400
+        VALIDATION_FAILED (`query.cursor`, `invalid_value`). A `categoryId` filter
+        that is not a category of this budget returns an empty page.
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      parameters:
+        - name: month
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Month" }
+        - name: categoryId
+          in: query
+          required: false
+          description: Transactions with at least one split in this category.
+          schema: { $ref: "#/components/schemas/Uuid" }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: cursor
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/Cursor" }
+      responses:
+        "200":
+          description: A page of transactions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TransactionPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      tags: [transactions]
+      operationId: createTransaction
+      summary: Record a transaction with 1..20 splits (J2).
+      description: |
+        Requires `Idempotency-Key`. A retry with the same key and body returns
+        201 with the transaction's current state and `Idempotent-Replayed: true`,
+        loaded through the current BudgetScope (a since-deleted transaction
+        replays as 404); the same key with a different body is 422
+        IDEMPOTENCY_KEY_REUSED. A split `categoryId` that is not a category of
+        this budget is 400 VALIDATION_FAILED (`splits.N.categoryId`,
+        `invalid_value`), checked before any write.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-idempotency: required
+      x-error-codes:
+        [
+          NOT_FOUND,
+          IDEMPOTENCY_KEY_REUSED,
+          SPLITS_DO_NOT_SUM,
+          CATEGORY_ARCHIVED,
+        ]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransactionCreate" }
+      responses:
+        "201":
+          description: Created (or replayed)
+          headers:
+            Idempotent-Replayed:
+              { $ref: "#/components/headers/IdempotentReplayed" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+  /budgets/{budgetId}/transactions/{transactionId}:
+    parameters:
+      - $ref: "#/components/parameters/BudgetId"
+      - $ref: "#/components/parameters/TransactionId"
+    get:
+      tags: [transactions]
+      operationId: getTransaction
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND]
+      responses:
+        "200":
+          description: Transaction
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      tags: [transactions]
+      operationId: replaceTransaction
+      summary: Replace all editable fields, including the full splits array.
+      description: |
+        Optimistic concurrency: `version` must equal the current version, else
+        409 VERSION_CONFLICT (the client refetches and shows both). An archived
+        category may stay on a split only if it was already on this transaction.
+        A split `categoryId` outside this budget is 400 VALIDATION_FAILED
+        (`splits.N.categoryId`, `invalid_value`).
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes:
+        [NOT_FOUND, VERSION_CONFLICT, SPLITS_DO_NOT_SUM, CATEGORY_ARCHIVED]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TransactionReplace" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Transaction" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [transactions]
+      operationId: deleteTransaction
+      summary: Soft-delete (purged after 30 days). Hidden from lists and summaries at once.
+      security:
+        - sessionCookie: []
+          csrfToken: []
+      x-session: active
+      x-reauth: false
+      x-budget-role: member
+      x-error-codes: [NOT_FOUND, VERSION_CONFLICT]
+      parameters:
+        - $ref: "#/components/parameters/VersionQuery"
+      responses:
+        "204": { description: "Deleted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        default: { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-ss_sid
+      description: |
+        Opaque session token. HttpOnly; Secure; SameSite=Strict; Path=/.
+        Local http development uses the name `ss_sid` without Secure (auth.md).
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: The `csrfToken` from AuthState. Required on unsafe methods that carry a session.
+
+  headers:
+    RequestId:
+      description: Request correlation ID (echoed or generated). See errors.md.
+      schema: { $ref: "#/components/schemas/RequestId" }
+    SetSessionCookie:
+      description: "`__Host-ss_sid=<token>; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=2592000` (Max-Age=600 for an mfa_pending session)"
+      schema: { type: string }
+    ClearSessionCookie:
+      description: "`__Host-ss_sid=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`"
+      schema: { type: string }
+    IdempotentReplayed:
+      description: "`true` when this response replays an earlier request with the same Idempotency-Key."
+      schema: { type: string, enum: ["true"] }
+    RetryAfter:
+      description: Seconds until the client may retry.
+      schema: { type: integer, minimum: 1 }
+
+  parameters:
+    DeletedBudgetId:
+      name: deletedBudgetId
+      in: path
+      required: true
+      description: ID of a soft-deleted budget (not resolvable through the membership check).
+      schema: { $ref: "#/components/schemas/Uuid" }
+    BudgetId:
+      name: budgetId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    CategoryId:
+      name: categoryId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    TransactionId:
+      name: transactionId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    InvitationId:
+      name: invitationId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    PasskeyId:
+      name: passkeyId
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Uuid" }
+    Month:
+      name: month
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Month" }
+    VersionQuery:
+      name: version
+      in: query
+      required: true
+      description: The version the client last saw (optimistic concurrency).
+      schema: { $ref: "#/components/schemas/Version" }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-generated UUID, new per user intent, reused on retries. Kept 24 h.
+      schema: { $ref: "#/components/schemas/Uuid" }
+
+  responses:
+    Error:
+      description: Any other error (413, 415, 500, 503). See errors.md.
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    BadRequest:
+      description: VALIDATION_FAILED, INVITATION_INVALID or TOKEN_INVALID
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unauthorized:
+      description: UNAUTHENTICATED, INVALID_CREDENTIALS, MFA_REQUIRED or MFA_FAILED
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Forbidden:
+      description: CSRF_FAILED, FORBIDDEN, REAUTH_REQUIRED or ACCOUNT_PENDING_DELETION
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    NotFound:
+      description: NOT_FOUND (missing, deleted, or not visible to the caller)
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Conflict:
+      description: VERSION_CONFLICT, ALREADY_EXISTS, CATEGORY_IN_USE, OWNER_CANNOT_LEAVE, OWNS_SHARED_BUDGET or MFA_NOT_ENABLED
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    Unprocessable:
+      description: SPLITS_DO_NOT_SUM, CATEGORY_ARCHIVED, IDEMPOTENCY_KEY_REUSED or LIMIT_REACHED
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    TooManyRequests:
+      description: RATE_LIMITED
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+    ServiceUnavailable:
+      description: UNAVAILABLE (Retry-After set when the server can estimate it, e.g. the password-hashing queue)
+      headers:
+        X-Request-Id: { $ref: "#/components/headers/RequestId" }
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorBody" }
+
+  schemas:
+    # ------------------------------------------------------------ primitives
+    Uuid:
+      type: string
+      format: uuid
+    RequestId:
+      type: string
+      pattern: "^[A-Za-z0-9-]{8,64}$"
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 UTC with `Z`, millisecond precision.
+    Date:
+      type: string
+      format: date
+      description: Calendar date `YYYY-MM-DD` (no time, no zone).
+    Month:
+      type: string
+      pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+      description: Calendar month `YYYY-MM`.
+    Cents:
+      type: integer
+      minimum: 0
+      maximum: 100000000
+      description: Non-negative USD cents. Max $1,000,000.00.
+    PositiveCents:
+      type: integer
+      minimum: 1
+      maximum: 100000000
+      description: Positive USD cents. Max $1,000,000.00.
+    SignedCents:
+      type: integer
+      description: USD cents; may be negative (e.g. overspent remaining).
+    Version:
+      type: integer
+      minimum: 1
+      description: Row version; starts at 1 and increments on every update.
+    Cursor:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: Opaque base64url cursor.
+    Email:
+      type: string
+      format: email
+      maxLength: 254
+    Token:
+      type: string
+      minLength: 43
+      maxLength: 64
+      pattern: "^[A-Za-z0-9_-]+$"
+      description: Opaque base64url token from an emailed link (taken from the URL fragment).
+    NewPassword:
+      type: string
+      minLength: 12
+      maxLength: 128
+      description: Policy in auth.md (length, breached-password check). Violations are VALIDATION_FAILED with issue codes.
+    DisplayName:
+      type: string
+      minLength: 1
+      maxLength: 50
+    Timezone:
+      type: string
+      minLength: 1
+      maxLength: 64
+      description: IANA zone name accepted by the server's Intl database, e.g. `America/Chicago`.
+      examples: ["America/New_York"]
+    Role:
+      type: string
+      enum: [owner, member]
+    CategoryKind:
+      type: string
+      enum: [expense, income]
+    Direction:
+      type: string
+      enum: [outflow, inflow]
+      description: outflow = money spent; inflow = money received (income or refund).
+    MfaMethod:
+      type: string
+      enum: [totp, passkey, recovery_code]
+
+    # ------------------------------------------------------------ errors
+    ErrorCode:
+      type: string
+      description: Stable machine-readable code. Registry and HTTP status in errors.md.
+      enum:
+        - VALIDATION_FAILED
+        - INVITATION_INVALID
+        - TOKEN_INVALID
+        - UNAUTHENTICATED
+        - INVALID_CREDENTIALS
+        - MFA_REQUIRED
+        - MFA_FAILED
+        - CSRF_FAILED
+        - FORBIDDEN
+        - REAUTH_REQUIRED
+        - ACCOUNT_PENDING_DELETION
+        - NOT_FOUND
+        - VERSION_CONFLICT
+        - ALREADY_EXISTS
+        - CATEGORY_IN_USE
+        - OWNER_CANNOT_LEAVE
+        - OWNS_SHARED_BUDGET
+        - MFA_NOT_ENABLED
+        - PAYLOAD_TOO_LARGE
+        - UNSUPPORTED_MEDIA_TYPE
+        - SPLITS_DO_NOT_SUM
+        - CATEGORY_ARCHIVED
+        - IDEMPOTENCY_KEY_REUSED
+        - LIMIT_REACHED
+        - RATE_LIMITED
+        - INTERNAL
+        - UNAVAILABLE
+    FieldIssue:
+      type: string
+      description: Stable per-field issue code. Registry in errors.md.
+      enum:
+        - required
+        - unknown_field
+        - invalid_type
+        - invalid_format
+        - invalid_value
+        - too_small
+        - too_big
+        - too_short
+        - too_long
+        - breached_password
+        - duplicate
+        - sum_mismatch
+        - archived
+        - already_member
+        - invitation_pending
+        - limit
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [in, field, issue, message]
+      properties:
+        in:
+          type: string
+          enum: [body, query, path, header]
+        field:
+          type: string
+          maxLength: 200
+          description: Dotted path within `in`, array indexes as numbers (`splits.1.amountCents`). Empty string = the whole location.
+        issue: { $ref: "#/components/schemas/FieldIssue" }
+        message:
+          type: string
+          description: Safe English fallback. Never echoes the submitted value.
+    ErrorBody:
+      type: object
+      additionalProperties: false
+      required: [code, message, requestId]
+      properties:
+        code: { $ref: "#/components/schemas/ErrorCode" }
+        message:
+          type: string
+          description: Safe, human-readable fallback. Clients map `code` to their own copy.
+        requestId: { $ref: "#/components/schemas/RequestId" }
+        details:
+          type: array
+          maxItems: 50
+          description: Present for VALIDATION_FAILED (always, at least one item) and optionally for 409/422 domain codes.
+          items: { $ref: "#/components/schemas/FieldError" }
+
+    # ------------------------------------------------------------ health
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status, version]
+      properties:
+        status: { type: string, enum: [ok] }
+        version:
+          {
+            type: string,
+            description: "Build git SHA (public repo, so not secret)",
+          }
+    Readiness:
+      type: object
+      additionalProperties: false
+      required: [status, checks]
+      properties:
+        status: { type: string, enum: [ok] }
+        checks:
+          type: object
+          additionalProperties: false
+          required: [database]
+          properties:
+            database: { type: string, enum: [ok] }
+
+    # ------------------------------------------------------------ auth
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { $ref: "#/components/schemas/Email" }
+        password: { type: string, minLength: 1, maxLength: 128 }
+    TokenRequest:
+      type: object
+      additionalProperties: false
+      required: [token]
+      properties:
+        token: { $ref: "#/components/schemas/Token" }
+    EmailRequest:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { $ref: "#/components/schemas/Email" }
+    SignupPreview:
+      type: object
+      additionalProperties: false
+      required: [email, expiresAt]
+      properties:
+        email: { $ref: "#/components/schemas/Email" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+    SignupRequest:
+      type: object
+      additionalProperties: false
+      required: [token, displayName, password]
+      properties:
+        token: { $ref: "#/components/schemas/Token" }
+        displayName: { $ref: "#/components/schemas/DisplayName" }
+        password: { $ref: "#/components/schemas/NewPassword" }
+    TotpProof:
+      type: object
+      additionalProperties: false
+      required: [method, code]
+      properties:
+        method: { type: string, const: totp }
+        code: { type: string, pattern: "^[0-9]{6}$" }
+    PasskeyProof:
+      type: object
+      additionalProperties: false
+      required: [method, assertion]
+      properties:
+        method: { type: string, const: passkey }
+        assertion: { $ref: "#/components/schemas/WebAuthnAssertion" }
+    RecoveryCodeProof:
+      type: object
+      additionalProperties: false
+      required: [method, code]
+      properties:
+        method: { type: string, const: recovery_code }
+        code:
+          type: string
+          pattern: "^[A-Za-z0-9]{5}-?[A-Za-z0-9]{5}$"
+          description: Case-insensitive; the hyphen is optional.
+    MfaProof:
+      oneOf:
+        - $ref: "#/components/schemas/TotpProof"
+        - $ref: "#/components/schemas/PasskeyProof"
+        - $ref: "#/components/schemas/RecoveryCodeProof"
+      discriminator:
+        propertyName: method
+        mapping:
+          totp: "#/components/schemas/TotpProof"
+          passkey: "#/components/schemas/PasskeyProof"
+          recovery_code: "#/components/schemas/RecoveryCodeProof"
+    WebAuthnAssertion:
+      type: object
+      description: AuthenticationResponseJSON (WebAuthn L3), as produced by the browser library. Verified server-side.
+      required: [id, rawId, type, response]
+      properties:
+        id: { type: string }
+        rawId: { type: string }
+        type: { type: string, const: public-key }
+        response: { type: object }
+        clientExtensionResults: { type: object }
+        authenticatorAttachment: { type: [string, "null"] }
+    WebAuthnRegistrationResponse:
+      type: object
+      description: RegistrationResponseJSON (WebAuthn L3). Verified server-side.
+      required: [id, rawId, type, response]
+      properties:
+        id: { type: string }
+        rawId: { type: string }
+        type: { type: string, const: public-key }
+        response: { type: object }
+        clientExtensionResults: { type: object }
+        authenticatorAttachment: { type: [string, "null"] }
+    WebAuthnRequestOptions:
+      type: object
+      description: PublicKeyCredentialRequestOptionsJSON (WebAuthn L3).
+      required: [challenge, rpId, allowCredentials, userVerification, timeout]
+      properties:
+        challenge: { type: string }
+        rpId: { type: string }
+        allowCredentials: { type: array, items: { type: object } }
+        userVerification: { type: string, enum: [preferred] }
+        timeout: { type: integer }
+    WebAuthnCreationOptions:
+      type: object
+      description: PublicKeyCredentialCreationOptionsJSON (WebAuthn L3). attestation is `none`.
+      required:
+        [
+          challenge,
+          rp,
+          user,
+          pubKeyCredParams,
+          excludeCredentials,
+          authenticatorSelection,
+          attestation,
+          timeout,
+        ]
+      properties:
+        challenge: { type: string }
+        rp: { type: object }
+        user: { type: object }
+        pubKeyCredParams: { type: array, items: { type: object } }
+        excludeCredentials: { type: array, items: { type: object } }
+        authenticatorSelection: { type: object }
+        attestation: { type: string, enum: [none] }
+        timeout: { type: integer }
+    WebAuthnChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [purpose]
+      properties:
+        purpose: { type: string, enum: [mfa, reauth] }
+    ReauthRequest:
+      type: object
+      additionalProperties: false
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 128 }
+        mfa: { $ref: "#/components/schemas/MfaProof" }
+    ReauthResult:
+      type: object
+      additionalProperties: false
+      required: [reauthenticatedUntil]
+      properties:
+        reauthenticatedUntil: { $ref: "#/components/schemas/Timestamp" }
+    PasswordResetStatus:
+      type: object
+      additionalProperties: false
+      required: [mfaRequired, mfaMethods]
+      properties:
+        mfaRequired: { type: boolean }
+        mfaMethods:
+          type: array
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/MfaMethod" }
+          description: Empty when mfaRequired is false.
+    PasswordResetComplete:
+      type: object
+      additionalProperties: false
+      required: [token, newPassword]
+      properties:
+        token: { $ref: "#/components/schemas/Token" }
+        newPassword: { $ref: "#/components/schemas/NewPassword" }
+        mfa: { $ref: "#/components/schemas/MfaProof" }
+    CurrentSession:
+      type: object
+      additionalProperties: false
+      required: [id, expiresAt, reauthenticatedUntil]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+        reauthenticatedUntil:
+          type: [string, "null"]
+          format: date-time
+          description: End of the re-authentication window; null if none is open.
+    AuthenticatedState:
+      type: object
+      additionalProperties: false
+      required: [state, user, session, csrfToken]
+      properties:
+        state: { type: string, const: authenticated }
+        user: { $ref: "#/components/schemas/Me" }
+        session: { $ref: "#/components/schemas/CurrentSession" }
+        csrfToken: { type: string, minLength: 43, maxLength: 64 }
+    MfaRequiredState:
+      type: object
+      additionalProperties: false
+      required: [state, mfaMethods, expiresAt, csrfToken]
+      properties:
+        state: { type: string, const: mfa_required }
+        mfaMethods:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { $ref: "#/components/schemas/MfaMethod" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+        csrfToken: { type: string, minLength: 43, maxLength: 64 }
+    AuthState:
+      oneOf:
+        - $ref: "#/components/schemas/AuthenticatedState"
+        - $ref: "#/components/schemas/MfaRequiredState"
+      discriminator:
+        propertyName: state
+        mapping:
+          authenticated: "#/components/schemas/AuthenticatedState"
+          mfa_required: "#/components/schemas/MfaRequiredState"
+
+    # ------------------------------------------------------------ me
+    MfaSummary:
+      type: object
+      additionalProperties: false
+      required: [enabled, totp, passkeyCount, recoveryCodesRemaining]
+      properties:
+        enabled:
+          {
+            type: boolean,
+            description: "True iff at least one factor (TOTP or passkey) is active",
+          }
+        totp: { type: boolean }
+        passkeyCount: { type: integer, minimum: 0, maximum: 10 }
+        recoveryCodesRemaining: { type: integer, minimum: 0, maximum: 10 }
+    DeletionStatus:
+      type: object
+      additionalProperties: false
+      required: [requestedAt, purgeAfter]
+      properties:
+        requestedAt: { $ref: "#/components/schemas/Timestamp" }
+        purgeAfter: { $ref: "#/components/schemas/Timestamp" }
+    Me:
+      type: object
+      additionalProperties: false
+      required: [id, email, displayName, createdAt, mfa, deletion]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        email: { $ref: "#/components/schemas/Email" }
+        displayName: { $ref: "#/components/schemas/DisplayName" }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        mfa: { $ref: "#/components/schemas/MfaSummary" }
+        deletion:
+          description: Non-null while the account is pending deletion (restricted mode).
+          oneOf:
+            - $ref: "#/components/schemas/DeletionStatus"
+            - type: "null"
+    MeUpdate:
+      type: object
+      additionalProperties: false
+      required: [displayName]
+      properties:
+        displayName: { $ref: "#/components/schemas/DisplayName" }
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      required: [newPassword]
+      properties:
+        newPassword: { $ref: "#/components/schemas/NewPassword" }
+    EmailChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [newEmail]
+      properties:
+        newEmail: { $ref: "#/components/schemas/Email" }
+
+    # ------------------------------------------------------------ sessions
+    SessionInfo:
+      type: object
+      additionalProperties: false
+      required: [id, current, browser, os, createdAt, lastSeenAt, expiresAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        current: { type: boolean }
+        browser: { $ref: "#/components/schemas/DeviceBrowser" }
+        os: { $ref: "#/components/schemas/DeviceOs" }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        lastSeenAt: { $ref: "#/components/schemas/Timestamp" }
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+          description: The earlier of the 30-day sliding expiry and the 90-day absolute cap.
+    DeviceBrowser:
+      type: string
+      enum: [safari, chrome, firefox, edge, samsung_internet, other, unknown]
+      description: Fixed vocabulary derived from the User-Agent at sign-in; no raw UA text (F-20).
+    DeviceOs:
+      type: string
+      enum: [ios, ipados, android, macos, windows, linux, chromeos, other, unknown]
+    SessionList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/SessionInfo" }
+
+    # ------------------------------------------------------------ mfa
+    Passkey:
+      type: object
+      additionalProperties: false
+      required: [id, name, createdAt, lastUsedAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        name: { type: string, minLength: 1, maxLength: 40 }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+    MfaDetail:
+      type: object
+      additionalProperties: false
+      required: [enabled, totp, passkeys, recoveryCodesRemaining]
+      properties:
+        enabled: { type: boolean }
+        totp:
+          type: object
+          additionalProperties: false
+          required: [enabled, confirmedAt]
+          properties:
+            enabled: { type: boolean }
+            confirmedAt:
+              type: [string, "null"]
+              format: date-time
+        passkeys:
+          type: array
+          maxItems: 10
+          items: { $ref: "#/components/schemas/Passkey" }
+        recoveryCodesRemaining: { type: integer, minimum: 0, maximum: 10 }
+    TotpSetup:
+      type: object
+      additionalProperties: false
+      required: [secret, otpauthUri, expiresAt]
+      properties:
+        secret:
+          {
+            type: string,
+            description: "Base32 secret (160 bits) for manual entry",
+          }
+        otpauthUri:
+          {
+            type: string,
+            description: "otpauth://totp/Shoestring:<email>?secret=...&issuer=Shoestring&algorithm=SHA1&digits=6&period=30 (render as a QR code client-side)",
+          }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+    TotpConfirm:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code: { type: string, pattern: "^[0-9]{6}$" }
+    RecoveryCodes:
+      type: object
+      additionalProperties: false
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items: { type: string, pattern: "^[a-z0-9]{5}-[a-z0-9]{5}$" }
+    MfaEnrollResult:
+      type: object
+      additionalProperties: false
+      required: [recoveryCodes]
+      properties:
+        recoveryCodes:
+          description: Ten codes when this was the first factor; otherwise null.
+          oneOf:
+            - type: array
+              minItems: 10
+              maxItems: 10
+              items: { type: string, pattern: "^[a-z0-9]{5}-[a-z0-9]{5}$" }
+            - type: "null"
+    PasskeyRegistration:
+      type: object
+      additionalProperties: false
+      required: [name, credential]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        credential:
+          { $ref: "#/components/schemas/WebAuthnRegistrationResponse" }
+    PasskeyEnrollResult:
+      type: object
+      additionalProperties: false
+      required: [passkey, recoveryCodes]
+      properties:
+        passkey: { $ref: "#/components/schemas/Passkey" }
+        recoveryCodes:
+          description: Ten codes when this was the first factor; otherwise null.
+          oneOf:
+            - type: array
+              minItems: 10
+              maxItems: 10
+              items: { type: string, pattern: "^[a-z0-9]{5}-[a-z0-9]{5}$" }
+            - type: "null"
+
+    # ------------------------------------------------------------ budgets
+    StarterCategory:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        plannedCents: { $ref: "#/components/schemas/Cents" }
+    BudgetCreate:
+      type: object
+      additionalProperties: false
+      required: [name, timezone]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        timezone: { $ref: "#/components/schemas/Timezone" }
+        categories:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/StarterCategory" }
+    BudgetUpdate:
+      type: object
+      additionalProperties: false
+      required: [version]
+      minProperties: 2
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        timezone: { $ref: "#/components/schemas/Timezone" }
+        version: { $ref: "#/components/schemas/Version" }
+    Budget:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          name,
+          timezone,
+          currency,
+          myRole,
+          memberCount,
+          today,
+          currentMonth,
+          createdAt,
+          updatedAt,
+          version,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        timezone: { $ref: "#/components/schemas/Timezone" }
+        currency: { type: string, const: USD }
+        myRole: { $ref: "#/components/schemas/Role" }
+        memberCount: { type: integer, minimum: 1, maximum: 6 }
+        today:
+          $ref: "#/components/schemas/Date"
+          description: Today's date in the budget timezone, at response time.
+        currentMonth:
+          $ref: "#/components/schemas/Month"
+          description: Current month in the budget timezone, at response time.
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        version: { $ref: "#/components/schemas/Version" }
+    BudgetList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          description: |
+            Hard bound 20 (F-37). Create and accept stop at 10 non-deleted budgets;
+            only an owner's restore can take a co-member past 10, and never past 20.
+          items: { $ref: "#/components/schemas/Budget" }
+
+    # ------------------------------------------------------------ members & invitations
+    Member:
+      type: object
+      additionalProperties: false
+      required: [userId, displayName, role, joinedAt]
+      properties:
+        userId: { $ref: "#/components/schemas/Uuid" }
+        displayName: { $ref: "#/components/schemas/DisplayName" }
+        role: { $ref: "#/components/schemas/Role" }
+        joinedAt: { $ref: "#/components/schemas/Timestamp" }
+    MemberList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 6
+          items: { $ref: "#/components/schemas/Member" }
+    InvitationCreate:
+      type: object
+      additionalProperties: false
+      required: [email]
+      properties:
+        email: { $ref: "#/components/schemas/Email" }
+    Invitation:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          budgetId,
+          email,
+          status,
+          invitedByDisplayName,
+          createdAt,
+          expiresAt,
+          respondedAt,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        email: { $ref: "#/components/schemas/Email" }
+        status:
+          type: string
+          enum: [pending, accepted, declined, revoked, expired]
+          description: "`expired` is derived: stored status pending and expiresAt in the past."
+        invitedByDisplayName: { type: [string, "null"], maxLength: 50 }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+        respondedAt:
+          type: [string, "null"]
+          format: date-time
+    InvitationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Invitation" }
+    MyInvitation:
+      type: object
+      additionalProperties: false
+      required: [id, budgetId, budgetName, invitedByDisplayName, expiresAt]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        budgetName: { type: string, minLength: 1, maxLength: 60 }
+        invitedByDisplayName: { type: [string, "null"], maxLength: 50 }
+        expiresAt: { $ref: "#/components/schemas/Timestamp" }
+    MyInvitationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          description: Newest first. At most 20 pending invitations can exist per invitee email.
+          items: { $ref: "#/components/schemas/MyInvitation" }
+
+    # ------------------------------------------------------------ categories
+    Category:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          budgetId,
+          name,
+          kind,
+          sortOrder,
+          archived,
+          createdAt,
+          updatedAt,
+          version,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        name: { type: string, minLength: 1, maxLength: 40 }
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        sortOrder: { type: integer, minimum: 0, maximum: 10000 }
+        archived: { type: boolean }
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        version: { $ref: "#/components/schemas/Version" }
+    CategoryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Category" }
+    CategoryCreate:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        sortOrder:
+          {
+            type: integer,
+            minimum: 0,
+            maximum: 10000,
+            description: "Default: after the last category",
+          }
+    CategoryUpdate:
+      type: object
+      additionalProperties: false
+      required: [version]
+      minProperties: 2
+      properties:
+        name: { type: string, minLength: 1, maxLength: 40 }
+        sortOrder: { type: integer, minimum: 0, maximum: 10000 }
+        archived: { type: boolean }
+        version: { $ref: "#/components/schemas/Version" }
+
+    # ------------------------------------------------------------ plans
+    PlanEntry:
+      type: object
+      additionalProperties: false
+      required:
+        [categoryId, month, amountCents, updatedAt, updatedByUserId, version]
+      properties:
+        categoryId: { $ref: "#/components/schemas/Uuid" }
+        month: { $ref: "#/components/schemas/Month" }
+        amountCents: { $ref: "#/components/schemas/Cents" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedByUserId: { type: [string, "null"], format: uuid }
+        version: { $ref: "#/components/schemas/Version" }
+    MonthPlan:
+      type: object
+      additionalProperties: false
+      required: [budgetId, month, items]
+      properties:
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        month: { $ref: "#/components/schemas/Month" }
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PlanEntry" }
+    PlanEntryPut:
+      type: object
+      additionalProperties: false
+      required: [amountCents, version]
+      properties:
+        amountCents: { $ref: "#/components/schemas/Cents" }
+        version:
+          description: Current version, or null to create.
+          oneOf:
+            - $ref: "#/components/schemas/Version"
+            - type: "null"
+    PlanCopyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        overwrite: { type: boolean, default: false }
+    PlanCopyResult:
+      type: object
+      additionalProperties: false
+      required: [budgetId, month, sourceMonth, copiedCount, skippedCount, items]
+      properties:
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        month: { $ref: "#/components/schemas/Month" }
+        sourceMonth: { $ref: "#/components/schemas/Month" }
+        copiedCount: { type: integer, minimum: 0 }
+        skippedCount:
+          type: integer
+          minimum: 0
+          description: Source entries not copied (archived category, or target already set and overwrite=false).
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/PlanEntry" }
+
+    # ------------------------------------------------------------ summary
+    CategorySummary:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          categoryId,
+          name,
+          kind,
+          archived,
+          plannedCents,
+          actualCents,
+          remainingCents,
+        ]
+      properties:
+        categoryId: { $ref: "#/components/schemas/Uuid" }
+        name: { type: string, minLength: 1, maxLength: 40 }
+        kind: { $ref: "#/components/schemas/CategoryKind" }
+        archived: { type: boolean }
+        plannedCents: { $ref: "#/components/schemas/Cents" }
+        actualCents:
+          $ref: "#/components/schemas/SignedCents"
+          description: expense = outflows - inflows (spent); income = inflows - outflows (received).
+        remainingCents:
+          $ref: "#/components/schemas/SignedCents"
+          description: plannedCents - actualCents. Negative for an expense category means overspent.
+    SummaryTotals:
+      type: object
+      additionalProperties: false
+      required: [plannedCents, actualCents, remainingCents]
+      properties:
+        plannedCents: { type: integer, minimum: 0 }
+        actualCents: { $ref: "#/components/schemas/SignedCents" }
+        remainingCents: { $ref: "#/components/schemas/SignedCents" }
+    MonthSummary:
+      type: object
+      additionalProperties: false
+      required: [budgetId, month, categories, totals, transactionCount]
+      properties:
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        month: { $ref: "#/components/schemas/Month" }
+        categories:
+          type: array
+          maxItems: 100
+          description: All non-archived categories, plus archived ones with a plan entry or activity this month. Ordered by kind (expense first), sortOrder, name.
+          items: { $ref: "#/components/schemas/CategorySummary" }
+        totals:
+          type: object
+          additionalProperties: false
+          required: [expense, income]
+          properties:
+            expense: { $ref: "#/components/schemas/SummaryTotals" }
+            income: { $ref: "#/components/schemas/SummaryTotals" }
+        transactionCount: { type: integer, minimum: 0 }
+
+    # ------------------------------------------------------------ transactions
+    SplitWrite:
+      type: object
+      additionalProperties: false
+      required: [categoryId, amountCents]
+      properties:
+        categoryId: { $ref: "#/components/schemas/Uuid" }
+        amountCents: { $ref: "#/components/schemas/PositiveCents" }
+    TransactionSplit:
+      type: object
+      additionalProperties: false
+      required: [categoryId, amountCents]
+      properties:
+        categoryId: { $ref: "#/components/schemas/Uuid" }
+        amountCents: { $ref: "#/components/schemas/PositiveCents" }
+    Payee:
+      type: [string, "null"]
+      maxLength: 100
+      description: Sensitive. Trimmed; empty becomes null. Never logged.
+    Memo:
+      type: [string, "null"]
+      maxLength: 500
+      description: Sensitive. Trimmed; empty becomes null. Never logged.
+    TransactionCreate:
+      type: object
+      additionalProperties: false
+      required: [date, direction, amountCents, splits]
+      properties:
+        date:
+          $ref: "#/components/schemas/Date"
+          description: From 2000-01-01 to one year after today (budget timezone).
+        direction: { $ref: "#/components/schemas/Direction" }
+        amountCents: { $ref: "#/components/schemas/PositiveCents" }
+        payee: { $ref: "#/components/schemas/Payee" }
+        memo: { $ref: "#/components/schemas/Memo" }
+        splits:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: One split = an ordinary transaction. Categories must be distinct; amounts must sum to amountCents.
+          items: { $ref: "#/components/schemas/SplitWrite" }
+    TransactionReplace:
+      type: object
+      additionalProperties: false
+      required: [date, direction, amountCents, payee, memo, splits, version]
+      properties:
+        date: { $ref: "#/components/schemas/Date" }
+        direction: { $ref: "#/components/schemas/Direction" }
+        amountCents: { $ref: "#/components/schemas/PositiveCents" }
+        payee: { $ref: "#/components/schemas/Payee" }
+        memo: { $ref: "#/components/schemas/Memo" }
+        splits:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items: { $ref: "#/components/schemas/SplitWrite" }
+        version: { $ref: "#/components/schemas/Version" }
+    Transaction:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          id,
+          budgetId,
+          date,
+          direction,
+          amountCents,
+          payee,
+          memo,
+          splits,
+          createdByUserId,
+          updatedByUserId,
+          createdAt,
+          updatedAt,
+          version,
+        ]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        budgetId: { $ref: "#/components/schemas/Uuid" }
+        date: { $ref: "#/components/schemas/Date" }
+        direction: { $ref: "#/components/schemas/Direction" }
+        amountCents: { $ref: "#/components/schemas/PositiveCents" }
+        payee:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 100
+        memo:
+          type: [string, "null"]
+          minLength: 1
+          maxLength: 500
+        splits:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: Ordered by amount descending, then categoryId.
+          items: { $ref: "#/components/schemas/TransactionSplit" }
+        createdByUserId:
+          type: [string, "null"]
+          format: uuid
+          description: Null after the creator's account is purged.
+        updatedByUserId:
+          type: [string, "null"]
+          format: uuid
+        createdAt: { $ref: "#/components/schemas/Timestamp" }
+        updatedAt: { $ref: "#/components/schemas/Timestamp" }
+        version: { $ref: "#/components/schemas/Version" }
+    TransactionPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/Transaction" }
+        nextCursor:
+          description: Null on the last page.
+          oneOf:
+            - $ref: "#/components/schemas/Cursor"
+            - type: "null"
+
+    OwnershipTransfer:
+      type: object
+      additionalProperties: false
+      required: [userId]
+      properties:
+        userId: { $ref: "#/components/schemas/Uuid" }
+    DeletedBudget:
+      type: object
+      additionalProperties: false
+      required: [id, name, deletedAt, restorableUntil, memberCount]
+      properties:
+        id: { $ref: "#/components/schemas/Uuid" }
+        name: { type: string, minLength: 1, maxLength: 60 }
+        deletedAt: { $ref: "#/components/schemas/Timestamp" }
+        restorableUntil:
+          $ref: "#/components/schemas/Timestamp"
+          description: deletedAt + 30 days.
+        memberCount: { type: integer, minimum: 1, maximum: 6 }
+    DeletedBudgetList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 20
+          description: The 20 most recently deleted budgets still inside their restore window, newest first. Older ones are not listed but stay restorable by ID until their window ends.
+          items: { $ref: "#/components/schemas/DeletedBudget" }
+
+    # ------------------------------------------------------------ data rights
+    ExportRequest:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [transactions, plans] }

@@ -1,0 +1,3 @@
+- [Security rulings](project_security_rulings.md): design rulings and accepted deviations (2026-11-12/13): MFA risk, backups, RLS conditions, CSP, deviations 1–6
+- [Review hotspots](project_review_hotspots.md): recurring weakness patterns (token chains, spoofable de-noise rules, public logs) to check first in every diff
+- [Findings delivery](feedback_findings_delivery.md): use Edit on FINDINGS.md; if a write is refused, return the content as text and don't work around it

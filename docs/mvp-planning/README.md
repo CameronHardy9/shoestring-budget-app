@@ -13,6 +13,7 @@ the agent's prepared agenda, then the owner's decisions and the agreed task list
 | 7 | [sre](07-sre.md) | **held** |
 | 8 | [security-reviewer](08-security-reviewer.md) | **held** |
 | 9 | [debugger](09-debugger.md) | **held** |
+| 10 | [Contract review decisions](10-contract-review-decisions.md): owner rulings on architect gaps, security OD-1 to OD-8, hosting | **decided** |
 
 ## Cross-cutting decisions (settled in meeting 1, applied to every later meeting)
 Several agents raised the same questions. Each is decided once, here.
