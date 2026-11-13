@@ -1,0 +1,81 @@
+# Weekly, grouped dependency updates. Nothing merges automatically: every PR runs
+# check, e2e and audit and the owner merges.
+# cooldown matches pnpm's minimumReleaseAge (7 days, pnpm-workspace.yaml), so
+# Dependabot never proposes a version pnpm would refuse to install.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Node major upgrades are a deliberate decision (LTS line pinned in .nvmrc).
+      - dependency-name: "@types/node"
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(ci)"
+
+  # Dockerfile, Dockerfile.dev and the pinned tool images in .github/tools/Dockerfile.
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /.github/tools
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    cooldown:
+      default-days: 7
+    groups:
+      docker-images:
+        patterns: ["*"]
+    ignore:
+      # Stay on the Node 24 LTS line until the owner decides to move.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      # Must move in the same PR as @playwright/test in tests/package.json;
+      # make e2e fails with a clear message when the two differ.
+      - dependency-name: mcr.microsoft.com/playwright
+    commit-message:
+      prefix: "chore(docker)"
+
+  # Postgres image in docker-compose.yml.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    cooldown:
+      default-days: 7
+    groups:
+      compose-images:
+        patterns: ["*"]
+    ignore:
+      # The Postgres major must match production (sre); upgrade deliberately.
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+    commit-message:
+      prefix: "chore(docker)"

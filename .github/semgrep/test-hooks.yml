@@ -1,0 +1,25 @@
+# Project rules for Semgrep, run by make audit together with the registry rulesets.
+# docs/contracts/test-hooks.md: routes under /api/_test/ exist only when
+# TEST_HOOKS=1 and are registered by a separate module the production build does
+# not import. This rule keeps any `_test/` route path inside that module (a file
+# or folder whose path contains "test-hooks").
+rules:
+  - id: shoestring-test-hook-route-outside-module
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Test-hook route path found outside the test-hooks module. Routes under
+      /api/_test/ must only be declared in backend/src/**/test-hooks* so the
+      production build never includes them (docs/contracts/test-hooks.md).
+    paths:
+      include:
+        - "/backend/**"
+      exclude:
+        - "**/*test-hooks*"
+        - "**/*test-hooks*/**"
+        - "**/*.test.*"
+        - "**/*.spec.*"
+    pattern-regex: '[''"`](/api)?/_test/'
+    metadata:
+      category: security
+      confidence: HIGH
