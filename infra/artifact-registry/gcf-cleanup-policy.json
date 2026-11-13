@@ -1,0 +1,12 @@
+[
+  {
+    "name": "keep-latest-function-image",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 1 }
+  },
+  {
+    "name": "delete-anything-after-1d",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "ANY", "olderThan": "1d" }
+  }
+]

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "keep-prod-tags",
+    "action": { "type": "Keep" },
+    "condition": { "tagState": "TAGGED", "tagPrefixes": ["prod-"] }
+  },
+  {
+    "name": "keep-3-most-recent",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "keepCount": 3 }
+  },
+  {
+    "name": "delete-untagged-after-1d",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "UNTAGGED", "olderThan": "1d" }
+  },
+  {
+    "name": "delete-anything-after-7d",
+    "action": { "type": "Delete" },
+    "condition": { "tagState": "ANY", "olderThan": "7d" }
+  }
+]

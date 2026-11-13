@@ -1,0 +1,2 @@
+- [Hosting decision](project_hosting_proposal.md) — Cloud Run + Neon + Cloudflare DNS; backup job, APP_KEYRING, R-12 args; pitfalls
+- [Owner constraints](owner_constraints.md) — $0 hard, card only with caps, no staging, RPO 24h, owner runs all prod commands
