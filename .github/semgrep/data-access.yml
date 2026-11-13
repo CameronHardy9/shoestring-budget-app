@@ -1,0 +1,49 @@
+# Project rules for data access (docs/security/mvp-security-checklist.md C1.1, C8.2).
+# Run by make audit. ERROR severity fails the build.
+rules:
+  - id: shoestring-sql-import-outside-db
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Kysely's `sql` tag is imported outside db/. Raw SQL lives only in the
+      data-access module (db/), behind intent-level functions scoped by budget
+      (checklist C1.1, C8.2).
+    paths:
+      exclude:
+        - "/db/**"
+    pattern-either:
+      - pattern: import { sql } from "kysely"
+      - pattern: import { sql as $X } from "kysely"
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      confidence: HIGH
+
+  - id: shoestring-sql-raw-non-literal
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      `sql.raw()` with a non-literal argument builds SQL from strings. Use the
+      `sql` template tag (bound parameters) or Kysely's query builder instead
+      (checklist C1.1).
+    patterns:
+      - pattern: sql.raw($ARG)
+      - pattern-not: sql.raw("...")
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+      confidence: HIGH
+
+  - id: shoestring-budget-scope-cast
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Do not cast to BudgetScope. A BudgetScope may only come from
+      requireMembership, so every budget query is tied to a checked membership
+      (checklist C8.2, ADR-0006).
+    # Also matches the angle-bracket form (<BudgetScope>x); Semgrep normalizes casts.
+    pattern: "$X as BudgetScope"
+    metadata:
+      category: security
+      cwe: "CWE-639: Authorization Bypass Through User-Controlled Key"
+      confidence: HIGH

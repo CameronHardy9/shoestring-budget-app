@@ -1,0 +1,36 @@
+# Keep the build context small and secret-free.
+.git
+.github
+.claude
+.audit
+.sourcemaps
+docs
+infra
+deploy
+observability
+**/node_modules
+**/dist
+**/coverage
+**/playwright-report
+**/test-results
+**/*.tsbuildinfo
+**/.DS_Store
+**/*.log
+
+# Environment files never enter an image.
+.env
+.env.*
+**/.env
+**/.env.*
+
+# tests/ is not in the production image, but its package.json keeps the
+# workspace consistent with pnpm-lock.yaml.
+tests/*
+!tests/package.json
+
+# Not needed in the build.
+Dockerfile*
+docker-compose*.yml
+Makefile
+**/CLAUDE.md
+README*

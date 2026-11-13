@@ -1,0 +1,29 @@
+# Development image for the compose dev stack (make dev, make e2e).
+# The repo is bind-mounted at /app for hot reload; node_modules live in named
+# volumes so Linux-built native modules never mix with the host's macOS ones.
+# Not for production: see ./Dockerfile.
+FROM node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
+
+ENV COREPACK_HOME=/opt/corepack \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    HOME=/tmp \
+    CI=true \
+    npm_config_store_dir=/app/node_modules/.pnpm-store
+
+# Pre-download the pnpm version pinned in package.json "packageManager" so the
+# containers start without a network fetch.
+COPY package.json /tmp/pm/package.json
+RUN corepack enable \
+ && cd /tmp/pm && corepack install \
+ && chmod -R a+rwX "$COREPACK_HOME" \
+ && rm -rf /tmp/pm
+
+# Mount points for the node_modules volumes. Docker seeds a new named volume
+# from the image, so these permissions let the container run as the host UID
+# (set by make) and still write to the volumes.
+RUN mkdir -p /app/node_modules /app/frontend/node_modules /app/backend/node_modules \
+             /app/db/node_modules /app/tests/node_modules \
+ && chmod -R 1777 /app
+
+WORKDIR /app
+USER node
