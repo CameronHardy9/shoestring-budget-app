@@ -44,6 +44,7 @@ describe("loadConfig (fail closed)", () => {
     [{ EMAIL_DAILY_QUOTA: "" }, /EMAIL_DAILY_QUOTA/],
     [{ EMAIL_API_KEY: "" }, /EMAIL_API_KEY/],
     [{ TRUST_PROXY_HOPS: "" }, /TRUST_PROXY_HOPS/],
+    [{ TRUST_PROXY_HOPS: "0" }, /at least 1/],
     [{ APP_ORIGIN: "http://shoestring.example.com" }, /https/],
     [{ DATABASE_URL: "postgres://app:pw@db.example.net/app" }, /verify-full/],
     [

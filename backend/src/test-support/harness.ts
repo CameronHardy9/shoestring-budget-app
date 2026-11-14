@@ -169,15 +169,33 @@ export class FakeSessions {
         });
         return Promise.resolve(session);
       },
-      recordSessionMfaFailure: (id: string) => {
-        for (const [k, v] of this.rows)
-          if (v.session.id === id) {
-            const attempts = v.session.mfaFailedAttempts + 1;
-            v.session = { ...v.session, mfaFailedAttempts: attempts };
-            if (attempts >= 5) this.rows.delete(k);
-            return Promise.resolve({ attempts, deleted: attempts >= 5 });
+      // F-45 slot semantics of the DAL: mfaFailedAttempts counts failures plus attempts in flight.
+      reserveSessionMfaAttempt: (id: string) => {
+        const now = this.clock.now();
+        for (const v of this.rows.values())
+          if (v.session.id === id && v.session.status === "mfa_pending" && v.session.expiresAt > now) {
+            if (v.session.mfaFailedAttempts >= 5) return Promise.resolve({ granted: false as const, reason: "exhausted" as const });
+            v.session = { ...v.session, mfaFailedAttempts: v.session.mfaFailedAttempts + 1 };
+            return Promise.resolve({ granted: true as const, attempt: v.session.mfaFailedAttempts });
           }
-        return Promise.resolve({ attempts: 0, deleted: true });
+        return Promise.resolve({ granted: false as const, reason: "invalid" as const });
+      },
+      failSessionMfaAttempt: (id: string) => {
+        for (const [k, v] of this.rows)
+          if (v.session.id === id && v.session.status === "mfa_pending") {
+            if (v.session.mfaFailedAttempts >= 5) {
+              this.rows.delete(k);
+              return Promise.resolve({ attempts: v.session.mfaFailedAttempts, deleted: true, open: false });
+            }
+            return Promise.resolve({ attempts: v.session.mfaFailedAttempts, deleted: false, open: true });
+          }
+        return Promise.resolve({ attempts: 0, deleted: false, open: false });
+      },
+      releaseSessionMfaAttempt: (id: string) => {
+        for (const v of this.rows.values())
+          if (v.session.id === id && v.session.mfaFailedAttempts > 0)
+            v.session = { ...v.session, mfaFailedAttempts: v.session.mfaFailedAttempts - 1 };
+        return Promise.resolve();
       },
       completeMfaSession: async (pendingId: string, next: { tokenHash: Buffer; csrfToken: string }) => {
         let pending: SessionRecord | null = null;

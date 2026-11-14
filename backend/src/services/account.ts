@@ -23,7 +23,7 @@ import type { AppDeps } from "../deps.ts";
 import { ApiError } from "../errors.ts";
 import { HOUR, MINUTE } from "../http/rate-limit.ts";
 import { iso, toBudget, toMe } from "../http/mappers.ts";
-import { relyingParty } from "./mfa.ts";
+import { relyingParty, throttleGuard } from "./mfa.ts";
 
 const TOTP_SETUP_TTL_MS = 15 * MINUTE;
 export const EXPORTS_PER_HOUR = 10;
@@ -109,13 +109,11 @@ export async function revokeOtherSessions(
 
 export async function getMfa(deps: AppDeps, userId: string) {
   const d = await deps.dal.mfa.getMfaDetail(userId);
-  const confirmedAt = (d as { totpConfirmedAt?: unknown }).totpConfirmedAt;
   return {
     enabled: d.enabled,
-    // The DAL does not return the confirmation time yet (cross-area request).
     totp: {
       enabled: d.totp,
-      confirmedAt: confirmedAt instanceof Date ? iso(confirmedAt) : null,
+      confirmedAt: d.totpConfirmedAt ? iso(d.totpConfirmedAt) : null,
     },
     passkeys: d.passkeys.map((p) => ({
       id: p.id,
@@ -196,16 +194,6 @@ export async function beginTotpSetup(deps: AppDeps, auth: AuthContext) {
   };
 }
 
-export async function totpConfirmLimit(
-  deps: AppDeps,
-  auth: AuthContext,
-): Promise<void> {
-  await deps.throttles.assertUnder(
-    deps.throttles.key("totp-confirm:session", auth.session.id),
-    TOTP_CONFIRM_FAILURES,
-    15 * MINUTE,
-  );
-}
 
 /** POST /me/mfa/totp/confirm: recovery codes only when this is the first factor. */
 export async function confirmTotpSetup(
@@ -214,22 +202,19 @@ export async function confirmTotpSetup(
   code: string,
 ) {
   const userId = auth.session.userId;
+  // mfa-verify row for enrollment: 5 failed codes per session per 15 min,
+  // counted before the check (F-45); exempt from the per-user budget.
+  const guard = throttleGuard(deps, "totp-confirm:session", auth.session.id, TOTP_CONFIRM_FAILURES, 15 * MINUTE);
+  await guard.reserve();
   const row = await deps.dal.mfa.getTotpSecret(userId, "pending_setup");
-  if (!row) throw new ApiError("NOT_FOUND");
-  const secret = decryptTotpSecret(
-    deps.config.keyring,
-    row.keyId,
-    userId,
-    row.ciphertext,
-  );
-  const step = matchTotp(secret, code, deps.clock.now());
-  if (step === null) {
-    await deps.throttles.hit(
-      deps.throttles.key("totp-confirm:session", auth.session.id),
-      15 * MINUTE,
-    );
-    throw new ApiError("MFA_FAILED");
+  if (!row) {
+    await guard.release();
+    throw new ApiError("NOT_FOUND");
   }
+  const secret = decryptTotpSecret(deps.config.keyring, row.keyId, userId, row.ciphertext);
+  const step = matchTotp(secret, code, deps.clock.now());
+  if (step === null) throw new ApiError("MFA_FAILED");
+  await guard.release();
   const rc = generateRecoveryCodes(deps.config.keyring);
   const { recoveryCodesCreated } = await deps.dal.mfa.confirmTotpSetup(userId, {
     step,

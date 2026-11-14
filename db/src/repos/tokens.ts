@@ -3,11 +3,17 @@
 // SHA-256 hashes only.
 import { sql } from "kysely";
 import type { Ctx } from "../context.ts";
-import { DAY_MS, MINUTE_MS, withTx } from "../context.ts";
+import { DAY_MS, MINUTE_MS, assertNoTransaction, withTx } from "../context.ts";
 import { DalError, isUniqueViolation } from "../errors.ts";
+import type { MfaAttemptReservation } from "../records.ts";
 import type { UserTokenPurpose } from "../schema.ts";
 import { isUuid } from "../scope.ts";
-import { deleteOpenUserTokens, lockUser, normalizeEmail } from "./common.ts";
+import {
+  LIMITS,
+  deleteOpenUserTokens,
+  lockUser,
+  normalizeEmail,
+} from "./common.ts";
 
 const RESET_TTL_MS = 30 * MINUTE_MS;
 const EMAIL_TTL_MS = DAY_MS;
@@ -26,7 +32,7 @@ export interface UserTokenRecord {
   expiresAt: Date;
 }
 
-/** An open (unused, unexpired, fewer than 5 MFA failures) token of `purpose`, or null. */
+/** An open (unused, unexpired, a free MFA attempt slot) token of `purpose`, or null. */
 export async function findValidUserToken(
   ctx: Ctx,
   tokenHash: Buffer,
@@ -48,7 +54,7 @@ export async function findValidUserToken(
     .where("purpose", "=", purpose)
     .where("used_at", "is", null)
     .where("expires_at", ">", ctx.clock())
-    .where("mfa_failed_attempts", "<", 5)
+    .where("mfa_failed_attempts", "<", LIMITS.mfaAttemptsPerSessionOrToken)
     .executeTakeFirst();
   if (!row) return null;
   return {
@@ -95,30 +101,106 @@ export async function issuePasswordResetToken(
   });
 }
 
-/** A failed second factor during password reset; the token is deleted (invalidated) at the 5th. */
-export async function recordTokenMfaFailure(
+// F-45: MFA attempts on a password-reset token are reserved BEFORE the factor
+// check (reserve -> check -> fail | completePasswordReset | release), like
+// pending sessions. mfa_failed_attempts counts failures plus attempts in flight.
+
+/**
+ * Reserves one of the 5 attempt slots on an open (unused, unexpired)
+ * password_reset token in one atomic UPDATE. Call after findValidUserToken
+ * and before checking the factor; check only if `granted`. Must not run
+ * inside `dal.transaction` (a rollback would refund the slot).
+ */
+export async function reserveTokenMfaAttempt(
   ctx: Ctx,
   tokenId: string,
-): Promise<{ attempts: number; invalidated: boolean }> {
-  if (!isUuid(tokenId)) return { attempts: 0, invalidated: true };
-  return withTx(ctx, async (tx) => {
-    const row = await tx.db
-      .updateTable("user_tokens")
-      .set({
-        mfa_failed_attempts: sql<number>`least(mfa_failed_attempts + 1, 5)`,
-        updated_at: tx.clock(),
-      })
-      .where("id", "=", tokenId)
-      .where("used_at", "is", null)
-      .returning("mfa_failed_attempts")
-      .executeTakeFirst();
-    if (!row) return { attempts: 0, invalidated: true };
-    if (row.mfa_failed_attempts >= 5) {
-      await tx.db.deleteFrom("user_tokens").where("id", "=", tokenId).execute();
-      return { attempts: row.mfa_failed_attempts, invalidated: true };
-    }
-    return { attempts: row.mfa_failed_attempts, invalidated: false };
-  });
+): Promise<MfaAttemptReservation> {
+  assertNoTransaction(ctx, "reserveTokenMfaAttempt");
+  if (!isUuid(tokenId)) return { granted: false, reason: "invalid" };
+  const now = ctx.clock();
+  const row = await ctx.db
+    .updateTable("user_tokens")
+    .set({
+      mfa_failed_attempts: sql<number>`mfa_failed_attempts + 1`,
+      updated_at: now,
+    })
+    .where("id", "=", tokenId)
+    .where("purpose", "=", "password_reset")
+    .where("used_at", "is", null)
+    .where("expires_at", ">", now)
+    .where("mfa_failed_attempts", "<", LIMITS.mfaAttemptsPerSessionOrToken)
+    .returning("mfa_failed_attempts")
+    .executeTakeFirst();
+  if (row) return { granted: true, attempt: row.mfa_failed_attempts };
+  const open = await ctx.db
+    .selectFrom("user_tokens")
+    .select("id")
+    .where("id", "=", tokenId)
+    .where("purpose", "=", "password_reset")
+    .where("used_at", "is", null)
+    .where("expires_at", ">", now)
+    .executeTakeFirst();
+  return { granted: false, reason: open ? "exhausted" : "invalid" };
+}
+
+/**
+ * The factor check of a granted reservation failed. The slot stays used.
+ * Once all 5 slots are used, the token is deleted (invalidated):
+ * `invalidated` is true for exactly one caller, `open` is false whenever the
+ * token is no longer usable. Must not run inside `dal.transaction`.
+ */
+export async function failTokenMfaAttempt(
+  ctx: Ctx,
+  tokenId: string,
+): Promise<{ attempts: number; invalidated: boolean; open: boolean }> {
+  assertNoTransaction(ctx, "failTokenMfaAttempt");
+  if (!isUuid(tokenId)) return { attempts: 0, invalidated: false, open: false };
+  const del = await ctx.db
+    .deleteFrom("user_tokens")
+    .where("id", "=", tokenId)
+    .where("purpose", "=", "password_reset")
+    .where("used_at", "is", null)
+    .where("mfa_failed_attempts", ">=", LIMITS.mfaAttemptsPerSessionOrToken)
+    .returning("mfa_failed_attempts")
+    .executeTakeFirst();
+  if (del)
+    return { attempts: del.mfa_failed_attempts, invalidated: true, open: false };
+  const row = await ctx.db
+    .selectFrom("user_tokens")
+    .select("mfa_failed_attempts")
+    .where("id", "=", tokenId)
+    .where("purpose", "=", "password_reset")
+    .where("used_at", "is", null)
+    .where("expires_at", ">", ctx.clock())
+    .executeTakeFirst();
+  return row
+    ? { attempts: row.mfa_failed_attempts, invalidated: false, open: true }
+    : { attempts: 0, invalidated: false, open: false };
+}
+
+/**
+ * Gives back a granted slot when the attempt ended WITHOUT a failed factor
+ * check (per-user budget 429, an error before or after the check, e.g. the
+ * factor was right but completePasswordReset failed). Never after
+ * `failTokenMfaAttempt`, at most once per reservation. Not needed after
+ * `completePasswordReset`, which consumes the token. No-op if it is gone.
+ */
+export async function releaseTokenMfaAttempt(
+  ctx: Ctx,
+  tokenId: string,
+): Promise<void> {
+  if (!isUuid(tokenId)) return;
+  await ctx.db
+    .updateTable("user_tokens")
+    .set({
+      mfa_failed_attempts: sql<number>`mfa_failed_attempts - 1`,
+      updated_at: ctx.clock(),
+    })
+    .where("id", "=", tokenId)
+    .where("purpose", "=", "password_reset")
+    .where("used_at", "is", null)
+    .where("mfa_failed_attempts", ">", 0)
+    .execute();
 }
 
 /**
@@ -136,17 +218,14 @@ export async function completePasswordReset(
     const now = tx.clock();
     const token = await tx.db
       .selectFrom("user_tokens")
-      .select(["id", "user_id", "used_at", "expires_at", "mfa_failed_attempts"])
+      .select(["id", "user_id", "used_at", "expires_at"])
       .where("token_hash", "=", tokenHash)
       .where("purpose", "=", "password_reset")
       .forUpdate()
       .executeTakeFirst();
-    if (
-      !token ||
-      token.used_at !== null ||
-      token.expires_at <= now ||
-      token.mfa_failed_attempts >= 5
-    )
+    // No attempt-count check: a token at 5 is held by the 5th attempt in
+    // flight (F-45); the 5th failure deletes the row instead.
+    if (!token || token.used_at !== null || token.expires_at <= now)
       throw tokenInvalid();
     await tx.db
       .updateTable("user_tokens")

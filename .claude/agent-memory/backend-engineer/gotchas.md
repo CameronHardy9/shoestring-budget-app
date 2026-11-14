@@ -7,6 +7,7 @@ metadata:
 
 - **The editor's PostToolUse formatter turns `\uXXXX` escapes in Write/Edit content into literal characters** (U+2028, U+200B, U+0301, NBSP). Literal U+2028 inside a regex broke compilation once. After writing code with escapes, scan for control/invisible chars and re-escape with a Python one-liner.
   **Why:** happened 2026-11-13 in notifications.ts and tests. **How to apply:** prefer writing escape-heavy lines via python, then grep.
+- Semgrep `nosemgrep` comments must sit on the **reported line**, not the loop header. Backticked package names in comments also trip the import-regex rules.
 - **Node fetch (undici) cannot set `Host`**, so manual smoke scripts must run the server with `APP_ORIGIN` equal to the real address (e.g. http://127.0.0.1:3999). The Host check is covered by `app.inject` tests instead.
 - **Semgrep's regex rules flag strings**, not just imports: ESLint ban patterns naming "kysely" / db internals / `@shoestring/db/testing`, and any file containing `_test` or the hooks sentinel (scripts too). Files with `test-hooks` in the name and `*.test.*` are excluded. The tripwire script is therefore `scripts/test-hooks-tripwire.ts`.
 - Backend unit tests may NOT import `@shoestring/db/testing` (Semgrep allowlist), so they use the strict fake DAL in `src/test-support/harness.ts`; real-DB checks are manual smoke or tests/.

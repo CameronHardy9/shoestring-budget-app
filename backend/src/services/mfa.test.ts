@@ -543,3 +543,80 @@ describe("passkeys", () => {
     );
   });
 });
+
+describe("F-45: failure limits hold under parallel requests", () => {
+  const codes = (rs: { body: string }[]) => {
+    const out: Record<string, number> = {};
+    for (const r of rs) {
+      const c = json(r).code ?? "OK";
+      out[c] = (out[c] ?? 0) + 1;
+    }
+    return out;
+  };
+
+  it("50 parallel wrong re-auth passwords: exactly 5 are checked, the rest are 429", async () => {
+    h = await harness();
+    const s = h.sessions.add({ userId: U });
+    const rs = await Promise.all(
+      Array.from({ length: 50 }, () => h.req("POST", "/api/auth/reauth", { auth: s, body: { password: "wrong" } })),
+    );
+    expect(codes(rs)).toEqual({ INVALID_CREDENTIALS: 5, RATE_LIMITED: 45 });
+  });
+
+  it("50 parallel wrong factors across sessions: the per-user budget allows at most 20 checks", async () => {
+    h = await harness();
+    const active = h.sessions.add({ userId: U });
+    const { secret } = await enrollTotp(active);
+    const sessions = Array.from({ length: 50 }, () => h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null }));
+    const rs = await Promise.all(sessions.map((p) => h.req("POST", "/api/auth/mfa/verify", { auth: p, body: { method: "totp", code: "000000" } })));
+    expect(codes(rs)).toEqual({ MFA_FAILED: 20, RATE_LIMITED: 30 });
+    expect(h.events.filter((e) => e.type === "mfa_locked")).toHaveLength(1);
+    expect(h.outbox.list(EMAIL).filter((m) => m.kind === "mfa_locked")).toHaveLength(1);
+    // A right code is refused too while the budget is spent.
+    const p = h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null });
+    expect(json(await h.req("POST", "/api/auth/mfa/verify", { auth: p, body: { method: "totp", code: codeNow(secret) } })).code).toBe("RATE_LIMITED");
+  });
+
+  it("successes and refused attempts are refunded: they never consume the budget", async () => {
+    h = await harness();
+    const active = h.sessions.add({ userId: U });
+    const { secret } = await enrollTotp(active);
+    for (let i = 0; i < 19; i++) {
+      const p = h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null });
+      await h.req("POST", "/api/auth/mfa/verify", { auth: p, body: { method: "totp", code: "000000" } });
+    }
+    for (let i = 0; i < 3; i++) {
+      h.clock.freeze(new Date(h.clock.now().getTime() + 30_000));
+      const p = h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null });
+      expect((await h.req("POST", "/api/auth/mfa/verify", { auth: p, body: { method: "totp", code: codeNow(secret) } })).statusCode).toBe(200);
+    }
+    const last = h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null });
+    expect(json(await h.req("POST", "/api/auth/mfa/verify", { auth: last, body: { method: "totp", code: "000000" } })).code).toBe("MFA_FAILED");
+    expect(h.events.filter((e) => e.type === "mfa_locked")).toHaveLength(1);
+  });
+
+  it("50 parallel wrong factors on ONE pending session: exactly 5 checks, then the session is gone", async () => {
+    h = await harness();
+    const active = h.sessions.add({ userId: U });
+    await enrollTotp(active);
+    const p = h.sessions.add({ userId: U, status: "mfa_pending", reauthAt: null });
+    const rs = await Promise.all(
+      Array.from({ length: 50 }, () => h.req("POST", "/api/auth/mfa/verify", { auth: p, body: { method: "totp", code: "000000" } })),
+    );
+    const c = codes(rs);
+    expect(c.MFA_FAILED).toBe(5);
+    expect((c.MFA_FAILED ?? 0) + (c.RATE_LIMITED ?? 0) + (c.UNAUTHENTICATED ?? 0)).toBe(50);
+    expect(h.outbox.list(EMAIL).filter((m) => m.kind === "mfa_failures")).toHaveLength(1);
+    expect(json(await h.req("GET", "/api/auth/session", { auth: p })).code).toBe("UNAUTHENTICATED");
+  });
+
+  it("50 parallel wrong TOTP confirmations: exactly 5 are checked", async () => {
+    h = await harness();
+    const s = h.sessions.add({ userId: U });
+    await h.req("POST", "/api/me/mfa/totp", { auth: s });
+    const rs = await Promise.all(
+      Array.from({ length: 50 }, () => h.req("POST", "/api/me/mfa/totp/confirm", { auth: s, body: { code: "000000" } })),
+    );
+    expect(codes(rs)).toEqual({ MFA_FAILED: 5, RATE_LIMITED: 45 });
+  });
+});

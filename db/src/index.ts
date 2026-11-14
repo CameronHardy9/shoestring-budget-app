@@ -73,6 +73,7 @@ export type {
 } from "./repos/tokens.ts";
 export type {
   ChallengeBinding,
+  MfaDetailRecord,
   PasskeyCredential,
   PasskeySummary,
   RecoveryCodeHashes,

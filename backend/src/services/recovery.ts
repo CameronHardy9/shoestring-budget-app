@@ -10,7 +10,7 @@ import type { AppDeps } from "../deps.ts";
 import { ApiError, fieldError, validationFailed } from "../errors.ts";
 import { DAY, HOUR, ipKey } from "../http/rate-limit.ts";
 import type { MfaProofInput } from "./mfa.ts";
-import { assertMfaBudget, relyingParty, verifySecondFactor } from "./mfa.ts";
+import { assertMfaBudget, refusedAttempt, relyingParty, verifySecondFactor } from "./mfa.ts";
 import { mfaMethods } from "../auth/session.ts";
 
 // ---------------------------------------------------------------- password reset
@@ -130,17 +130,19 @@ export async function completePasswordReset(
   const mfa = await dal.mfa.getMfaSummary(row.userId);
   if (mfa.enabled) {
     if (input.mfa === undefined) throw new ApiError("MFA_REQUIRED");
-    try {
-      await verifySecondFactor(deps, row.userId, input.mfa, {
-        kind: "reset",
-        userTokenId: row.id,
-      });
-    } catch (e) {
-      if (e instanceof ApiError && e.code === "MFA_FAILED")
-        await dal.tokens.recordTokenMfaFailure(row.id);
-      throw e;
-    }
-  }
+    // Per-token slots reserved atomically before the check (F-45); the 5th
+    // failure invalidates the token. findValidUserToken already refused a
+    // token with 5 recorded failures.
+    await verifySecondFactor(deps, row.userId, input.mfa, { kind: "reset", userTokenId: row.id }, {
+      async reserve() {
+        const r = await dal.tokens.reserveTokenMfaAttempt(row.id);
+        if (!r.granted) throw refusedAttempt(r.reason, () => new ApiError("TOKEN_INVALID"));
+      },
+      async failed() {
+        await dal.tokens.failTokenMfaAttempt(row.id);
+      },
+      release: () => dal.tokens.releaseTokenMfaAttempt(row.id),
+    });  }
   const hash = await deps.passwords.hash(input.newPassword);
   const { userId } = await dal.tokens.completePasswordReset(
     sha256(input.token),

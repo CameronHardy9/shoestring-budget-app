@@ -285,6 +285,17 @@ export async function acceptInvitation(
 ): Promise<{ budget: BudgetRecord; owner: MemberContact }> {
   return withTx(ctx, async (tx) => {
     const found = await findMyInvitation(tx, userId, invitationId);
+    // The budget lock is the only lock needed on the owner's side (F-25): every
+    // path that changes who owns this budget (transferOwnership), the owner's
+    // status (requestAccountDeletion locks all owned budgets first, then the
+    // user, and revokes their invitations) or its membership takes this lock
+    // first. Everything below that depends on those (invitation status, owner
+    // status, member count) is read after it, and each READ COMMITTED
+    // statement sees what the lock holder committed. So the owner's deletion
+    // request and this acceptance serialize: deletion first -> the invitation
+    // is revoked (INVITATION_INVALID); acceptance first -> the deletion sees a
+    // co-member (OWNS_SHARED_BUDGET). Do not move those reads above this lock,
+    // and do not lock the owner's user row here (that adds nothing).
     const budget = await tx.db
       .selectFrom("budgets")
       .select(["deleted_at"])

@@ -35,7 +35,6 @@ import {
   restoreDeletedBudget,
   revokeOtherSessions,
   revokeSession,
-  totpConfirmLimit,
 } from "../services/account.ts";
 import { completeMfaSignIn, webauthnChallenge } from "../services/auth.ts";
 import {
@@ -180,7 +179,6 @@ export const accountRoutes = [
   defineRoute({
     operationId: "confirmTotpSetup",
     body: TotpConfirm,
-    rateLimit: ({ deps, auth }) => totpConfirmLimit(deps, mustAuth(auth)),
     handler: async ({ deps, auth, body }) => ({ status: 200, body: await confirmTotpSetup(deps, mustAuth(auth), body.code) }),
   }),
   defineRoute({

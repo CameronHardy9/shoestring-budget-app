@@ -32,6 +32,14 @@ describe("production build", () => {
     expect(scanDist(out)).toEqual([]);
   }, 60_000);
 
+  it("fails on an import it cannot resolve instead of leaving a silent external", async () => {
+    const d = temp();
+    writeFileSync(join(d, "entry.ts"), 'import { nothing } from "no-such-package-xyz";\nconsole.log(nothing);\n');
+    await expect(
+      build({ ...productionBuildOptions(root, `${d}/out/`), input: { entry: join(d, "entry.ts") }, write: false }),
+    ).rejects.toThrow(/no-such-package-xyz/);
+  }, 60_000);
+
   it("the tripwire catches the sentinel and `_test` as a whole word, but not similar identifiers", () => {
     const d = temp();
     mkdirSync(join(d, "chunks"));

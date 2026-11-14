@@ -1,7 +1,7 @@
 # Auth
 Owner: architect. Consumers: backend (implements), frontend, tests, security-reviewer, sre (admin runbooks).
 Decision records: ADR-0003 (auth), ADR-0006 and ADR-0010 (budget authorization and lifecycle). Entities: data-model.md. Error codes: errors.md. Endpoints: api.openapi.yaml.
-Revision 2 (2026-11-13) applies the owner's rulings in mvp-planning/10 and security findings F-01 to F-31. Revision 3 (2026-11-13) applies F-33 to F-36 and the owner's round-2 rulings.
+Revision 2 (2026-11-13) applies the owner's rulings in mvp-planning/10 and security findings F-01 to F-31. Revision 3 (2026-11-13) applies F-33 to F-36 and the owner's round-2 rulings. Revision 4 (2026-11-14) ratifies backend build choices: the notification `kind` vocabulary and email link routes (§15), the Host comparison, reset-counter clearing, TOTP-confirm limit and `TRUST_PROXY_HOPS`.
 
 ## 1. Model in one paragraph
 Email + password (argon2id) with invite-only sign-up. Server-side sessions are identified by an opaque random token in an httpOnly cookie, with a 30-day sliding expiry and a **90-day absolute cap**, and users can list and revoke them. CSRF is blocked by SameSite=Strict, a strict Origin check, a Host check, and a per-session CSRF token header. MFA (TOTP or passkey) is **optional** for every user, including owners of shared budgets (accepted risk R-1, OD-1). When MFA is enabled it is required at sign-in, at re-authentication, and at password reset. Sensitive actions require re-authentication within the last 10 minutes. Because MFA is optional, the design leans on detective controls: notification emails for new sign-ins and for every security or sharing change. Owner admin actions are CLI commands run as Cloud Run jobs, never web endpoints. Authorization is deny by default and based on budget membership; non-members get 404.
@@ -20,7 +20,7 @@ Email + password (argon2id) with invite-only sign-up. Server-side sessions are i
 
 ## 3. CSRF, origin and host
 Applied by the backend in `onRequest`, before body parsing:
-1. **Host (F-23):** the `Host` header must equal the host of `APP_ORIGIN`; otherwise 400 `VALIDATION_FAILED` (`header.Host`). This blocks DNS rebinding, Host-header poisoning, and direct use of the platform's `*.run.app` URL. The only exemptions are `GET /api/healthz` and `GET /api/readyz`, which platform probes and the deploy gate call with other hosts. Every link in every email is built from `APP_ORIGIN` only, never from request headers. The check applies in local development too.
+1. **Host (F-23):** the `Host` header must equal `URL(APP_ORIGIN).host` exactly: the hostname plus the port when `APP_ORIGIN` has a non-default port (`localhost:5173` locally, `shoestring.<domain>` in production). Otherwise 400 `VALIDATION_FAILED` (`header.Host`). This blocks DNS rebinding, Host-header poisoning, and direct use of the platform's `*.run.app` URL. The only exemptions are `GET /api/healthz` and `GET /api/readyz`, which platform probes and the deploy gate call with other hosts. Every link in every email is built from `APP_ORIGIN` only, never from request headers. The check applies in local development too, so the Vite dev proxy must forward the browser's `Host` unchanged (no `changeOrigin`).
 2. **Origin (every unsafe method, public endpoints included):** `Origin` must equal `APP_ORIGIN` exactly. If `Origin` is absent, `Sec-Fetch-Site` must be `same-origin`. Otherwise → 403 `CSRF_FAILED`.
 3. **Token:** if the request carries a valid session cookie and the endpoint's `x-session` is not `none`, `X-CSRF-Token` must equal `sessions.csrf_token` (constant-time compare); else → 403 `CSRF_FAILED`. Public (`x-session: none`) endpoints ignore any session cookie.
 4. **Content type:** bodies must be `application/json` (415 otherwise), so HTML forms cannot submit.
@@ -29,7 +29,7 @@ Applied by the backend in `onRequest`, before body parsing:
 
 ## 4. Invite-only sign-up and emailed links
 - Only the app owner creates sign-up invites, with the `create-signup-invite` admin command (admin-commands.md). It stores a hashed token with a 7-day expiry, revokes any earlier open invite for that email, and **emails** the link. The command never prints the token.
-- **Links:** `<APP_ORIGIN>/signup#token=…`, `/reset-password#token=…`, `/confirm-email#token=…`, `/cancel-email-change#token=…`. The token is in the URL **fragment**, so the server never receives it in a URL, it never appears in access logs, and it is never sent as a Referer.
+- **Links:** `<APP_ORIGIN>/signup#token=…`, `/reset-password#token=…`, `/confirm-email#token=…`, `/cancel-email-change#token=…` (all email link routes: §15 "Email link routes"). The token is in the URL **fragment**, so the server never receives it in a URL, it never appears in access logs, and it is never sent as a Referer.
 - **Fragment hygiene (F-06):** the SPA's first module, **before the Sentry SDK initializes and before any route renders**, reads the token into memory and calls `history.replaceState` to remove the fragment. The token is never persisted. The Sentry `beforeSend`/`beforeBreadcrumb` hooks also strip `#…` and `?…` from every URL (ARCHITECTURE "Error tracking"). Click and open tracking are disabled at the email provider, so links are delivered as plain links.
 - Sign-up uses the invite's email, not user input. Holding the token therefore proves control of the address, and `email_verified_at` is set at sign-up. The invite is consumed in the same transaction that creates the user.
 - If an account already exists for the email, the admin command refuses. The owner sees this; it is not exposed over HTTP.
@@ -37,7 +37,7 @@ Applied by the backend in `onRequest`, before body parsing:
 
 ## 5. Sign-in
 1. `POST /auth/login {email, password}`. An unknown email and a wrong password give the same 401 `INVALID_CREDENTIALS`. For unknown emails, an argon2id verify against a dummy hash runs through the same hashing queue (§7), so timing matches.
-2. **No MFA:** the session is `active` and the response is `AuthState{state: authenticated}`, with `reauth_at = now` (a fresh login counts as re-authentication). The user is sent a **new sign-in notice** (§15).
+2. **No MFA:** the session is `active` and the response is `AuthState{state: authenticated}`, with `reauth_at = now` (a fresh login counts as re-authentication). The user is sent a **new sign-in notice** (§15). Sign-up is not a sign-in: the session it creates sends no notice (the invite email itself was the only mail, and the user is the one holding it).
 3. **MFA enabled:** the session is `mfa_pending` and the response is `AuthState{state: mfa_required, mfaMethods}`. Any other endpoint returns 401 `MFA_REQUIRED`. The client calls `POST /auth/mfa/verify` with a TOTP code, a passkey assertion (challenge from `POST /auth/webauthn/challenge {purpose: mfa}`), or a recovery code. Success rotates to an `active` session with `mfa_verified_at = reauth_at = now` and sends the new sign-in notice. After 5 failures the pending session is deleted. The 5th consecutive failure after a correct password emails the user (§15).
 4. Every factor check counts toward the per-user **MFA failure budget** (§6).
 5. Accounts pending deletion can sign in, to cancel or export (§11).
@@ -46,7 +46,7 @@ Applied by the backend in `onRequest`, before body parsing:
 - **Factors:** TOTP (at most one) and passkeys (up to 10). MFA is "enabled" iff at least one factor is active. Any active factor can satisfy any MFA prompt.
 - **TOTP:** RFC 6238, SHA-1, 6 digits, 30-second step, accept ±1 step. Reject any step ≤ `last_used_step` (no replay). 160-bit secret. At rest it is encrypted with AES-256-GCM using the HKDF subkey `totp-v1` of the current `APP_KEYRING` key, a random 96-bit nonce per encryption and **AAD = user_id**. The row stores the key ID, so the keyring can rotate and `rewrap-mfa` can re-encrypt (F-24, data-model.md "Application keyring"). Enrollment: `POST /me/mfa/totp` returns the secret and an otpauth URI (the QR code is rendered client-side, with no third-party QR service), then `POST /me/mfa/totp/confirm {code}`.
 - **Passkeys (a second factor, not passwordless):** WebAuthn via a maintained library (e.g. SimpleWebAuthn).
-  - RP ID = the host of `APP_ORIGIN` (`shoestring.<domain>`); expected origin = `APP_ORIGIN`.
+  - RP ID = the **hostname** of `APP_ORIGIN`, without a port (`shoestring.<domain>`; `localhost` locally); expected origin = `APP_ORIGIN`.
   - Options: `attestation: none`, `userVerification: preferred`, `residentKey: discouraged`, explicit `allowCredentials`.
   - Verify and store `sign_count`. A counter regression is logged as a `passkey_counter_regression` security event, and the assertion is rejected unless the stored count is 0.
 - **Recovery codes (F-04):** 10 codes of 10 characters (`xxxxx-xxxxx`, 50 bits each), generated when the first factor is enrolled and on regeneration, and shown once.
@@ -56,6 +56,14 @@ Applied by the backend in `onRequest`, before body parsing:
   - When the budget is exhausted, every factor check for that user answers 429 `RATE_LIMITED` until the window ends.
   - A `mfa_locked` event is recorded and the user is emailed once per window.
   - Per-session and per-token limits (5) still apply on top.
+- **Attempt slots (F-45), so concurrent requests cannot run more than 5 checks:**
+  - **Order per factor check:** (1) reserve one of the 5 slots of the pending session (`/auth/mfa/verify`) or reset token (`/auth/password-reset/complete`) atomically; (2) charge the per-user budget atomically; (3) check the factor.
+  - **Outcome:** a failed check keeps both charges and records `mfa_failed`. A success, an attempt refused at step 2, or an error (anything other than a wrong factor) **refunds** both. So the budget counts only real failed checks, and refused attempts never extend a lock.
+  - **The 5th slot can still succeed.** When the 5th slot *fails*, the pending session is deleted (and `mfa_failures` is emailed once) or the token is invalidated.
+  - **Refused at step 1:** all 5 slots used or in flight while the session or token is still open → 429 `RATE_LIMITED`, `Retry-After: 1` (an in-flight attempt may yet be refunded). Session gone → 401 `UNAUTHENTICATED`; token gone → 400 `TOKEN_INVALID`.
+  - **Refused at step 2:** budget exhausted → 429 `RATE_LIMITED`, `Retry-After: 3600` (the budget is kept in hourly buckets, so it frees up hour by hour). The first failure that exhausts it records `mfa_locked` and emails once per window.
+  - `/auth/reauth` uses its own per-session row (§14 `reauth`) the same way: the attempt is counted before the password check and refunded on success, on 401 `MFA_REQUIRED` (correct password, factor missing), and when the per-user budget refuses it.
+  - **TOTP setup confirm** is exempt from the per-user budget and uses only its per-session `mfa-verify` row (5 failed codes / 15 min), reserved before the check and refunded on success or when there is no pending setup.
 - **All MFA changes** (enroll, remove, regenerate codes) require re-authentication, delete open one-time tokens (§2), and send a notification email.
 - **Owner-assisted reset:** the `reset-mfa` admin command, run as a Cloud Run job after identity verification by the owner (runbook requirements in admin-commands.md). It deletes all factors, recovery codes and open one-time tokens, revokes all sessions, records `admin_mfa_reset`, and emails the user.
 - **Accepted risk (OD-1, 2026-11-12):** MFA is not required for anyone, including the owner's own account and owners of shared budgets. Mitigations:
@@ -79,16 +87,16 @@ Applied by the backend in `onRequest`, before body parsing:
 1. `POST /auth/password-reset/request {email}` → always 202. If the account exists and is within the limits (§14), a token is emailed: 30-minute expiry, replacing any open reset token.
 2. `POST /auth/password-reset/verify {token}` → `{mfaRequired, mfaMethods}`, or 400 `TOKEN_INVALID`.
 3. If MFA is enabled, the client collects a TOTP code, a recovery code, or a passkey assertion (challenge from `POST /auth/password-reset/webauthn-challenge {token}`).
-4. `POST /auth/password-reset/complete {token, newPassword, mfa?}`. With MFA enabled:
+4. `POST /auth/password-reset/complete {token, newPassword, mfa?}`. The password policy (§7) is checked **first**, so a rejected password (400 `VALIDATION_FAILED`) spends no second factor and no MFA failure. Then, with MFA enabled:
    - missing `mfa` → 401 `MFA_REQUIRED`
    - a wrong one → 401 `MFA_FAILED`
    - 5 failures invalidate the token, and failures **count toward the per-user MFA failure budget** (§6).
 
-   Success consumes the token, sets the password, **revokes all sessions**, deletes the user's other open one-time tokens (except `email_change_cancel`), clears the user's per-email login counters (§14), records events, and emails a notice. The user then signs in normally (password + MFA).
+   Success consumes the token, sets the password, **revokes all sessions**, deletes the user's other open one-time tokens (except `email_change_cancel`), clears the user's login counters that can be addressed (§14: the per-email 24 h failure counter and the (email, requesting IP) pair counter), records events, and emails `password_changed` (§15). The user then signs in normally (password + MFA).
 - A user who has lost every factor and every recovery code cannot reset by email alone; they ask the owner for `reset-mfa`.
 
 ## 9. Email change (F-01)
-1. `POST /me/email-change {newEmail}` (re-auth) → 202 (same response whether the new address is free or taken). **At most one email change per 24 h (F-33):** while the user has any open `email_change_cancel` token, the request is refused with 429 `RATE_LIMITED` and `Retry-After` = seconds until the latest of those tokens expires. The caller is authenticated, so this reveals nothing about other accounts.
+1. `POST /me/email-change {newEmail}` (re-auth) → 202 (same response whether the new address is free or taken). A `newEmail` equal to the account's current (normalized) email is 400 `VALIDATION_FAILED` (`newEmail`, `invalid_value`); this reveals only the caller's own address. **At most one email change per 24 h (F-33):** while the user has any open `email_change_cancel` token, the request is refused with 429 `RATE_LIMITED` and `Retry-After` = seconds until the latest of those tokens expires. The caller is authenticated, so this reveals nothing about other accounts.
    - **If the new address is free:** create an `email_change` token (24 h) bound to the requesting session (`requested_by_session_id`) and email the new address a confirmation link. Create an `email_change_cancel` token (24 h, holding the old address) and email the old address a notice with a **"this wasn't me"** link.
    - **If the address is taken:** email the new address that an account already exists, and create no tokens.
 2. `POST /auth/email-change/confirm {token}` requires **an `active` session of the same user** plus the token. A token presented by another user's session, or whose requesting session was revoked, is 400 `TOKEN_INVALID`. Confirming does the following:
@@ -120,7 +128,7 @@ Applied by the backend in `onRequest`, before body parsing:
   - every MFA enrollment or removal, recovery-code regeneration
   - CSV export, request account deletion
   - delete a budget, **invite to a budget** (F-13), **transfer budget ownership** (ADR-0010)
-- Missing or stale re-auth → 403 `REAUTH_REQUIRED`. The SPA shows a re-auth dialog and retries once. Passkey re-auth uses `POST /auth/webauthn/challenge {purpose: reauth}`.
+- Missing or stale re-auth → 403 `REAUTH_REQUIRED`. The SPA shows a re-auth dialog and retries once. Endpoint rate limits are checked first (errors.md step 7 before step 10), so an exhausted quota answers 429 `RATE_LIMITED` even with stale re-auth; the SPA then shows the wait message, not the re-auth dialog. Passkey re-auth uses `POST /auth/webauthn/challenge {purpose: reauth}`.
 
 ## 11. Account pending deletion
 - `POST /me/deletion` requires re-auth. It is blocked by `OWNS_SHARED_BUDGET` until the user transfers ownership of, empties, or deletes every shared budget they own.
@@ -230,9 +238,9 @@ All require an `active` session and an account that is not pending deletion (els
 There is no "admin" column: no HTTP endpoint grants admin powers. Test-only endpoints (test-hooks.md) do not exist in production builds.
 
 ## 14. Rate limits
-Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys are HMACs with the `throttle-v1` subkey of the current keyring key), so they survive restarts and scale-to-zero. The global and write limits are kept in memory per instance. Every limit answers 429 `RATE_LIMITED` with `Retry-After`, except rows marked "silent", where the response stays 202 so nothing is revealed.
+Auth limits and the email budget are stored in Postgres (`auth_throttles`), so they survive restarts and scale-to-zero. Keys are HMACs with the `throttle-v1` subkey of the current keyring key, except the app-wide `email:daily` counter, whose key is the SHA-256 of a constant: it holds no PII, and the admin jobs that send mail (`create-signup-invite`, `reset-mfa`) must share it without mounting `APP_KEYRING` (admin-commands.md "Least config"). The global and write limits are kept in memory per instance. Every limit answers 429 `RATE_LIMITED` with `Retry-After`, except rows marked "silent", where the response stays 202 so nothing is revealed.
 
-**Client IP (F-08):** the client IP is the address appended by the platform edge. Fastify `trustProxy` is set to the platform's **exact hop count** recorded in ADR-0007, never `true`, so a client-supplied leftmost `X-Forwarded-For` entry is ignored. Per-IP keys use the full IPv4 address, or the **/64 prefix** for IPv6. A test asserts that a forged leftmost `X-Forwarded-For` does not change the derived IP.
+**Client IP (F-08):** the client IP is the address appended by the platform edge. Fastify `trustProxy` is set to the platform's **exact hop count** recorded in ADR-0007, never `true`, so a client-supplied leftmost `X-Forwarded-For` entry is ignored. The count comes from `TRUST_PROXY_HOPS` (integer 0–5, default 0 outside production). In production it is **required and at least 1** (Cloud Run always has the Google front end in front; `1` per ADR-0007 constraint 8, pending V26), because 0 would make every user share the front end's IP bucket. Per-IP keys use the full IPv4 address, or the **/64 prefix** for IPv6. A test asserts that a forged leftmost `X-Forwarded-For` does not change the derived IP.
 
 | Row (`x-rate-limit`) | Key | Limit |
 |---|---|---|
@@ -240,9 +248,9 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
 | writes | user | 120 unsafe requests / minute |
 | login | IP | 20 attempts / 15 min |
 | login | (email, IP) | 10 failures / 15 min → 429 for that pair for 15 min, identical for unknown emails (F-21) |
-| login | email | 100 failures / 24 h → 429 for that email and a notification email to the account. A successful password reset clears both email counters. |
-| mfa-verify | session | 5 failures → pending session deleted (sign in again) |
-| mfa-failures | user | 20 failed second-factor checks / rolling 24 h across mfa/verify, reauth and password-reset/complete → every factor check 429 until the window ends; `mfa_locked` event and email (F-05) |
+| login | email | 100 failures / rolling 24 h → 429 for that email and a `login_throttled` email to the account (§15). A successful password reset clears this counter and the (email, IP) pair counter for the IP that completed the reset. Pair counters for other IPs are keyed by HMAC and cannot be enumerated; they lapse within their 15-minute window. |
+| mfa-verify | session | `/auth/mfa/verify`: 5 failures → pending session deleted (sign in again). `/me/mfa/totp/confirm`: 5 failed codes / 15 min per session → 429 (enrollment is exempt from the per-user `mfa-failures` budget, not from this row). |
+| mfa-failures | user | 20 failed second-factor checks / rolling 24 h across mfa/verify, reauth and password-reset/complete → every factor check 429 (`Retry-After: 3600`) until the window frees up (attempt slots, §6); `mfa_locked` event and email (F-05) |
 | reauth | session | 5 failures / 15 min |
 | signup | IP | 10 / hour (preview and signup combined) |
 | password-reset-request | IP | 5 / hour (429) |
@@ -268,33 +276,62 @@ Auth limits and the email budget are stored in Postgres (`auth_throttles`, keys 
 
 `login_failed` for an unknown email is recorded with `user_id NULL`. Budget events carry `budget_id` (F-26).
 
-**Notification emails** (plain text only). **P** marks priority mail, which is still sent after the daily email budget is reached (§14).
-- **Account:**
-  - sign-up invite (P)
-  - **new sign-in**, with browser, OS, time and a link to the device list (P, F-12). Sent on **every** successful sign-in (password-only, or after MFA completion), with no skip rule (F-34).
-  - **5 failed MFA attempts after a correct password** (P), MFA locked (P)
-- **Password and email:**
-  - password reset link
-  - password changed (P)
-  - email-change confirmation (to the new address)
-  - email-change notice with the cancel link (to the old address, P)
-  - email changed (both addresses, P), email change cancelled (P)
-- **MFA:** MFA factor added or removed (P), recovery code used (P), recovery codes regenerated (P), **recovery codes retired by the owner because of a key compromise; regenerate them now** (P, F-38), MFA reset by owner (P).
-- **Budgets:**
-  - budget invitation (only when the invitee has an account)
-  - **invitation accepted** (to the budget owner, P)
-  - **budget deleted** (to all members, P)
-  - **budget restored** (to all members, P)
-  - **member removed** (to the removed member, P)
-  - **ownership transferred** (to all members, P)
-- **Account deletion and restores:**
-  - account deletion scheduled (P). It states that every budget the user owns, **including deleted budgets still awaiting restore**, is permanently deleted at purge, and that the restore window for those ends then (F-35).
-  - account deletion cancelled (P).
-  - After a database restore, the owner sends the notice to all users **manually by BCC** until a CLI command for it exists (owner ruling, round 2).
+**Notification emails** (plain text only). This table is the **closed vocabulary** of notification `kind` values: the test outbox reports them (test-hooks.md), tests assert on them, and adding, renaming or removing a kind is a contract change. `kind` is not the same as `security_events.type`. **P** marks priority mail, which is still sent after 60% of the daily email budget is used (§14). Paths are relative to `APP_ORIGIN`; "none" means the mail has no link.
+
+| `kind` | P | To | Sent when | Link path |
+|---|---|---|---|---|
+| `signup_invite` | P | the invited address | `create-signup-invite` (or the test hook) | `/signup#token=…` |
+| `new_sign_in` | P | the user | **every** successful sign-in, password-only or after MFA completion, with no skip rule (F-12, F-34); not on sign-up (§5). States browser, OS and time. | `/settings/sessions` |
+| `login_throttled` | P | the account | the per-email failure limit (§14, 100 / 24 h) is reached | `/settings/sessions` |
+| `mfa_failures` | P | the user | the 5th consecutive MFA failure after a correct password (§5) | `/settings/security` |
+| `mfa_locked` | P | the user | the per-user MFA failure budget is exhausted; once per window (§6) | `/settings/security` |
+| `password_reset` | | the account | a reset request within the limits (§8) | `/reset-password#token=…` |
+| `password_changed` | P | the user | password change, and password-reset completion | `/settings/security` |
+| `email_change_confirm` | | the new address | email change requested, address free (§9) | `/confirm-email#token=…` |
+| `email_change_notice` | P | the old address | email change requested, address free (§9) | `/cancel-email-change#token=…` |
+| `email_change_exists` | | the new address | email change requested, address already has an account; no tokens are created (§9) | none |
+| `email_changed` | P | both addresses | email-change confirm. The old address gets the (reissued) cancel link; the new address gets none. | old: `/cancel-email-change#token=…`; new: none |
+| `email_change_cancelled` | P | both addresses | email-change cancel, outcome `cancelled` or `reverted` (§9); advises resetting the password and checking MFA | `/reset-password` (no token) |
+| `mfa_factor_added` | P | the user | a TOTP or passkey factor is added | `/settings/security` |
+| `mfa_factor_removed` | P | the user | a TOTP or passkey factor is removed | `/settings/security` |
+| `recovery_code_used` | P | the user | a recovery code satisfies any MFA prompt | `/settings/security` |
+| `recovery_codes_regenerated` | P | the user | `POST /me/mfa/recovery-codes` | `/settings/security` |
+| `recovery_codes_retired` | P | each affected user | `rewrap-mfa --retire-recovery-codes` (F-38): "regenerate your recovery codes now" | `/settings/security` |
+| `mfa_reset` | P | the user | `reset-mfa` admin command | `/settings/security` |
+| `budget_invitation` | | the invitee, **only when an account exists** for the address | invitation created | `/invitations` |
+| `invitation_accepted` | P | the budget owner | an invitation is accepted | `/budgets/{budgetId}/members` |
+| `budget_deleted` | P | every member, including the owner | budget deleted. Only the owner's copy carries the restore link; members are told the owner can restore it for 30 days. | owner: `/settings/deleted-budgets`; members: none |
+| `budget_restored` | P | every member | a deleted budget is restored | `/budgets/{budgetId}` |
+| `member_removed` | P | the removed member | the **owner** removes a member. A member who leaves on their own is not emailed (they did it themselves). | none |
+| `ownership_transferred` | P | every member, including the previous and the new owner | ownership transfer | `/budgets/{budgetId}/members` |
+| `account_deletion_scheduled` | P | the user | `POST /me/deletion`. States that every budget the user owns, **including deleted budgets still awaiting restore**, is permanently deleted at purge, and that their restore window ends then (F-35). | `/signin` |
+| `account_deletion_cancelled` | P | the user | `DELETE /me/deletion` | `/settings/security` |
+
+After a database restore, the owner sends the notice to all users **manually by BCC** until a CLI command for it exists (owner ruling, round 2); it has no `kind`.
+
+**Email link routes (frontend contract).** Every link in every email is `APP_ORIGIN` + one of these paths. The frontend must provide each route (the server's SPA fallback serves `index.html` for them), and tests assert links by path.
+
+| Path | Screen | Signed out |
+|---|---|---|
+| `/signin` | Sign in. Also the target of sign-out (ARCHITECTURE "No financial data on the device"). | — |
+| `/signup#token=…` | Create the account from a sign-up invite (§4) | public |
+| `/reset-password` | Without a token: request a reset link. With `#token=…`: verify, collect the second factor if needed, set the new password (§8). | public |
+| `/confirm-email#token=…` | Confirm the new address; needs an `active` session of the same user (§9) | token held in memory; sign in, then continue in the same tab |
+| `/cancel-email-change#token=…` | "This wasn't me": cancel or revert an email change (§9) | public |
+| `/settings/sessions` | Device list; revoke one session or all others | sign in, then return |
+| `/settings/security` | Password, email change, MFA factors, recovery codes | sign in, then return |
+| `/settings/deleted-budgets` | Deleted budgets the user owns, with restore (ADR-0010) | sign in, then return |
+| `/invitations` | Pending budget invitations: accept or decline | sign in, then return |
+| `/budgets/{budgetId}` | That budget's month overview. An API 404 shows one "not found or no access" screen. | sign in, then return |
+| `/budgets/{budgetId}/members` | Members, the owner's invitations and transfer controls | sign in, then return |
+
+- **Return after sign-in:** the SPA keeps the requested path **in memory** (never in a query parameter or storage) and accepts only an app-relative path that starts with exactly one `/` (not `//`, not `/\`, not a scheme), so it is not an open redirect. Token fragments are removed first (§4, F-06); the token stays in memory.
+- A signed-in account **pending deletion** lands on the deletion screen (cancel deletion or export) whatever path it opened (§11).
+- These paths are stable: renaming one is a contract change, because mail already sent keeps the old link. The backend keeps them in one table (`LINK_PATHS`).
 
 **Email content rules (F-29):**
 - No financial data.
-- User-controlled text (budget names, display names) is escaped, never linkified, and capped at its schema length.
+- User-controlled text (budget names, display names) is escaped, never linkified, and capped at its schema length. Defanging (F-48) NFKC-normalizes first, strips bidi controls (defence in depth; input already rejects them, data-model.md "Text"), then replaces: `.` and its look-alikes U+3002, U+FF0E, U+FF61, U+FE52 → U+2E31; `/` → U+2215; `:` → U+02D0; `@` → `(at)`. **Requirement tests assert:** the defanged text, run through NFKC again, contains none of `. / : @` or the four dot look-alikes, so it does not parse as a URL, host or address.
 - The only links are built from `APP_ORIGIN`.
 - Click and open tracking are off.
 - The sending subdomain publishes SPF, DKIM and DMARC, ramping to `p=reject` (ADR-0007).

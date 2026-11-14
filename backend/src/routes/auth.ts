@@ -16,7 +16,6 @@ import {
   loginRateLimit,
   logout,
   previewSignup,
-  reauthRateLimit,
   reauthenticate,
   signup,
   signupRateLimit,
@@ -50,7 +49,6 @@ export const authRoutes = [
   defineRoute({
     operationId: "reauthenticate",
     body: ReauthRequest,
-    rateLimit: ({ deps, auth }) => reauthRateLimit(deps, mustAuth(auth)),
     handler: async ({ deps, req, auth, body }) => ({
       status: 200,
       body: await reauthenticate(deps, req, mustAuth(auth), body),

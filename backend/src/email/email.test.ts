@@ -110,6 +110,29 @@ describe("Resend transport", () => {
 });
 
 describe("notification content (F-29)", () => {
+  it("F-48: NFKC first, dot look-alikes defanged, bidi controls stripped; output never parses as a host", () => {
+    const evil = safeUserText("Verify at shoestring-help。com", 60);
+    expect(evil).toBe("Verify at shoestring-help⸱com");
+    for (const dot of ["。", "．", "｡", "﹒", "."]) {
+      const out = safeUserText(`evil${dot}com`, 60);
+      expect([dot, out]).toEqual([dot, "evil⸱com"]);
+      // Neither the browser URL parser nor NFKC turns the result back into a dot.
+      let host: string | null;
+      try {
+        host = new URL(`http://${out}/`).hostname;
+      } catch {
+        host = null;
+      }
+      expect(host === null || !host.includes(".")).toBe(true);
+      expect(out.normalize("NFKC")).not.toContain(".");
+    }
+    expect(safeUserText("Ａｂｃ＠x", 60)).toBe("Abc(at)x"); // full-width forms
+    expect(safeUserText("Ali\u202eecnalab\u202c", 60)).toBe("Aliecnalab"); // a U+202E name
+    for (const b of ["\u061c", "\u200e", "\u200f", "\u202a", "\u202d", "\u2066", "\u2069"])
+      expect(safeUserText(`a${b}b`, 60)).toBe("ab");
+    expect(safeUserText("http://x:1", 60)).not.toMatch(/[:/]/);
+  });
+
   it("defangs and caps user text: no links, no line breaks", () => {
     const s = safeUserText("evil.com/x\nBcc: a@b.c http://x", 60);
     expect(s).not.toMatch(/[.\n/@:]/);
@@ -133,7 +156,7 @@ describe("notification content (F-29)", () => {
       "Olive",
       "Smith.Family/Budget",
     );
-    expect(m.text).toContain("Smith․Family∕Budget");
+    expect(m.text).toContain("Smith\u2e31Family\u2215Budget");
     expect(m.priority).toBe(false);
   });
 

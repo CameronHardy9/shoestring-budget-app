@@ -1,19 +1,16 @@
 ---
 name: phase-a-status
-description: Backend status after Phases A and B (2026-11-13): all 63 operations implemented; open gaps reported to the tech lead and deliberate deviations to re-check
+description: Backend status after the 2026-11-14 fix round (F-45 to F-48): all 63 operations implemented; what is still open and the deliberate choices to re-check
 metadata:
   type: project
 ---
 
-Phases A and B are done on feat/backend-api (2026-11-13): all 63 contract operations are registered, the admin CLI is real, and 100% coverage is enforced on src/domain plus the TOTP and recovery-code modules.
+As of 2026-11-14 all 63 contract operations are implemented, and the F-45 to F-48 fix round is done on feat/backend-api (not committed; the tech lead commits).
 
-Open items reported to the tech lead (verify their status before relying on them):
-- DAL `getMfaDetail` lacks the TOTP `confirmedAt`; `/me/mfa` returns `null` for it (services/account.ts `getMfa`).
-- The email-budget counter key is SHA-256 of a constant, not an HMAC (deviates from data-model.md), so the admin job sends mail without `APP_KEYRING`.
-- A password reset clears `login:email_day` and the (email, *current IP*) pair only; HMAC'd pair keys for other IPs can't be enumerated.
-- The notification `kind` vocabulary and the non-token link paths are backend-chosen; with the architect for confirmation.
-- The bundled common-password list is a placeholder; Sentry is not wired.
+- **F-45:** MFA limits are reserve-first everywhere: the per-user budget via atomic `hitThrottle` (refunded into the charged window), the per-session and per-token slots via the DAL's `reserve*/fail*/release*MfaAttempt`, and the reauth and TOTP-confirm rows via `throttleGuard`. Unit tests cover parallel attempts; a real-DB parallel test belongs to test-engineer.
+- **Contract rev 4 ratified** the backend's notification kinds, `LINK_PATHS`, `email:daily` with a constant SHA-256 key, the reset-counter clearing, and TRUST_PROXY_HOPS ≥ 1 in production.
+- **Still open:** the common-password list is a placeholder; Sentry is not wired; `@shoestring/db` moves to devDependencies in the pre-deploy pass; glob/minimatch moderate CVEs wait for releases past the 7-day age.
 
-**Why:** the next backend round starts from these. **How to apply:** check each against db/ and the contracts first; drop items once resolved.
+**Why:** the next round starts here. **How to apply:** re-check each item against the code and contracts before relying on it.
 
 Related: [[backend-gotchas]]

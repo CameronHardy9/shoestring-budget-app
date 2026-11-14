@@ -16,6 +16,7 @@ interface Totp {
   confirmed: boolean;
   lastUsedStep: number | null;
   createdAt: number;
+  confirmedAt?: Date | null;
 }
 
 export class FakeMfa {
@@ -73,6 +74,7 @@ export class FakeMfa {
       },
       getMfaDetail: async (userId: string) => ({
         ...(await this.dal().getMfaSummary(userId)),
+        totpConfirmedAt: this.totp.get(userId)?.confirmedAt ?? null,
         passkeys: (this.passkeys.get(userId) ?? []).map((p) => ({
           id: p.id,
           name: p.name,
@@ -121,6 +123,7 @@ export class FakeMfa {
         const f = this.factors(userId);
         const first = !f.totp && f.passkeys === 0;
         t.confirmed = true;
+        t.confirmedAt = this.clock.now();
         t.lastUsedStep = input.step;
         if (first) this.setCodes(userId, input.recoveryCodes);
         return Promise.resolve({ recoveryCodesCreated: first });

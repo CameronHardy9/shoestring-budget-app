@@ -28,29 +28,48 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 # ---- build: install offline, build frontend and backend, prune to prod deps ----
 FROM fetch AS build
 COPY . .
+# "{dir}..." = the package in dir plus its workspace dependencies (db/). The
+# braces matter: "./backend..." selects backend alone, db/ gets no node_modules,
+# and the bundler then leaves kysely and pg as unresolved externals.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm install --frozen-lockfile --offline --filter "./backend..." --filter "./frontend..."
+    pnpm install --frozen-lockfile --offline --filter "{./backend}..." --filter "{./frontend}..."
 ARG APP_RELEASE=dev
 ENV APP_RELEASE=$APP_RELEASE \
     VITE_APP_RELEASE=$APP_RELEASE
-RUN pnpm --filter ./frontend run build \
+# Until frontend/ exists the image is API-only (no SPA): fine for the smoke job,
+# not a releasable artifact (make image says so).
+RUN if [ -f frontend/package.json ]; then pnpm --filter ./frontend run build; \
+    else echo "note: no frontend/package.json, building an API-only image" >&2; fi \
  && pnpm --filter ./backend run build
 # docs/contracts/test-hooks.md: the production build must not contain test hooks.
 # Fails on `_test` as a whole word, however the route is assembled ('/api/_test/x',
 # prefix '/api/_test', "/api/" + "_test"), and on the sentinel string the hooks
 # module exports. Whole-word matching (-w) ignores identifiers such as is_test,
 # _tests or TEST_HOOKS, so normal code does not trip it (security F-10).
-RUN if grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' \
-         -e '_test' -e '__SHOESTRING_TEST_HOOKS__' backend/dist; then \
-      echo "error: test-hook code found in backend/dist (files above)" >&2; exit 1; \
-    fi
-# Standalone backend with production dependencies only.
+# The entries must exist first: grep over a missing or empty dist would pass.
+# grep exits 0 on a match, 1 on none and 2 on an error; only 1 passes.
+RUN for f in server.js admin.js; do \
+      [ -s "backend/dist/$f" ] || { echo "error: backend build did not produce dist/$f" >&2; exit 1; }; \
+    done; \
+    rc=0; grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' \
+         -e '_test' -e '__SHOESTRING_TEST_HOOKS__' backend/dist || rc=$?; \
+    if [ "$rc" -eq 0 ]; then echo "error: test-hook code found in backend/dist (files above)" >&2; exit 1; fi; \
+    if [ "$rc" -ne 1 ]; then echo "error: test-hook tripwire could not scan backend/dist (grep exit $rc)" >&2; exit 1; fi
+# Standalone backend with production dependencies only, from the lockfile.
+# Legacy deploy re-resolves workspace packages' dependencies (and fails offline),
+# so inject workspace packages for this one command only; the workspace itself
+# keeps symlinked packages for hot reload in dev.
+# pnpm deploy copies the whole package (src/ incl. the test-hooks module,
+# scripts/, configs). Keep only what runs: no test-hook source in the image
+# (test-hooks.md, ADR-0009); make image-smoke asserts this allowlist.
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
-    pnpm --filter ./backend deploy --prod --legacy --offline /out
+    pnpm --filter ./backend deploy --prod --offline --config.inject-workspace-packages=true /deploy \
+ && mkdir /out \
+ && mv /deploy/package.json /deploy/dist /deploy/node_modules /out/
 # Public SPA without source maps; the maps go to the `sourcemaps` stage for a
 # private upload to Sentry, never to users.
 RUN mkdir -p /public /sourcemaps \
- && cp -R frontend/dist/. /public/ \
+ && if [ -d frontend/dist ]; then cp -R frontend/dist/. /public/; fi \
  && (cd /public && find . -name '*.map' -exec sh -c 'mkdir -p "/sourcemaps/$(dirname "$1")" && mv "$1" "/sourcemaps/$1"' _ {} \;)
 
 # ---- sourcemaps: `docker build --target sourcemaps --output type=local,dest=.sourcemaps .`

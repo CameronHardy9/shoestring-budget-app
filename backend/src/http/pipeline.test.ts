@@ -77,6 +77,15 @@ describe("unknown routes and Phase B operations", () => {
     expect(r.headers["x-request-id"]).toBe("abcdef12-req");
   });
 
+  it("HEAD and OPTIONS on API paths are 404 ErrorBody (errors.md \"Unknown routes\")", async () => {
+    h = await makeHarness();
+    for (const m of ["HEAD", "OPTIONS"] as const) {
+      const r = await h.req(m, "/api/healthz");
+      expect([m, r.statusCode]).toEqual([m, 404]);
+    }
+    expect(body(await h.req("OPTIONS", "/api/me")).code).toBe("NOT_FOUND");
+  });
+
   it("an existing path with an undeclared method is 404 too", async () => {
     h = await makeHarness();
     expect((await h.req("PUT", "/api/me", { body: {} })).statusCode).toBe(404);

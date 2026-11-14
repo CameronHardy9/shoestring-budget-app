@@ -28,7 +28,8 @@ or SQL here; ESLint and Semgrep enforce it). Source of truth: docs/contracts/.
 ## Rules
 - **Routes come from the contract.** Add an operation with `defineRoute({ operationId })` and add it to `apiRoutes`. Method, path and `x-session`/`x-budget-role`/`x-reauth`/`x-idempotency` come from the generated table; `registerRoutes` refuses to start on any mismatch. Do not register `/api` routes by hand (an `onRoute` hook rejects them).
 - Every contract operation is implemented (a test asserts `apiRoutes.length === operations.length`). Unimplemented ones would stay unregistered (404); errors.md has no 501.
-- **Second factors** go through `services/mfa.ts` `verifySecondFactor` only (per-user 20/24 h budget, F-05). Enrollment checks (TOTP confirm, passkey registration) are exempt and don't use it.
+- **Second factors** go through `services/mfa.ts` `verifySecondFactor` only. Attempt limits are **reserve-first** (F-45): the per-user 20/24 h budget is charged with an atomic upsert before the check and refunded on success, and an `AttemptGuard` reserves the per-session/per-token slot (`dal.sessions|tokens.reserve*/fail*/release*MfaAttempt`) or a throttle row (`throttleGuard`: reauth, TOTP confirm). Never check-then-count. Enrollment (TOTP confirm, passkey registration) is exempt from the user budget.
+- **User text in mail** goes through `safeUserText` (NFKC, bidi stripped, dot look-alikes and `. / @ :` defanged, F-48); `text()` rejects bidi controls at input.
 - `deleted_budget_owner` routes get `ctx.deletedScope` from `dal.requireDeletedBudgetOwnership` only (F-36).
 - **Check order** is errors.md's: Host → route → global limit → session → CSRF → pending deletion → 415/413 → schema → endpoint limit (`rateLimit`) → membership → role → re-auth → handler.
 - **Scopes:** a `BudgetScope` only from `dal.requireMembership` (done by the route layer for `member`/`owner` routes; use `ctx.scope`). Never cast to `BudgetScope` (Semgrep).

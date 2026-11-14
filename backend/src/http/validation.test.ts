@@ -97,6 +97,13 @@ describe("text rules (data-model.md 'Text')", () => {
     ]);
   });
 
+  it("rejects bidi controls (F-48); ZWJ stays allowed, ZWSP is trimmed as whitespace", () => {
+    for (const b of ["\u061c", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069"])
+      expect([b.codePointAt(0)!.toString(16), details(text(1, 50), `Ali${b}ce`)]).toEqual([b.codePointAt(0)!.toString(16), [":invalid_value"]]);
+    expect(details(text(1, 50), "\u{1F469}\u200d\u{1F4BB}")).toEqual([]);
+    expect(parseOrThrow(text(1, 50), "\u200bAlice\u200b", "body")).toBe("Alice");
+  });
+
   it("rejects control characters", () => {
     expect(details(text(1, 50), "a\u0007b")).toEqual([":invalid_value"]);
     expect(details(text(1, 50), "a\u0085b")).toEqual([":invalid_value"]);

@@ -12,6 +12,7 @@ import { matchRecoveryCode } from "../auth/recovery-codes.ts";
 import type { AppDeps } from "../deps.ts";
 import { ApiError } from "../errors.ts";
 import { DAY } from "../http/rate-limit.ts";
+import type { Reservation } from "../http/rate-limit.ts";
 
 export const MFA_FAILURE_BUDGET = 20;
 
@@ -119,35 +120,110 @@ async function check(
 }
 
 /**
- * Verifies a second factor. Throws 429 RATE_LIMITED when the budget is spent,
- * 401 MFA_FAILED on a wrong/expired/replayed factor (after counting it).
+ * A per-session or per-token attempt counter around one factor check (F-45).
+ * `reserve` runs BEFORE the check and throws when no attempt is left; after
+ * the check exactly one of `failed` (the slot stays used) or `release` (the
+ * slot is given back: success, a refusal before the check, or an error) runs.
+ */
+export interface AttemptGuard {
+  reserve(): Promise<void>;
+  failed(): Promise<void>;
+  release(): Promise<void>;
+}
+
+export const NO_GUARD: AttemptGuard = {
+  reserve: () => Promise.resolve(),
+  failed: () => Promise.resolve(),
+  release: () => Promise.resolve(),
+};
+
+/** Maps a DAL reservation refusal: the slot holder is gone, or all 5 slots are used or in flight. */
+export function refusedAttempt(
+  reason: "exhausted" | "invalid",
+  gone: () => ApiError,
+): ApiError {
+  return reason === "invalid" ? gone() : new ApiError("RATE_LIMITED", { retryAfterSeconds: 1 });
+}
+
+/**
+ * Throttle-table guard: counts the attempt first (atomic upsert), refuses
+ * with 429 once over `limit` (refunding the refused attempt), refunds on success.
+ */
+export function throttleGuard(deps: AppDeps, scope: string, raw: string, limit: number, windowMs: number): AttemptGuard {
+  let r: Reservation | null = null;
+  return {
+    async reserve() {
+      r = await deps.throttles.reserve(deps.throttles.key(scope, raw), windowMs);
+      if (r.count > limit) {
+        await deps.throttles.release(r);
+        r = null;
+        throw new ApiError("RATE_LIMITED", { retryAfterSeconds: deps.throttles.retryAfter(windowMs) });
+      }
+    },
+    failed: () => Promise.resolve(),
+    async release() {
+      if (r) await deps.throttles.release(r);
+      r = null;
+    },
+  };
+}
+
+/**
+ * Verifies a second factor, race-safe (F-05, F-45):
+ * 1. the context guard reserves a per-session/per-token attempt;
+ * 2. the per-user budget is charged FIRST (atomic), and an attempt that would
+ *    exceed 20 per rolling 24 h is refused with 429 (and refunded, so refused
+ *    attempts do not extend the lock);
+ * 3. the factor is checked; success (or an error) refunds both reservations, failure keeps
+ *    them, records `mfa_failed`, and the first failure that exhausts the
+ *    budget records `mfa_locked` and emails the user once per window.
+ * Throws 401 MFA_FAILED on a wrong, expired or replayed factor.
  */
 export async function verifySecondFactor(
   deps: AppDeps,
   userId: string,
   proof: MfaProofInput,
   ctx: MfaContext,
+  guard: AttemptGuard = NO_GUARD,
 ): Promise<void> {
-  await assertMfaBudget(deps, userId);
-  if (await check(deps, userId, proof, ctx)) return;
+  await guard.reserve();
+  let budget: Reservation;
+  try {
+    budget = await deps.throttles.reserveRolling(budgetKey(deps, userId), DAY);
+  } catch (e) {
+    await guard.release(); // not an attempt
+    throw e;
+  }
+  if (budget.count > MFA_FAILURE_BUDGET) {
+    await deps.throttles.release(budget);
+    await guard.release();
+    throw new ApiError("RATE_LIMITED", { retryAfterSeconds: 3600 });
+  }
+  let ok: boolean;
+  try {
+    ok = await check(deps, userId, proof, ctx);
+  } catch (e) {
+    // An error is not a failed check: give both reservations back.
+    await deps.throttles.release(budget);
+    await guard.release();
+    throw e;
+  }
+  if (ok) {
+    await deps.throttles.release(budget);
+    await guard.release();
+    return;
+  }
+  await guard.failed();
   const sessionId = ctx.kind === "reset" ? null : ctx.sessionId;
-  await deps.dal.securityEvents.recordSecurityEvent({
-    type: "mfa_failed",
-    userId,
-    sessionId,
-  });
-  const failures = await deps.throttles.rollingHit(
-    budgetKey(deps, userId),
-    DAY,
-  );
-  if (failures === MFA_FAILURE_BUDGET) {
-    await deps.dal.securityEvents.recordSecurityEvent({
-      type: "mfa_locked",
-      userId,
-      sessionId,
-    });
-    const contact = await deps.dal.users.getUserContact(userId);
-    await deps.mailer.send(deps.notifications.mfaLocked(contact.email));
+  await deps.dal.securityEvents.recordSecurityEvent({ type: "mfa_failed", userId, sessionId });
+  if (budget.count >= MFA_FAILURE_BUDGET) {
+    // Exactly one notice per window, even when concurrent failures cross the line together.
+    const notice = await deps.throttles.reserve(deps.throttles.key("mfa:locked_notice", userId), DAY);
+    if (notice.count === 1) {
+      await deps.dal.securityEvents.recordSecurityEvent({ type: "mfa_locked", userId, sessionId });
+      const contact = await deps.dal.users.getUserContact(userId);
+      await deps.mailer.send(deps.notifications.mfaLocked(contact.email));
+    }
   }
   throw new ApiError("MFA_FAILED");
 }

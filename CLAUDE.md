@@ -33,7 +33,7 @@ their report and the tech lead asks.
 | backend-engineer | backend/ | API, business logic, auth, integrations |
 | frontend-engineer | frontend/ | UI, client state, API client, accessibility |
 | test-engineer | tests/ | Integration, contract, e2e and visual tests; test infrastructure |
-| ci-engineer | .github/, Makefile, Dockerfile*, docker-compose* | Pipeline, builds, local environment |
+| ci-engineer | .github/, Makefile, Dockerfile*, docker-compose*, .env.example | Pipeline, builds, local environment |
 | sre | infra/, deploy/, observability/, docs/runbooks/ | Deployment, environments, monitoring, backups, runbooks |
 | security-reviewer | docs/security/ only | Threat model, audits, security review of every change |
 | debugger | nothing (read-only) | Cross-layer root-cause analysis; hands fixes to owners |

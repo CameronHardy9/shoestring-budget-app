@@ -5,6 +5,7 @@ import type { EmailKind, OutgoingEmail } from "./transports.ts";
 
 /** SPA paths for links. The token links are contract-defined (auth.md §4); the rest are frontend routes. */
 export const LINK_PATHS = {
+  signin: "/signin",
   signup: "/signup",
   sessions: "/settings/sessions",
   invitations: "/invitations",
@@ -21,21 +22,33 @@ const SECURE_ADVICE =
 
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+/** Bidi controls (F-48): rejected at input too (data-model.md "Text"); stripped here as a second layer. */
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+/** ASCII "." and the dot look-alikes URL parsers map to "." (U+3002, U+FF0E, U+FF61, U+FE52). */
+const DOTS = /[.\u3002\uff0e\uff61\ufe52]/g;
 
 /**
- * User-controlled text in plain-text mail: no control characters or line
- * breaks, capped at its schema length, and defanged so mail clients cannot
- * auto-link it ("." "/" "@" ":" replaced by look-alikes).
+ * User-controlled text in plain-text mail (F-29, F-48): NFKC-normalized (so
+ * full-width and compatibility forms become the ASCII they imitate), bidi
+ * controls removed, no control characters or line breaks, capped at its
+ * schema length, then defanged so no client can auto-link it. Replacements
+ * are stable under NFKC and are not treated as separators by URL parsers:
+ * "." and its look-alikes -> U+2E31, "/" -> U+2215, ":" -> U+02D0, "@" -> "(at)".
  */
 export function safeUserText(value: string, max: number): string {
-  const cleaned = value.replace(CONTROL, " ").replace(/\s+/g, " ").trim();
+  const cleaned = value
+    .normalize("NFKC")
+    .replace(BIDI, "")
+    .replace(CONTROL, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return Array.from(cleaned)
     .slice(0, max)
     .join("")
-    .replace(/\./g, "․")
-    .replace(/\//g, "∕")
-    .replace(/@/g, "＠")
-    .replace(/:/g, "ː");
+    .replace(DOTS, "\u2e31")
+    .replace(/\//g, "\u2215")
+    .replace(/:/g, "\u02d0")
+    .replace(/@/g, "(at)");
 }
 
 const BROWSER_LABEL: Record<DeviceBrowser, string> = {
@@ -280,7 +293,7 @@ export class Notifications {
   }
 
   accountDeletionScheduled(to: string, purgeAfter: Date): OutgoingEmail {
-    const url = this.link("/signin");
+    const url = this.link(LINK_PATHS.signin);
     return this.mail(to, "account_deletion_scheduled", true, "Your Shoestring account will be deleted",
       `Your account will be permanently deleted after ${purgeAfter.toISOString()}. Every budget you own, including deleted budgets still waiting to be restored, is deleted with it, and they can no longer be restored after that. To keep your account, sign in and cancel the deletion before then: ${url}`, [url]);
   }

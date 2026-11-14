@@ -18,19 +18,23 @@ Status values:
 
 **Data-layer review (2026-11-13, branch `feat/db-data-layer`):** the first code review. No Critical or High findings, so the branch is **OK to merge**. New: F-41 (Medium) and F-42 to F-44 (Low). F-25, F-26 and F-35 are now verified in code. Details are under "Data-layer review" below.
 
+**Backend review (2026-11-14, branch `feat/backend-api`, commit 9adc728):** no Critical or High findings, so the branch is **OK to merge**. New: F-45 (Medium, fix before launch) and F-46 to F-48 (Low). F-04 is verified; the backend halves of F-07 and F-08 are verified. Details are under "Backend review" below.
+
+**Final pass (2026-11-14, uncommitted tree against 9adc728):** **nothing blocks the PR.** F-45 (the owner ruled: fix it in this PR), F-46, F-47 and F-48 are fixed and verified. F-10 is verified at the image level; the post-deploy probe is still for sre. New Low F-49, the restore race, is **deferred by the owner (2026-11-14)**. Details are under "Final pass" at the end.
+
 ## Summary
 | ID | Sev | Owner → implements | Issue (first review) | Status | Note (re-review 2026-11-13) |
 |---|---|---|---|---|---|
 | F-01 | **High** | architect → backend, data | Open email-change and reset tokens survive recovery; confirm needed only the token; no cancel path | contract-fixed | Revocation deletes tokens, confirm is session-bound, cancel/revert link added; the chain is closed (F-33). Residual R-11 accepted by the owner on 2026-11-13 |
 | F-02 | **High** | architect, sre → backend, ci | Admin CLI in public Actions; emails in output; secret sprawl | contract-fixed | Cloud Run jobs only, no emails in output, least config per job. Ops runbook confirms (two-step `--expect-user-id`, no retries, keyring never on `shoestring-admin`, private admin log). Note: the CLI must reject an email containing `,`, because `--args` is comma-joined, or `job_run` should use a custom gcloud delimiter such as `^;^` |
 | F-03 | **High** | sre → **owner** | No MFA required on operator accounts | partially-fixed | ADR-0007 constraint 7; bootstrap step 1 checklist is good, but **it omits the account that syncs the passkeys** (Apple ID, iCloud Keychain, or the password manager if it stores them). That account is the root of every "phishing-resistant" factor. **Blocking for the ops PR: add that row** |
-| F-04 | Medium | architect → data, backend | Recovery codes as unsalted SHA-256 | contract-fixed | HMAC with the `recovery-code-v1` HKDF subkey, constant-time compare |
+| F-04 | Medium | architect → data, backend | Recovery codes as unsalted SHA-256 | verified | HMAC with the `recovery-code-v1` HKDF subkey, constant-time compare. **Verified 2026-11-14:** backend/src/auth/recovery-codes.ts, per-row key ID, every row compared, tests in factors.test.ts |
 | F-05 | Medium | architect → backend | MFA failure limits per endpoint | contract-fixed | One per-user budget, 20 per 24 h, across verify, reauth and reset; `mfa_locked` plus email |
 | F-06 | Medium | architect → frontend, backend, sre | Fragment tokens leak | contract-fixed | `replaceState` before Sentry init, URL stripping, tracking off |
-| F-07 | Medium | architect → backend, frontend, sre | Error paths bypass redaction | contract-fixed | Allowlist serializer with a DB-error fixture test; Sentry SDK and project settings specified |
-| F-08 | Medium | architect, sre → backend | Client-IP derivation | contract-fixed | Hop count, never `true`; IPv6 /64. `trustProxy = 1` must be confirmed by V26 before launch |
+| F-07 | Medium | architect → backend, frontend, sre | Error paths bypass redaction | contract-fixed | Allowlist serializer with a DB-error fixture test; Sentry SDK and project settings specified. **Backend half verified 2026-11-14** (logging.ts serializer, fixture test, commit-time 23503 test); Sentry init and the frontend are still to come |
+| F-08 | Medium | architect, sre → backend | Client-IP derivation | contract-fixed | Hop count, never `true`; IPv6 /64. `trustProxy = 1` must be confirmed by V26 before launch. **Backend half verified 2026-11-14** (hop-count trust function, `TRUST_PROXY_HOPS` required in production, forged-XFF test) |
 | F-09 | Medium | architect → backend, sre | Email quota exhaustion | contract-fixed | 5 per 24 h per email, 60 per day app budget, priority mail, alert. Deviation 4 accepted |
-| F-10 | Medium | architect → backend, ci, sre | Test hooks vs one image | contract-fixed | ADR-0009; the tripwire matches the `__SHOESTRING_TEST_HOOKS__` sentinel and `_test`. If `_test` false-positives on bundled code, ci may narrow that half, but **never drop the sentinel** |
+| F-10 | Medium | architect → backend, ci, sre | Test hooks vs one image | verified | **Verified 2026-11-14** (build and image: hardened dist tripwire, `make image-smoke` /app allowlist plus sentinel scan over all of /app plus 404 probes); the post-deploy probe (sre) is still pending. ADR-0009; the tripwire matches the `__SHOESTRING_TEST_HOOKS__` sentinel and `_test`. If `_test` false-positives on bundled code, ci may narrow that half, but **never drop the sentinel** |
 | F-11 | Medium | architect, sre → backend | Restore resurrects access | contract-fixed | restore.md follows the contract order (restore, `revoke-sessions --all --yes --restore`, purge, reopen, re-apply post-restore security actions, BCC notice). Note: after `db/roles.sql`, verify that `app` has only INSERT/SELECT on `security_events` and that `purge_security_events()` is owned by `migrator` |
 | F-12 | Medium | architect → backend | Detective controls for optional MFA | contract-fixed | All notices are priority mail; the new-sign-in notice goes out on every sign-in (F-34) |
 | F-13 | Medium | architect → backend, frontend | Invitations without re-auth | contract-fixed | `x-reauth: true` on invite and on ownership transfer |
@@ -65,6 +69,11 @@ Status values:
 | F-42 | Low | data-engineer | **New (data layer):** the "local host only" guards in the migrate CLI and `@shoestring/db/testing` can be bypassed with a `?host=` URL parameter; no `verify-full` check on a non-local migrator URL | verified | **Verified 2026-11-13 (re-check):** `db/src/conn.ts` takes the host from pg's own parser, refuses `host`/`hostaddr` and ambiguous hosts, and requires `verify-full` for a remote migrator URL. Used by migrate, seed and testing, with tests |
 | F-43 | Low | data-engineer | **New (data layer):** the seed CLI has no environment guard and ships in the production image (`files: src, dist`) | verified | **Verified 2026-11-13 (re-check):** refuses `NODE_ENV=production` and non-local hosts (tested). `files` and `tsconfig.build.json` exclude the seed, `testing` and test support |
 | F-44 | Low | data-engineer | **New (data layer):** `app` can still create temporary objects (PUBLIC keeps `TEMPORARY` on the database), contrary to "no DDL" | verified | **Verified 2026-11-13 (re-check):** `REVOKE ALL ON DATABASE … FROM PUBLIC` and `REVOKE TEMPORARY` from the three roles. The verify block fails on TEMPORARY, and a test shows temp tables and `pg_temp` functions are refused. Note for sre: on an existing database, run roles.sql as the owner before the next migrate, or the verify block stops the migrate job (it fails closed) |
+| **F-45** | Medium | backend-engineer, data-engineer, test-engineer | **New (backend):** MFA failure limits are read before the factor check and written after it, so one parallel burst gets far more guesses than 5 per session or token and 20 per user per 24 h | verified | **Fixed in this PR (owner ruling 2026-11-14) and verified:** atomic slot reservation (DAL), reserve-first user budget with refunds, `AttemptGuard`; 50-way tests on real Postgres and in the backend |
+| F-46 | Low | backend-engineer | **New (backend):** the in-memory limiter map grows without bound; above 10,000 keys every request runs a full sweep that frees nothing | verified | **Verified 2026-11-14:** windows expire by end time, unref'd timer sweep, cap of 50,000 (oldest evicted); rate-limit.test.ts |
+| F-47 | Low | ci-engineer, backend-engineer | **New (backend):** the production image contains backend `src/` (test-hooks.ts, dev-server.ts, test support), because `pnpm deploy` copies the whole package | verified | **Verified 2026-11-14:** backend `files: ["dist"]`; the Dockerfile copies only package.json, dist and node_modules; `make image-smoke` passed (allowlist, sentinel absent from all of /app). The earlier exposure is assessed under Final pass |
+| F-48 | Low | backend-engineer (architect for the text rule) | **New (backend):** plain-text defanging misses Unicode dot equivalents and bidi controls in budget and display names | verified | **Verified 2026-11-14:** bidi controls rejected by `text()` and by `is_clean_text` (migration 20261114000100), stripped in mail; NFKC, then replacements that survive NFKC and the URL parser; tests in db and backend |
+| F-49 | Low | data-engineer | **New (final pass):** a deleted-budget restore racing the owner's own deletion request can succeed, because the owner's status is read in the locking statement and never re-read after `lockUser` | deferred | **Deferred by the owner (2026-11-14)** to a later PR; the architect's note is in data-model.md (lock order). Fix before launch |
 
 ## Re-review 2026-11-13: architect deviations
 | # | Deviation | Ruling |
@@ -500,3 +509,217 @@ Scope: `db/migrations/` (2 migrations), `db/roles.sql`, `db/src/` (the DAL, `sco
 - `deleteSession(sessionId)` and `createSession({replacesSessionId})` do not filter by user. Pass them only IDs resolved from the caller's own cookie, and use `revokeSession(userId, id)` for `DELETE /me/sessions/{id}`.
 - `updatePasswordHash` (rehash on login) has no F-01 side effects by design. Never use it for a password change.
 - `transferOwnership` does not lock the target's user row. If a transfer races the target's own deletion request, the new owner can end up pending deletion. The purge re-check (F-35) catches this and fails the run, so it is safe. A `lockUser(target)` after the budget lock would close it earlier.
+
+## Backend review 2026-11-14: `feat/backend-api`
+Scope: all of backend/ (commit 9adc728 against `main`) and this branch's db/ changes. `make audit` passed (details in the report). Backend typecheck and 268 unit tests pass. `make check` currently fails only on shellcheck of `.github/scripts/lib.sh`, which ci-engineer is editing (uncommitted); it is not part of this branch.
+
+### What was checked and holds
+- **Pipeline order** (pipeline.ts, routes.ts) matches errors.md 0 to 10:
+  - Host is checked before routing; only GET healthz and readyz are exempt.
+  - The global limit runs before the session; CSRF and the writes limit come next, then pending deletion.
+  - The JSON-only parser follows. I probed it: `application/jsonx`, `+json`, missing and `text/plain` types are all 415.
+  - Then schema validation, the endpoint limit, membership (404), role (403) and re-auth.
+  - `checkContract` refuses to start on a `{budgetId}` path that is not member or owner, and enforces `deleted_budget_owner` iff `{deletedBudgetId}`. An `/api` route without an op cannot be registered.
+- **Non-member 404:** every member or owner route gets its scope only from `requireMembership`. The restore route gets it only from `requireDeletedBudgetOwnership`, and the DAL re-checks inside its own transaction. `removeMember` re-checks the role under the budget lock. Idempotent replays go back through `requireMembership`.
+- **CSRF and cookies:**
+  - Origin must match exactly; without Origin, `Sec-Fetch-Site: same-origin` is required.
+  - The CSRF token is compared in constant time.
+  - The cookie is `__Host-ss_sid` with `Secure; HttpOnly; SameSite=Strict; Path=/`, and `COOKIE_SECURE=false` is refused in production.
+  - No CORS headers are sent.
+- **Sessions:**
+  - The token is 32 bytes and only its SHA-256 is stored.
+  - The DAL filters expired rows. The sliding refresh runs hourly, capped by `absolute_expires_at`; pending sessions live 10 minutes.
+  - Login, sign-up and MFA completion rotate the session. `completeMfaSession` is an atomic `DELETE … RETURNING`, so only one completion can win.
+  - `deleteSession` and `replacesSessionId` are only ever given the ID resolved from the caller's own cookie (logout, login, sign-up). `DELETE /me/sessions/{id}` uses `revokeSession(userId, id)`.
+- **Logging:**
+  - The allowlist serializer has a pg fixture and a commit-time 23503 test (the data-layer deviation 1 condition is met).
+  - There is one request line with the route template and opaque IDs, and no IP or user-agent.
+  - The mailer logs kind and outcome only, and HIBP logs a metric only.
+  - The console transport prints full mail, links included, but config refuses it in production for both the server and the admin CLI.
+- **Test hooks:**
+  - Only dev-server.ts imports them.
+  - The guards are `TEST_HOOKS=1`, `NODE_ENV` development or test (config already refuses production), a localhost or `*.test` origin, and `DATABASE_ADMIN_URL`.
+  - `NODE_ENV` is required and fails closed.
+  - The sentinel is exported, and the dist tripwire matches `_test` as a word or the sentinel.
+  - Residual: F-47.
+- **TOTP:**
+  - node:crypto only; AES-256-GCM with a 16-byte tag, a random 96-bit nonce, AAD = user ID and a per-row key ID.
+  - The RFC 6238 vectors are tested. ±1 step is compared in constant time with no early exit.
+  - Replay is rejected through `useTotpStep`.
+- **Passkeys** (`@simplewebauthn/server@14.0.3`):
+  - Exact RP ID and origin; the challenge is single-use and bound to the session or reset token and its purpose.
+  - Credentials are restricted to the user's own.
+  - The counter rule is the hand-written one: the library gets counter 0, then a regression is rejected unless the stored count is 0 and is recorded as `passkey_counter_regression`. Tested.
+- **Recovery codes:** HMAC under the row's key and compared against every row (F-04 verified). The first-factor-only creation, the 409 on regeneration without a factor, and deletion with the last factor are all enforced in the DAL.
+- **Password reset:**
+  - The policy check comes before the factor, so a rejected password does not spend a factor.
+  - A missing factor is 401 `MFA_REQUIRED` and nothing changes (test at recovery.test.ts:172).
+  - Completion re-checks the token under `FOR UPDATE`, including the failure count.
+  - The per-email login counters are cleared.
+- **Email change:**
+  - The request is padded to 1 s, with one change per 24 h (429).
+  - Confirm needs the same user's active session and reissues the cancel link.
+  - Cancel is public and emails both addresses.
+  - The F-33 chain rule sits in the DAL (reviewed in the data-layer pass).
+- **Other account flows:**
+  - `/me/password` calls `dal.users.changePassword` (F-01 side effects) and never `updatePasswordHash`.
+  - The account deletion request revokes everything and clears the cookie.
+  - The CSV export prefixes user text that starts with `= + - @ TAB CR` and is served as an attachment with `nosniff`.
+- **Admin CLI:**
+  - Each command loads only the config it needs. The email budget's constant key is what lets `create-signup-invite` and `reset-mfa` run without `APP_KEYRING`.
+  - Output is IDs, counts and DAL error codes only.
+  - A comma in `--email` is rejected (exit 2) before any database access.
+  - `--yes --expect-user-id` is required for `reset-mfa` and single-user `revoke-sessions`. `--restore` requires `--all`. The current key can't be retired.
+- **Rate limits:**
+  - Auth rows are in Postgres with HMAC keys. `hitThrottle` is an atomic upsert, so the `hitOrThrow` rows (login IP, sign-up IP, reset IP, email-change IP, export) are race-free.
+  - The `assertUnder`-then-hit rows are not; that matters only for MFA (F-45).
+  - Rotating the keyring's `current` key resets every auth counter, because keys are HMACs under the current key. Note for sre: rotate at a quiet time, and don't treat rotation as a way to clear a lockout.
+- **Email budget deviation (constant key `SHA-256("email:daily\0app")` instead of an HMAC):** **accepted.** The key holds no PII, so an HMAC protects nothing. It lives in its own `scope`, so it cannot collide with HMAC keys. Unlike the HMAC keys it survives keyring rotation, which is better here. The check-then-hit race can overshoot the quota by the number of concurrent sends, which is negligible.
+- **db/ race fixes:**
+  - `transferOwnership` now locks the target user after the budget.
+  - `requestAccountDeletion` re-checks shared ownership under the user lock (READ COMMITTED: the re-check is a new statement and sees the committed transfer).
+  - Both orders are tested with lock-waiter gates.
+- **`acceptInvitation` (data-engineer's question): not exploitable.**
+  - Accept locks the budget row `FOR UPDATE` before it reads the owner's status.
+  - The owner's deletion request starts with `lockOwnedBudgetsAndCheckShared`, which locks that same row. The purge re-check does too.
+  - If accept goes first, the deletion's per-budget member query is a new statement, sees the new member and refuses with `OWNS_SHARED_BUDGET`. If the deletion goes first, accept reads `pending_deletion` and answers `INVITATION_INVALID`.
+  - Nothing else changes an owner's status without that lock, so no fix is needed. Add a comment or test that pins the dependency: "the owner's status changes only under a lock on every budget they own".
+- **Audit results:**
+  - Semgrep `prototype-pollution-loop` at validation.ts:16 is a **false positive**: `valueAt` only reads, guards each step with `Object.hasOwn`, and never assigns. Suppress it inline (`// nosemgrep: javascript.lang.security.audit.prototype-pollution.prototype-pollution-loop.prototype-pollution-loop` plus a reason) so the next warning stands out.
+  - osv `glob@13.0.7` (GHSA-3g3m-2fjr-6pw4, abort signal ignored): this is a **production** dependency via `@fastify/static`, not dev-only. It is still **not exploitable**, because `@fastify/static` globs a fixed root once at startup and passes no signal.
+  - `minimatch@10.2.6` (GHSA-g3hv-75wg-m249, pattern amplification): dev (eslint), plus `glob`'s fixed patterns. **Not exploitable.**
+  - Bump both when releases pass the 7-day release age. `glob`'s fix is a major version (14.0.2), so it may need a pnpm override checked against `@fastify/static`.
+- **Strict fake DAL in backend tests: adequate for the backend's own unit tests, and not a substitute for the cross-layer tests.**
+  - The fakes do prove the route layer: it calls `requireMembership` or `requireDeletedBudgetOwnership` with the path ID before any handler, maps NOT_FOUND to 404 and FORBIDDEN to 403, follows the check order, and that handlers use the scope it hands them.
+  - They cannot prove that the real DAL denies. The DAL's WeakSet, isolation suite and Semgrep cover that.
+  - They also cannot prove the joint semantics: F-01 token deletion on each revocation event, the F-33 chain through the API, reset-without-factor against real tokens, and races such as F-45.
+  - `tests/` is still empty. The contract-generated permission-matrix tests (auth.md §12, F-18, F-36) and the F-33 API regression test are what move F-18 and F-36 to verified, and they gate launch (R-7 condition), not this merge. Owner: test-engineer.
+
+### F-45 Medium (new, backend): MFA failure limits can be overrun with parallel requests
+- **Location:**
+  - backend/src/services/mfa.ts:125–152 (`assertMfaBudget`, then `check`, then `rollingHit`).
+  - backend/src/services/auth.ts:276–288 (pending-session failure recorded after the check).
+  - backend/src/services/recovery.ts:131–142 (token failure recorded after the check).
+  - backend/src/services/auth.ts:206–245 (reauth, same pattern).
+- **Scenario:** the attacker has the password (R-1, the most likely attack) and the victim uses TOTP.
+  1. They sign in once to get an `mfa_pending` session.
+  2. They send about 120 `POST /auth/mfa/verify` requests in parallel, about the writes limit per instance per minute, and about 240 across two instances or a window edge.
+  3. Every request runs `assertMfaBudget` (count 0 < 20) and `getTotpSecret` before any of them reaches `rollingHit` or `recordSessionMfaFailure`. The DB pool queues the requests FIFO, so all the reads land first.
+  4. The request with the right code calls `useTotpStep` and then `completeMfaSession`. Those are queued with the failures' second round trip, before the failures' `recordSessionMfaFailure` deletes the session. So it signs in.
+- **Effect:** one burst gives about 120–240 guesses where the design allows 5 per session and 20 per day. The burst then locks the budget for 24 h, so the rate becomes about 240 per day. That is roughly 7×10⁻⁴ per day (about 23% per year) against about 2% per year as designed. Recovery codes (about 2^52) are unaffected. The reset path has no writes limit, because there is no session; it is bounded only by 20 per hour per IP, so IP rotation helps there. Detective controls still fire (the `mfa_failures` and `mfa_locked` emails), which keeps this at Medium. It is my reading of the code, not reproduced.
+- **Recommended fix:** reserve before checking, and refund on success.
+  1. Per user: `rollingHit` first. If the new count is over 20, answer 429. On success, refund with `hitThrottle(key, window, -1)`; the `by` parameter already exists.
+  2. Per session and per token: a DAL function that atomically increments `mfa_failed_attempts` only while it is below 5 and returns whether the attempt is allowed. Use one `UPDATE … WHERE mfa_failed_attempts < 5 RETURNING`, with a refund or reset on success. The kill switch then holds under concurrency.
+  3. Apply the same pattern to reauth (5 per session per 15 min) and TOTP confirm.
+  4. Add a test with a real database: 50 parallel wrong attempts on one pending session give exactly 5 `MFA_FAILED` and the rest 401 or 429, and the user budget never exceeds 20.
+- **Owner:** backend-engineer (1, 3); data-engineer (2); test-engineer (4).
+
+### F-46 Low (new, backend): in-memory limiter growth and per-request sweep
+- **Location:** backend/src/http/rate-limit.ts:53–83 (`MemoryLimiter.hit` and `sweep`).
+- **Scenario:**
+  - Each new client key (an IPv4 address, or an IPv6 /64; a free tunnel /48 holds 65,536 of them) adds an entry. Entries are deleted only once they are a day old, although the window is one minute.
+  - Past 10,000 entries, **every** `hit()` iterates the whole map and frees nothing.
+  - About 12 requests per second from rotating /64s for a day gives about 1M entries. That is tens of milliseconds of synchronous CPU on every request, including legitimate ones, and hundreds of MB on a 512 MiB instance, ending in an OOM restart.
+  - Rotating IPs already bypass per-IP limits; the amplification onto everyone else's requests is the new part.
+- **Recommended fix:**
+  - Store each entry's window and drop entries whose window has ended (`start + windowMs <= now`).
+  - Sweep on a timer, or every N hits, instead of on every hit over the threshold.
+  - Hard-cap the map (for example 50,000) by evicting the oldest.
+  - Add a test that 20,000 distinct keys from one minute ago are freed.
+- **Owner:** backend-engineer.
+
+### F-47 Low (new, backend/ci): backend source, including the test hooks, ships in the production image
+- **Location:** Dockerfile (committed version) `pnpm --filter ./backend deploy --prod --legacy --offline /out` with `COPY --from=build /out /app`; backend/package.json has no `files`. `npm pack --dry-run` lists `src/test-hooks.ts`, `src/dev-server.ts`, `src/test-support/*` and `scripts/*`.
+- **Issue:** ADR-0009 and test-hooks.md promise the hooks are "physically absent" from the image, but the tripwire only scans `backend/dist`. Today this is not exploitable:
+  - `node src/dev-server.ts` would fail to import `@shoestring/db/testing`, which is excluded from db's `files`.
+  - Config refuses `TEST_HOOKS=1` in production.
+  - The origin guard stays.
+
+  Still, a later change that ships `db/src/testing`, or a hook that no longer needs it, would make the hooks one job-override (`--command`) away.
+- **Recommended fix:**
+  - ci-engineer's **uncommitted** Dockerfile change already copies only `package.json`, `dist` and `node_modules` into `/out`, and image-smoke asserts that allowlist. Merge it.
+  - Belt and braces: `"files": ["dist"]` in backend/package.json (backend-engineer).
+  - The image audit should grep the whole `/app`, not only `dist`, for the sentinel.
+- **Owner:** ci-engineer (Dockerfile, image audit); backend-engineer (`files`).
+
+### F-48 Low (new, backend): email defanging misses Unicode dots and bidi controls
+- **Location:** backend/src/email/notifications.ts:23–39 (`safeUserText`); backend/src/http/validation.ts:95 (`text()` rejects only C0/C1 controls).
+- **Scenario:**
+  - A user (owner or co-member) names a budget, or sets their display name, to "Verify at shoestring-help。com".
+  - U+3002 and U+FF0E are not replaced. Browsers map both to `.`; I checked with `new URL()`.
+  - Clients that linkify Unicode domains, or a user who copies the text, reach the attacker's site from a genuine Shoestring priority email.
+  - Bidi overrides (U+202A–U+202E, U+2066–U+2069) also pass both `text()` and `safeUserText`. They let a name render as different text in the mail and in the UI.
+  - This needs a signed-in user (invite-only) and only affects mail to co-members.
+- **Recommended fix:**
+  - In `safeUserText`, NFKC-normalize first, then also replace U+3002, U+FF0E, U+FF61 and U+FE52, and strip U+200E, U+200F, U+202A–U+202E and U+2066–U+2069.
+  - Architect: consider banning bidi controls in the data-model "Text" rule, so the UI is covered too.
+- **Owner:** backend-engineer (architect for the text rule).
+
+## Final pass 2026-11-14 (uncommitted tree against 9adc728)
+Checked against the owner's rulings: fix F-45 in this PR; ban bidi controls at input as well as in mail; defer the restore race. `make audit` passed: Semgrep 0 findings; osv the same two moderates; gitleaks and zizmor clean. `make check` passes (db 141 tests in 12 files, including mfa-attempts and text-rule against Postgres; backend 283 tests). `make image-smoke` passed.
+
+### F-45: fixed and verified
+- **DAL**
+  - `reserveSessionMfaAttempt` and `reserveTokenMfaAttempt` use one `UPDATE … WHERE mfa_failed_attempts < 5 AND open RETURNING`. Concurrent callers each re-evaluate after the other commits, so at most 5 checks ever run.
+  - `fail*` deletes the row only once the count reaches 5 (`deleted`/`invalidated` is true for exactly one caller).
+  - `release*` decrements and never goes below 0.
+  - All of these refuse to run inside `dal.transaction`, because a rollback would refund the slot.
+  - The 50-way tests on real Postgres pass.
+- **Backend**
+  - `verifySecondFactor` reserves the context slot, then charges the user budget first (hit, then sum).
+  - The k-th concurrent charge sees at least k, so outstanding failures plus in-flight attempts can never exceed 20, and failures are never refunded.
+  - Successes, refusals and errors refund both reservations into the window they were charged to.
+  - `check()` returns false on every wrong-factor path: decrypt and verification errors are caught, and the TOTP length is fixed by the schema. So an attacker cannot turn a wrong guess into a refunded "error"; only DB failures throw.
+  - Reauth (password and factor) and TOTP confirm now count the attempt first.
+  - The `mfa_locked` notice is deduplicated with its own atomic counter.
+- **Accepted trade-off:** in a parallel burst, the failure that brings the counter to 5 deletes the session or token while a correct attempt may still be in flight.
+  - That attempt then gets 401 or `TOKEN_INVALID`, and its factor is consumed (a TOTP step, a passkey challenge, or a recovery code).
+  - It fails closed, and only an attacker or a deliberate burst triggers it. A double-submitted single code uses 2 of the 5 slots and does not trigger it.
+- **`completePasswordReset` without the count check:** correct and still cannot bypass MFA.
+  - The 5th failure deletes the row, so a token with 5 real failures no longer exists.
+  - The DAL still requires the token to be unused and unexpired, under `FOR UPDATE`.
+  - The backend still requires a verified factor whenever `mfa.enabled`.
+  - Enrolling a factor deletes open tokens (F-01), so the reset cannot complete with a stale "no MFA" read.
+
+### F-46, F-47, F-48: fixed and verified
+- **F-46**
+  - Entries expire by window end. The sweep runs on an unref'd one-minute timer and never on a request. The map is capped at 50,000 by evicting the oldest.
+  - Residual (accepted): with 50,000 or more distinct keys inside one window, eviction lets the evicted keys start again at zero. That is no worse than IP rotation already is. The F-45 fix no longer depends on the in-memory writes limit.
+- **F-47**
+  - Backend `files: ["dist"]`. The Dockerfile copies only package.json, dist and node_modules. The tripwire fails if an entry is missing or if grep errors.
+  - `image-smoke.sh` scans all of /app for the sentinel with the image's own node, enforces the allowlist, checks the config refusals and probes `_test` (404).
+  - Credentials reach containers as `-e NAME` only.
+  - Caveat for ci-engineer, not a finding: `image_tag` reuses `<sha>-dirty` for any dirty tree. My smoke run reused an image built at 01:05, before the 09:13 backend edits. The structure checks are still valid, because that Dockerfile was in place; CI builds a clean tag per commit. Consider adding a tree hash to dirty tags.
+- **F-48**
+  - `text()` rejects U+061C, U+200E, U+200F, U+202A–U+202E and U+2066–U+2069; ZWJ stays allowed.
+  - Migration 20261114000100 adds the same rule to `is_clean_text`. It first refuses to run if existing rows would violate the rule, reporting counts only. Its down section is the original definition, which I diffed.
+  - Mail text is NFKC-normalized first, bidi controls are stripped, and every dot look-alike becomes U+2E31, `/` becomes U+2215, `:` becomes U+02D0 and `@` becomes "(at)".
+  - I checked that each replacement is NFKC-stable and that `new URL()` keeps the result as one punycode label: no dot and no path.
+
+### Earlier image exposure (F-10, F-47)
+- **Assessment:** the pre-fix image did contain `src/test-hooks.ts` and `src/dev-server.ts`, and Node 24 would start loading them. They could not have registered hooks, for three reasons:
+  - The module graph needs `@shoestring/db/testing`, which db's `files` excludes.
+  - The image sets `NODE_ENV=production`, under which config refuses `TEST_HOOKS=1`.
+  - The origin guard requires a localhost or `.test` origin.
+
+  Running it needed an operator override of both the command and the environment, and no image has been deployed yet.
+- **Conclusion:** no exposure occurred, and the severity of F-10 and F-47 does not change. F-47 was exactly this gap and is now closed, and the image-level checks move F-10 to verified.
+
+### Other fixes: verified
+- `TRUST_PROXY_HOPS` must be at least 1 in production (config, plus the image-smoke refusal).
+- Rolldown `UNRESOLVED_IMPORT` is fatal, so a silently externalized import can no longer crash the image at runtime.
+- The inline `nosemgrep` with its reason is on validation.ts:19, and Semgrep now reports 0 findings.
+
+### F-49 Low (new, deferred by the owner 2026-11-14): deleted-budget restore races the owner's deletion request
+- **Location:** db/src/scope.ts `requireDeletedBudgetOwnership` (`u.status = 'active'` in the same statement as `FOR UPDATE OF b`); db/src/repos/budgets.ts `restoreDeletedBudget` (`lockUser(tx, id)` result not checked).
+- **Scenario:**
+  1. The owner (or someone holding their session) sends `POST /me/deleted-budgets/{id}/restore` at the same moment as `POST /me/deletion`.
+  2. The deletion request locks every owned budget, including the soft-deleted one, and commits `pending_deletion`. The F-35 shared check ignores deleted budgets, so it succeeds.
+  3. The restore was waiting on the budget lock. Under READ COMMITTED, the re-check after the wait re-reads only the locked `b` row. The joined `u.status` comes from the statement's original snapshot, so it still reads `active`.
+  4. `lockUser` then returns `pending_deletion`, but nothing checks it, so the restore commits.
+- **Effect:** a live budget, possibly shared, is owned by an account pending deletion, and its members regain access and get the restore notice. The daily purge then skips the user and fails its run (F-25), which alerts the owner, until the user cancels the deletion or ownership is fixed by hand. The race is self-inflicted (both requests come from the owner's own session), visible, and leaks no data.
+- **Recommended fix:**
+  - After `lockUser(tx, scope.userId)` in `restoreDeletedBudget`, require `status = 'active'`, else NOT_FOUND. This is the data-model.md lock-order rule.
+  - Add a test in both orders with lock-waiter gates, like the transfer race tests.
+- **Owner:** data-engineer. Status: deferred to a later PR by the owner (2026-11-14); fix before launch.
+

@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=24 <25"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "node --watch src/dev-server.ts",
     "start": "node dist/server.js",

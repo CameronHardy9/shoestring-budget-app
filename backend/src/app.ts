@@ -193,6 +193,10 @@ export async function buildApp(
     : false;
   if (options.extend) await options.extend(app);
 
+  app.addHook("onClose", () => {
+    deps.limiter.close();
+  });
+
   app.setNotFoundHandler((req, reply) => {
     if (hasStatic && wantsSpaFallback(req)) return sendIndex(reply);
     return sendError(deps, req, reply, new ApiError("NOT_FOUND"));

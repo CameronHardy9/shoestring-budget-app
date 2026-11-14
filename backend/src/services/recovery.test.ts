@@ -57,9 +57,17 @@ function harness(dal: DalOverrides = {}, calls: string[] = []) {
               ? resetToken
               : null,
           ),
-        recordTokenMfaFailure: () => {
+        reserveTokenMfaAttempt: () => {
+          calls.push("reserve");
+          return Promise.resolve({ granted: true, attempt: 1 });
+        },
+        failTokenMfaAttempt: () => {
           calls.push("tokenFailure");
-          return Promise.resolve({ attempts: 1, invalidated: false });
+          return Promise.resolve({ attempts: 1, invalidated: false, open: true });
+        },
+        releaseTokenMfaAttempt: () => {
+          calls.push("release");
+          return Promise.resolve();
         },
         completePasswordReset: (_h: Buffer, hash: string) => {
           calls.push(`complete:${hash}`);
@@ -192,7 +200,7 @@ describe("password reset verify and complete (never bypasses MFA)", () => {
       },
     });
     expect(json(bad).code).toBe("MFA_FAILED");
-    expect(calls).toEqual(["tokenFailure"]);
+    expect(calls).toEqual(["reserve", "tokenFailure"]);
     const code = totpCode(secret, stepAt(h.clock.now()));
     const ok = await h.req("POST", "/api/auth/password-reset/complete", {
       body: {

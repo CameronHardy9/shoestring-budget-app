@@ -49,37 +49,69 @@ export function rateLimited(retryAfterSeconds: number): ApiError {
   return new ApiError("RATE_LIMITED", { retryAfterSeconds });
 }
 
-/** In-memory fixed-window counters (global and writes rows). */
+/** In-memory fixed-window counters (global and writes rows), F-46-safe. */
 export class MemoryLimiter {
-  private readonly counts = new Map<string, { start: number; n: number }>();
+  /** Map order = insertion order, so the first entry is the oldest. */
+  private readonly counts = new Map<string, { end: number; n: number }>();
   private readonly clock: AppClock;
-  constructor(
-    clock: AppClock,
-  ) {
+  private readonly maxEntries: number;
+  private readonly timer: NodeJS.Timeout;
+
+  constructor(clock: AppClock, options: { maxEntries?: number; sweepMs?: number } = {}) {
     this.clock = clock;
+    this.maxEntries = options.maxEntries ?? 50_000;
+    // Expired windows are dropped on a timer, never by scanning on a request.
+    this.timer = setInterval(() => {
+      this.sweep();
+    }, options.sweepMs ?? MINUTE);
+    this.timer.unref();
   }
 
   /** Counts one hit; throws RATE_LIMITED when the window is over `limit`. */
   hit(scope: string, key: string, limit: number, windowMs: number): void {
     const now = this.clock.now().getTime();
-    const start = windowStart(now, windowMs);
     const id = `${scope}\0${key}`;
-    const cur = this.counts.get(id);
-    const entry = cur?.start === start ? cur : { start, n: 0 };
+    let entry = this.counts.get(id);
+    if (!entry || entry.end <= now) {
+      if (entry) this.counts.delete(id); // re-insert at the end (newest)
+      entry = { end: windowStart(now, windowMs) + windowMs, n: 0 };
+      // Hard cap: evict the oldest entries rather than grow without bound.
+      while (this.counts.size >= this.maxEntries) {
+        const oldest = this.counts.keys().next().value;
+        if (oldest === undefined) break;
+        this.counts.delete(oldest);
+      }
+      this.counts.set(id, entry);
+    }
     entry.n++;
-    this.counts.set(id, entry);
-    if (this.counts.size > 10_000) this.sweep(now);
-    if (entry.n > limit) throw rateLimited(retryAfter(now, windowMs));
+    if (entry.n > limit) throw rateLimited(Math.max(1, Math.ceil((entry.end - now) / 1000)));
+  }
+
+  /** Drops every entry whose window has ended. */
+  sweep(): void {
+    const now = this.clock.now().getTime();
+    for (const [k, v] of this.counts) if (v.end <= now) this.counts.delete(k);
+  }
+
+  get size(): number {
+    return this.counts.size;
   }
 
   clear(): void {
     this.counts.clear();
   }
 
-  private sweep(now: number): void {
-    for (const [k, v] of this.counts)
-      if (v.start + DAY < now) this.counts.delete(k);
+  close(): void {
+    clearInterval(this.timer);
   }
+}
+
+/** A counted attempt, refundable into the exact window it was charged to (F-45). */
+export interface Reservation {
+  readonly key: ThrottleKey;
+  readonly windowStart: Date;
+  /** Count after this attempt (rolling: summed over the whole span). */
+  readonly count: number;
 }
 
 /** Persistent counters over the DAL's auth_throttles. */
@@ -143,6 +175,31 @@ export class Throttles {
 
   clear(key: ThrottleKey): Promise<void> {
     return this.dal.throttles.clearThrottle(key);
+  }
+
+  /**
+   * Race-safe attempt counting (F-45): the attempt is counted first, with the
+   * atomic upsert, and the caller compares the returned count to its limit.
+   * Concurrent attempts each see a distinct, increasing count, so at most
+   * `limit` of them can pass.
+   */
+  async reserve(key: ThrottleKey, windowMs: number): Promise<Reservation> {
+    const start = new Date(windowStart(this.clock.now().getTime(), windowMs));
+    return { key, windowStart: start, count: await this.dal.throttles.hitThrottle(key, start) };
+  }
+
+  /** As reserve(), over a rolling span of hourly buckets. */
+  async reserveRolling(key: ThrottleKey, spanMs: number): Promise<Reservation> {
+    const now = this.clock.now().getTime();
+    const start = new Date(windowStart(now, HOUR));
+    await this.dal.throttles.hitThrottle(key, start);
+    const count = await this.dal.throttles.sumThrottle(key, new Date(windowStart(now, HOUR) - spanMs + HOUR));
+    return { key, windowStart: start, count };
+  }
+
+  /** Refunds a reservation (success, or refused without a check) into its own window. */
+  async release(r: Reservation): Promise<void> {
+    await this.dal.throttles.hitThrottle(r.key, r.windowStart, -1);
   }
 
   /** Throws RATE_LIMITED when `count >= limit` for the fixed window. */

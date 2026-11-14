@@ -1,6 +1,6 @@
 ---
 name: project-security-rulings
-description: Security-reviewer rulings on Shoestring's MVP design (2026-11-12) and the reasons for each, so later reviews do not reopen or contradict them
+description: Security-reviewer rulings on Shoestring's MVP design and code reviews (2026-11-12 to 2026-11-14) and the reasons for each, so later reviews do not reopen or contradict them
 metadata:
   type: project
 ---
@@ -41,4 +41,15 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - `purge_security_events()` with `search_path = pg_catalog, public, pg_temp` and the DB clock is fine as is; don't reopen it.
   - The osv advisory for minimatch 10.2.6 (dev-only, via eslint) is not exploitable; just bump it.
 
+- **Backend code review 2026-11-14 (`feat/backend-api`): OK to merge**, no Critical or High findings. New F-45 (Medium, fix before launch) and F-46 to F-48 (Low).
+  - Accepted: the email daily budget keyed by a constant SHA-256 instead of an HMAC. It holds no PII, has its own scope, and survives rotation.
+  - Ruled not exploitable: the `acceptInvitation` owner-status read, serialized by the budget row lock.
+  - Ruled false positives: Semgrep `prototype-pollution-loop` on `valueAt` (suppress inline), and osv glob/minimatch. glob is a *prod* dependency via @fastify/static, but its patterns are fixed and no signal is passed.
+  - The strict fake DAL is fine for backend unit tests. F-18 and F-36 stay `contract-fixed` until test-engineer's generated permission-matrix tests exist (a launch gate, not a merge gate).
+  - Rotating keyring `current` resets every HMAC'd throttle counter. This is a note for sre, not a finding.
+
+  - **Final pass 2026-11-14:** the owner ruled F-45 fixed in this PR and bidi controls banned at input (API plus DB `is_clean_text`). F-45 to F-48 are verified, and F-10 is verified at image level (post-deploy probe pending sre).
+    - Accepted trade-off: in a parallel burst, the failure that reaches 5 deletes the session or token while a correct attempt is in flight. It fails closed and burns that factor.
+    - **F-49 (Low): restore vs the owner's deletion race, deferred by the owner 2026-11-14.** Fix: re-check status after `lockUser` in `restoreDeletedBudget`. Fix it before launch.
+    - The earlier image shipping `src/` was ruled no exposure: the `db/testing` import is missing, `NODE_ENV=production` refuses `TEST_HOOKS`, and nothing was ever deployed.
 Related: [[project-review-hotspots]]

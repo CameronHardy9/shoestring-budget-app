@@ -564,6 +564,80 @@ describe("invitations", () => {
     if (!acceptedFirst)
       expect(accept.reason).toMatchObject({ code: "INVITATION_INVALID" });
   });
+
+  // The same race, each order forced (the budget lock is the only lock
+  // acceptInvitation takes on the owner's side; see the comment there).
+  it("an acceptance waiting on the owner's deletion request gets INVITATION_INVALID", async () => {
+    const owner = await newUser(t.dal);
+    const invitee = await newUser(t.dal);
+    const f = await newBudget(t.dal, owner.userId);
+    const { invitation } = await t.dal.invitations.createBudgetInvitation(
+      f.scope,
+      invitee.email,
+    );
+    const requested = gate();
+    const hold = gate();
+    const deletion = t.dal.transaction(async (tx) => {
+      await tx.users.requestAccountDeletion(owner.userId);
+      requested.open();
+      await hold.promise;
+    });
+    await requested.promise;
+    const accept = Promise.allSettled([
+      t.dal.invitations.acceptInvitation(invitee.userId, invitation.id),
+    ]);
+    await waitForLockWaiters(t.admin); // blocked on the budget row
+    hold.open();
+    await deletion;
+    const [result] = await accept;
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: { name: "DalError", code: "INVITATION_INVALID" },
+    });
+    expect(await t.dal.users.getMe(owner.userId)).toMatchObject({
+      status: "pending_deletion",
+    });
+    const members = await t.admin.query(
+      "select user_id from budget_members where budget_id = $1",
+      [f.budget.id],
+    );
+    expect(members.rows).toEqual([{ user_id: owner.userId }]);
+  });
+
+  it("the owner's deletion request waiting on an acceptance gets OWNS_SHARED_BUDGET", async () => {
+    const owner = await newUser(t.dal);
+    const invitee = await newUser(t.dal);
+    const f = await newBudget(t.dal, owner.userId);
+    const { invitation } = await t.dal.invitations.createBudgetInvitation(
+      f.scope,
+      invitee.email,
+    );
+    const accepted = gate();
+    const hold = gate();
+    const accept = t.dal.transaction(async (tx) => {
+      await tx.invitations.acceptInvitation(invitee.userId, invitation.id);
+      accepted.open();
+      await hold.promise;
+    });
+    await accepted.promise;
+    const deletion = Promise.allSettled([
+      t.dal.users.requestAccountDeletion(owner.userId),
+    ]);
+    await waitForLockWaiters(t.admin); // blocked on the budget row
+    hold.open();
+    await accept;
+    const [result] = await deletion;
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: { name: "DalError", code: "OWNS_SHARED_BUDGET" },
+    });
+    expect(await t.dal.users.getMe(owner.userId)).toMatchObject({
+      status: "active",
+      deletion: null,
+    });
+    const scope = await t.dal.requireMembership(invitee.userId, f.budget.id);
+    expect(scope.role).toBe("member");
+  });
 });
 
 describe("categories", () => {

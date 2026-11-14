@@ -192,14 +192,34 @@ describe("sessions", () => {
     ).toBeNull();
 
     const p2 = await session(userId, "mfa_pending");
-    for (let i = 1; i <= 4; i++)
-      expect(await t.dal.sessions.recordSessionMfaFailure(p2.id)).toEqual({
+    for (let i = 1; i <= 4; i++) {
+      expect(await t.dal.sessions.reserveSessionMfaAttempt(p2.id)).toEqual({
+        granted: true,
+        attempt: i,
+      });
+      expect(await t.dal.sessions.failSessionMfaAttempt(p2.id)).toEqual({
         attempts: i,
         deleted: false,
+        open: true,
       });
-    expect(await t.dal.sessions.recordSessionMfaFailure(p2.id)).toEqual({
+    }
+    expect(await t.dal.sessions.reserveSessionMfaAttempt(p2.id)).toEqual({
+      granted: true,
+      attempt: 5,
+    });
+    expect(await t.dal.sessions.failSessionMfaAttempt(p2.id)).toEqual({
       attempts: 5,
       deleted: true,
+      open: false,
+    });
+    expect(await t.dal.sessions.reserveSessionMfaAttempt(p2.id)).toEqual({
+      granted: false,
+      reason: "invalid",
+    });
+    expect(await t.dal.sessions.failSessionMfaAttempt(p2.id)).toEqual({
+      attempts: 0,
+      deleted: false,
+      open: false,
     });
     await expectPgError(
       t.app.query(
@@ -273,14 +293,19 @@ describe("password reset and F-01", () => {
 
     const third = hash32();
     const issued = await t.dal.tokens.issuePasswordResetToken(userId, third);
-    for (let i = 1; i < 5; i++)
+    for (let i = 1; i <= 5; i++) {
       expect(
-        (await t.dal.tokens.recordTokenMfaFailure(issued.tokenId)).invalidated,
-      ).toBe(false);
-    expect(await t.dal.tokens.recordTokenMfaFailure(issued.tokenId)).toEqual({
-      attempts: 5,
-      invalidated: true,
-    });
+        await t.dal.tokens.reserveTokenMfaAttempt(issued.tokenId),
+      ).toEqual({ granted: true, attempt: i });
+      expect(await t.dal.tokens.failTokenMfaAttempt(issued.tokenId)).toEqual(
+        i < 5
+          ? { attempts: i, invalidated: false, open: true }
+          : { attempts: 5, invalidated: true, open: false },
+      );
+    }
+    expect(await t.dal.tokens.reserveTokenMfaAttempt(issued.tokenId)).toEqual(
+      { granted: false, reason: "invalid" },
+    );
     await expectDalError(
       t.dal.tokens.completePasswordReset(third, fakePasswordHash()),
       "TOKEN_INVALID",
@@ -543,6 +568,56 @@ describe("MFA", () => {
       t.dal.mfa.regenerateRecoveryCodes(userId, codes()),
       "MFA_NOT_ENABLED",
     );
+  });
+
+  it("getMfaDetail: totpConfirmedAt is the confirmation instant, null while pending or removed", async () => {
+    const { userId } = await newUser(t.dal);
+    expect(await t.dal.mfa.getMfaDetail(userId)).toEqual({
+      enabled: false,
+      totp: false,
+      totpConfirmedAt: null,
+      passkeyCount: 0,
+      passkeys: [],
+      recoveryCodesRemaining: 0,
+    });
+    await t.dal.mfa.beginTotpSetup(userId, {
+      keyId: "k1",
+      ciphertext: hash32(),
+    });
+    const pending = await t.dal.mfa.getMfaDetail(userId);
+    expect(pending.totp).toBe(false);
+    expect(pending.totpConfirmedAt).toBeNull(); // a setup in progress is not a factor
+    t.clock.advance(3 * MINUTE_MS);
+    const confirmedAt = t.clock.clock();
+    await t.dal.mfa.confirmTotpSetup(userId, {
+      step: 1,
+      recoveryCodes: codes(),
+    });
+    t.clock.advance(HOUR_MS); // later reads and uses must not move it
+    expect(await t.dal.mfa.useTotpStep(userId, 2)).toBe(true);
+    const detail = await t.dal.mfa.getMfaDetail(userId);
+    expect(detail).toMatchObject({ enabled: true, totp: true });
+    expect(detail.totpConfirmedAt).toBeInstanceOf(Date);
+    expect(detail.totpConfirmedAt?.toISOString()).toBe(
+      confirmedAt.toISOString(),
+    );
+    // Other users' TOTP never shows up.
+    const other = await newUser(t.dal);
+    expect((await t.dal.mfa.getMfaDetail(other.userId)).totpConfirmedAt).toBe(
+      null,
+    );
+    // Inside a caller's transaction it reads through that transaction.
+    await t.dal.transaction(async (tx) => {
+      expect((await tx.mfa.getMfaDetail(userId)).totpConfirmedAt).toEqual(
+        confirmedAt,
+      );
+    });
+    await t.dal.mfa.removeTotp(userId);
+    expect(await t.dal.mfa.getMfaDetail(userId)).toMatchObject({
+      totp: false,
+      totpConfirmedAt: null,
+    });
+    t.clock.set(START);
   });
 
   it("TOTP setup expires after 15 minutes", async () => {

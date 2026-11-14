@@ -159,8 +159,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (production && !hibpEnabled)
     throw new ConfigError("HIBP_ENABLED=false is refused in production");
 
-  if (production && e.TRUST_PROXY_HOPS === undefined)
-    throw new ConfigError("TRUST_PROXY_HOPS is required in production");
+  // auth.md §14: Cloud Run always has the Google front end in front, so 0 would
+  // put every user in the front end's IP bucket (owner ruling, 2026-11-14).
+  if (production && (e.TRUST_PROXY_HOPS === undefined || e.TRUST_PROXY_HOPS < 1))
+    throw new ConfigError("TRUST_PROXY_HOPS is required in production and must be at least 1");
 
   // Passkeys are bound to the RP ID; it must be APP_ORIGIN's host (ADR-0007).
   if (e.WEBAUTHN_RP_ID !== undefined && e.WEBAUTHN_RP_ID !== origin.hostname)

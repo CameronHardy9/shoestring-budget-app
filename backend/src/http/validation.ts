@@ -10,10 +10,13 @@ type Issue = z.core.$ZodIssue;
 
 function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
   let cur: unknown = input;
+  // Read-only traversal, each step guarded by Object.hasOwn; nothing is ever
+  // assigned into an object, so prototype pollution is impossible
+  // (false positive confirmed by security-reviewer, 2026-11-14).
   for (const key of path) {
     if (typeof cur !== "object" || cur === null || !Object.hasOwn(cur, key))
       return undefined;
-    cur = (cur as Record<PropertyKey, unknown>)[key];
+    cur = (cur as Record<PropertyKey, unknown>)[key]; // nosemgrep: javascript.lang.security.audit.prototype-pollution.prototype-pollution-loop.prototype-pollution-loop
   }
   return cur;
 }
@@ -93,12 +96,15 @@ export function codePoints(s: string): number {
 const EDGE_SPACE = /^[\s\u200b]+|[\s\u200b]+$/g;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+// Bidi controls (F-48, data-model.md "Text"): they let text render differently
+// from what it is. U+200D (ZWJ, emoji) stays allowed; U+200B is whitespace.
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
 /** Trimmed, NFC, no control characters, min..max code points (data-model.md "Text"). */
 export function text(min: number, max: number) {
   return z.string().transform((raw, ctx) => {
     const v = raw.normalize("NFC").replace(EDGE_SPACE, "");
-    if (CONTROL.test(v)) {
+    if (CONTROL.test(v) || BIDI.test(v)) {
       custom(ctx, "invalid_value");
       return z.NEVER;
     }

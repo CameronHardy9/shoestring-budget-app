@@ -67,3 +67,15 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Production migrate job + restore.md step 5 (roles.sql as DB owner) | **Deferred to the pre-deploy pass** (ci-engineer + sre). |
 | Pacing | **Each area waits for the owner's merge** before the next area's branch starts from `main`. |
 | Security review of db/ | No Critical/High. F-41 (Medium) and F-42–F-44 (Low) fixed in the same PR. |
+
+## Build round 2: backend (2026-11-14)
+| Topic | Decision |
+|---|---|
+| Architect contract revision (auth.md rev 4, errors.md, data-model.md, test-hooks.md, OpenAPI global rules) ratifying the backend's choices | **Approved.** |
+| Deleted-budget restore race (restore can revive a shared budget whose owner just requested deletion; purge alert catches it) | **Deferred** to a later PR; tracked as a security finding. |
+| `TRUST_PROXY_HOPS` in production | **Refuse 0** (must be at least 1). |
+| Email the owner when a member leaves on their own | **No** (the member list shows it). |
+| "Account created" notice on sign-up | **No** (the invite link already proves the mailbox). |
+| F-45 (Medium, MFA failure limits can be raced) | **Fix in the backend PR**, before merge. |
+| Owner of `.env.example` | **ci-engineer** (added to the CLAUDE.md table). |
+| F-48 follow-up: Unicode bidi controls in user text | **Banned at input** (API 400 + database `is_clean_text`), and also stripped in emails. U+200D (emoji) stays allowed. |

@@ -19,6 +19,8 @@ export const LIMITS = {
   passkeysPerUser: 10,
   activeSessionsPerUser: 20,
   pendingSessionsPerUser: 5,
+  /** Second-factor attempts per mfa_pending session and per reset token (F-45). */
+  mfaAttemptsPerSessionOrToken: 5,
   maxAmountCents: 100_000_000,
   deletedBudgetsListed: 20,
 } as const;
