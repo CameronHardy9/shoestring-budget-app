@@ -22,3 +22,5 @@ Traps found while writing the initial migrations (2026-11-13); all are now cover
 
 **Why:** each cost a debugging round; the contract's literal wording (RESTRICT) does not work with its own cascade rules.
 **How to apply:** check these before writing new triggers, FKs with cascades, or down sections. Related: [[schema-conventions]].
+
+- Postgres checks CHECK constraints on the proposed INSERT row before ON CONFLICT DO UPDATE resolves, so a negative upsert against `CHECK (n >= 0)` always fails with 23514; refunds must be a plain UPDATE (fixed in fix/throttle-refund, 2026-11-14).

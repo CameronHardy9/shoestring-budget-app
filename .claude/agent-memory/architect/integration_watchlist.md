@@ -15,6 +15,7 @@ Check these first in integration-review mode:
 - user_tokens deletion on every revocation event (except email_change_cancel); split-sum and one-owner deferred triggers; FOR UPDATE locks on deletion/accept/transfer.
 - Owner-status rule (data-model "Lock order"): after a budget FOR UPDATE, user status must be re-read in a *later* statement. A status read joined into the locking statement is stale in READ COMMITTED when the other tx only locked the row (found in restore, 2026-11-14).
 - Email `kind` vocabulary and link paths are a closed list in auth.md §15; diff backend `EmailKind`/`LINK_PATHS` against it.
+- CSP `style-src` carries two React Aria sha256 hashes (owner ruling 2026-11-14). Backend header vs frontend `STYLE_SRC` must match; test-engineer owns the cross-area comparison test. Rejected: `style-src-elem` split (Safari 15.4+, no gain), `'unsafe-inline'`, nonces.
 - Split→category FK is deferred NO ACTION (purge cascade); a quick-add racing a category delete fails at COMMIT with 23503 → must be 500 INTERNAL via the F-07 allowlist serializer, never `detail`.
 
 Recurring drift: sre docs lag on env var names (rev 2 renamed DATABASE_MIGRATOR_URL→MIGRATOR_DATABASE_URL, RELEASE→APP_RELEASE) and on DMARC target (p=reject). Grep infra/ and docs/runbooks/ after any config rename.

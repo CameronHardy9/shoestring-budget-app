@@ -5,7 +5,7 @@ This is a tailored subset of OWASP ASVS 5.0 at Level 2, grouped by ASVS chapter,
 
 Status: `todo` · `done` (with a PR or commit reference) · `n/a` (with a reason). `F-xx` refers to FINDINGS.md.
 
-Revision: 2026-11-13 (ops review: F-38 to F-40). Updated for contract revision 2: ADR-0007 hosting, ADR-0008 pnpm, ADR-0009 test hooks, ADR-0010 lifecycle, and the new findings F-33 to F-36.
+Revision: 2026-11-14 (frontend review: C3.1 CSP style hashes signed off; F-50 to F-54). Earlier: 2026-11-13 (ops review: F-38 to F-40). Updated for contract revision 2: ADR-0007 hosting, ADR-0008 pnpm, ADR-0009 test hooks, ADR-0010 lifecycle, and the new findings F-33 to F-36.
 
 ## V1 Encoding and sanitization
 | ID | Requirement | Owner | Verified by | Status |
@@ -31,7 +31,7 @@ Revision: 2026-11-13 (ops review: F-38 to F-40). Updated for contract revision 2
 ## V3 Web frontend security
 | ID | Requirement | Owner | Verified by | Status |
 |---|---|---|---|---|
-| C3.1 | CSP exactly as in ARCHITECTURE.md (`script-src 'self'`, no `unsafe-inline`/`unsafe-eval`), exact Sentry ingest host, `report-to` (F-23) | backend-engineer (header), frontend-engineer (compatibility) | e2e fails on any `securitypolicyviolation` | todo |
+| C3.1 | CSP exactly as in ARCHITECTURE.md (`script-src 'self'`, no `unsafe-inline`/`unsafe-eval`/nonce; `style-src 'self'` plus **exactly** React Aria's two sha256 hashes, owner ruling and security sign-off 2026-11-14), exact Sentry ingest host, `report-to` (F-23) | backend-engineer (header), frontend-engineer (compatibility and hash drift test), test-engineer (e2e and drift contract test) | backend pin/guard/drift tests and frontend hash recompute (done, 371b77c); e2e fails on any `securitypolicyviolation`; image-smoke checks the SPA document (F-53) | partial: header and sign-off done 371b77c; e2e gate, tests/ drift test and `report-to` (once `SENTRY_DSN` is set) todo |
 | C3.2 | Headers on every response: HSTS (1 year, includeSubDomains), nosniff, `Referrer-Policy: no-referrer`, COOP same-origin, CORP same-origin, `frame-ancestors 'none'` plus `X-Frame-Options: DENY`, Permissions-Policy | backend-engineer | integration test over every route | todo |
 | C3.3 | Cookie: `__Host-ss_sid; Path=/; Secure; HttpOnly; SameSite=Strict`; the backend refuses `COOKIE_SECURE=false` in production | backend-engineer | integration test + config unit test | todo |
 | C3.4 | Service worker precaches only the app shell; `/api/*` is network-only; no API data in Cache Storage, localStorage or IndexedDB (only theme and last budget ID) | frontend-engineer | e2e inspects storage after J2–J4 | todo |

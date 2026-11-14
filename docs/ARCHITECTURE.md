@@ -121,13 +121,19 @@ flowchart LR
   - **Source maps:** uploaded privately by CI.
 - **Security headers (all responses, F-23).**
   - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
-  - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://o<id>.ingest.us.sentry.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; report-to csp`
+  - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=' 'sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg='; img-src 'self' data:; font-src 'self'; connect-src 'self' https://o<id>.ingest.us.sentry.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; report-to csp`
   - `Reporting-Endpoints: csp="<Sentry CSP report URL>"`
   - `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`
   - `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Resource-Policy: same-origin`
   - `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 
-  `connect-src` names the exact Sentry ingest host. Fonts are self-hosted, and there are no third-party scripts. React Aria is preferred for primitives that would otherwise inject `<style>` elements (Radix Dialog scroll lock, ScrollArea). e2e fails on any `securitypolicyviolation`. `script-src` is never relaxed; any style exception needs security sign-off. The backend rejects any `Host` other than the `APP_ORIGIN` host, except on the health endpoints.
+  `connect-src` names the exact Sentry ingest host. There are no third-party scripts. Fonts are self-hosted: the SPA serves Inter (variable) from its own origin, which `font-src 'self'` already allows. e2e fails on any `securitypolicyviolation`. `script-src` is never relaxed. The backend rejects any `Host` other than the `APP_ORIGIN` host, except on the health endpoints.
+
+  **Styles (owner ruling 2026-11-14, security sign-off required on any change).**
+  - React Aria injects two fixed `<style>` blocks at runtime: `usePress` (every pressable) and `usePreventScroll` (open modals on iOS WebKit). `style-src` allows exactly those two by sha256 hash. There is no `'unsafe-inline'`, no nonce, and no other hash.
+  - The hashes go in `style-src`, not `style-src-elem`. A hash never matches a `style="…"` attribute unless `'unsafe-hashes'` is present, so attributes stay blocked. React's `style={…}` writes through CSSOM, which CSP does not govern, so it keeps working. `style-src` with hashes works on every target browser (CSP Level 2, including older iOS Safari); `style-src-elem`/`-attr` need Safari 15.4+ and would add nothing here.
+  - Primitives that inject `<style>` elements with variable content can't be hashed and stay excluded (for example Radix Dialog's scroll lock and ScrollArea).
+  - **Drift rule.** The frontend exports the hashes (`STYLE_SRC` in `frontend/src/security/csp.ts`), and a frontend test recomputes them from the installed react-aria. A React Aria upgrade that changes them fails frontend `make check`. The backend CSP header must then change in the same PR. A test-engineer contract test in `tests/` checks that the backend's `style-src` directive equals `style-src ` + the frontend `STYLE_SRC`.
 - **Config.** Environment variables only, each documented in `.env.example` (ci-engineer maintains the file; backend-engineer supplies the list). The server validates config with zod at startup and fails closed.
   - **Runtime (service):**
     - `NODE_ENV` (required; the production image sets `production`)

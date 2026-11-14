@@ -14,7 +14,8 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   **Why:** TS brands are compile-time only. **How to apply:** in every backend/db diff, check those rules exist and pass.
 - **TOTP field encryption with MFA_ENCRYPTION_KEY: endorsed.** It does not conflict with the owner's "no field-level encryption"; it targets DB-only or backup-only leaks. Recovery codes must get the same protection (an HMAC with an HKDF subkey, not plain SHA-256).
 - **security_events.ip kept 90 days:** recommended accepting it (R-6); app logs keep no IPs or UAs.
-- **CSP:** `script-src` never relaxes. The only style relaxation I would sign off is `style-src-elem 'unsafe-inline'`, and only if React Aria can't replace the Radix parts that inject `<style>` elements.
+- **CSP:** `script-src` never relaxes. **Superseded 2026-11-14:** the owner ruled for `style-src 'self'` plus exactly two sha256 hashes (React Aria `usePress` and `usePreventScroll`), and I signed off in the frontend review. Any new hash, nonce, `'unsafe-hashes'` or `'unsafe-inline'` needs a fresh sign-off. Before signing, recompute hashes from the *shipped bundle* and grep the bundle for every `createElement('style')`. React 19's `<style precedence>` hoisting is the only other one; it is fine while unused.
+- **Frontend review 2026-11-14 (`feat/frontend`): OK to merge**, no Critical or High findings. New Lows F-50 to F-54. Ruled: the service worker can't serve stale code or drop the CSP while online, because navigations are network-first and the cached shell keeps its headers. PR #6 refund clamp does not weaken F-45.
 
 - **Re-review 2026-11-13 deviation rulings (all accepted):**
   1. F-22 inline send with a 700 ms timeout and a fixed 1 s response (Cloud Run throttles CPU after the response).

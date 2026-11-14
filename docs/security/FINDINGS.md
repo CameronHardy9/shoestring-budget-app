@@ -22,6 +22,8 @@ Status values:
 
 **Final pass (2026-11-14, uncommitted tree against 9adc728):** **nothing blocks the PR.** F-45 (the owner ruled: fix it in this PR), F-46, F-47 and F-48 are fixed and verified. F-10 is verified at the image level; the post-deploy probe is still for sre. New Low F-49, the restore race, is **deferred by the owner (2026-11-14)**. Details are under "Final pass" at the end.
 
+**Frontend review (2026-11-14, branch `feat/frontend`, commit 371b77c):** no Critical or High findings, so **nothing blocks the PR**. **CSP style hashes: signed off** (F-23). New Lows F-50 to F-54. PR #6 (throttle refunds) does not weaken F-45. Details are under "Frontend review" at the end.
+
 ## Summary
 | ID | Sev | Owner → implements | Issue (first review) | Status | Note (re-review 2026-11-13) |
 |---|---|---|---|---|---|
@@ -47,7 +49,7 @@ Status values:
 | F-20 | Low | architect → backend | Pending-session eviction; device labels | contract-fixed | Separate caps; fixed `DeviceBrowser`/`DeviceOs` enums |
 | F-21 | Low | architect → backend | Login lockout DoS | contract-fixed | (email, IP) key, 100 per day per-email ceiling with notice, reset clears counters |
 | F-22 | Low | architect → backend | Enumeration timing | contract-fixed | Deviation 1 accepted: inline send, 700 ms timeout, fixed 1 s |
-| F-23 | Low | architect → frontend, backend | CSP and headers | contract-fixed | CORP, XFO, `report-to`, exact Sentry host, Host check, violation gate in e2e |
+| F-23 | Low | architect → frontend, backend | CSP and headers | contract-fixed | CORP, XFO, `report-to`, exact Sentry host, Host check, violation gate in e2e. **Style hashes signed off 2026-11-14** (owner ruling, frontend review): `style-src 'self'` plus React Aria's two fixed sha256 hashes, nothing else. Header verified on API and SPA responses in the built image; the e2e violation gate (C3.1) and the tests/ drift contract test are still to come (test-engineer). Image-smoke gap: F-53 |
 | F-24 | Low | architect → backend | Crypto details | contract-fixed | `APP_KEYRING` accepted; rotate-secret.md's three stages, roll-forward rule, candidate readyz gate and vault-B escrow are correct. The compromise-mode deletion of recovery codes is **not** covered: F-38 |
 | F-25 | Low | architect → data, backend | Deletion/acceptance race | verified | Row locks and purge re-check. The two checks disagree on deleted budgets: F-35. **Verified 2026-11-13** (db tests: acceptance vs deletion request serialized; purge skip-and-fail) |
 | F-26 | Low | architect → data, backend | Audit log | verified | INSERT/SELECT only, `SECURITY DEFINER` purge, new types, `budget_id`; `security-events` command (deviation 6 accepted). **Verified 2026-11-13:** roles.sql verify block plus tests (app cannot UPDATE/DELETE events, function owned by migrator, cascade on user purge) |
@@ -56,7 +58,7 @@ Status values:
 | F-29 | Low | architect → backend, sre | Email content injection, DMARC | contract-fixed | Escaped plain text; DMARC ramps to `p=reject` |
 | F-30 | Low | ci, backend | Hooks on the LAN | contract-fixed | The origin tripwire keeps hooks off LAN origins |
 | F-31 | Low | architect | Invitation list bound | contract-fixed | 20 pending per invitee email; `maxItems: 20` |
-| F-32 | Low | frontend | bfcache after sign-out | contract-fixed | ARCHITECTURE: re-check on `pageshow.persisted` before rendering |
+| F-32 | Low | frontend | bfcache after sign-out | contract-fixed | ARCHITECTURE: re-check on `pageshow.persisted` before rendering. **Implemented 2026-11-14** (auth.tsx: `pageshow.persisted` clears memory and shows loading before re-checking; sign-out does `location.replace('/signin')`); no test yet, so the C3.5 e2e is still needed. Sign-out that fails silently: F-51 |
 | **F-33** | **High** | architect → backend, data | **New (rev 2):** cancelling with a *later* cancel token deleted the victim's earlier one | contract-fixed | auth.md §9 and §14, the OpenAPI descriptions and data-model: an earlier token wins, one change per 24 h (429), both addresses emailed, two regression tests (API, plus a DAL-seeded chain). Verified against the text 2026-11-13 |
 | **F-34** | Medium | architect → backend | **New (rev 2):** new-sign-in notice skipped for a previously seen browser/OS | contract-fixed | auth.md §15: sent on every successful sign-in, no skip rule |
 | F-35 | Low | architect → data | **New (rev 2):** deletion request and purge disagreed on soft-deleted budgets | verified | Same rule (non-deleted) in both; soft-deleted owned budgets are hard-deleted with the owner; the deletion email says so. **Verified 2026-11-13:** one shared function (`lockOwnedBudgetsAndCheckShared`) and tests for both paths |
@@ -74,6 +76,11 @@ Status values:
 | F-47 | Low | ci-engineer, backend-engineer | **New (backend):** the production image contains backend `src/` (test-hooks.ts, dev-server.ts, test support), because `pnpm deploy` copies the whole package | verified | **Verified 2026-11-14:** backend `files: ["dist"]`; the Dockerfile copies only package.json, dist and node_modules; `make image-smoke` passed (allowlist, sentinel absent from all of /app). The earlier exposure is assessed under Final pass |
 | F-48 | Low | backend-engineer (architect for the text rule) | **New (backend):** plain-text defanging misses Unicode dot equivalents and bidi controls in budget and display names | verified | **Verified 2026-11-14:** bidi controls rejected by `text()` and by `is_clean_text` (migration 20261114000100), stripped in mail; NFKC, then replacements that survive NFKC and the URL parser; tests in db and backend |
 | F-49 | Low | data-engineer | **New (final pass):** a deleted-budget restore racing the owner's own deletion request can succeed, because the owner's status is read in the locking statement and never re-read after `lockUser` | deferred | **Deferred by the owner (2026-11-14)** to a later PR; the architect's note is in data-model.md (lock order). Fix before launch |
+| F-50 | Low | frontend-engineer | **New (frontend):** the `#token=` capture does not run first in the production bundle. Shared chunks (API client, app components, libraries) evaluate before it, so the F-06 ordering guarantee depends on where Sentry init lands. Link tokens are also copied into TanStack query keys | open | Not blocking; fix before Sentry is added |
+| F-51 | Low | frontend-engineer | **New (frontend):** sign-out ignores a failed `POST /auth/logout` and shows sign-in anyway. Offline, the server session and cookie stay live on a shared phone | open | Not blocking; fix before launch |
+| F-52 | Low | frontend-engineer | **New (frontend):** the ESLint storage ban (`no-restricted-globals`) does not catch `window.localStorage`, `window.sessionStorage`, `window.indexedDB` or `caches` | open | Not blocking |
+| F-53 | Low | ci-engineer (test-engineer for C3.2) | **New (frontend):** `make image-smoke` checks the security headers only on `/api/healthz`, never on the SPA document where the CSP matters | open | Not blocking; verified by hand on 371b77c |
+| F-54 | Low | frontend-engineer | **New (frontend):** the unsaved quick-add draft and the return path survive a sign-in by a *different* user in the same tab | open | Not blocking |
 
 ## Re-review 2026-11-13: architect deviations
 | # | Deviation | Ruling |
@@ -248,9 +255,10 @@ Status values:
 - **Recommended change:** commit, then queue the email (an in-process queue with retry after the response). Pad to a fixed 1 s measured from the start of the request. Make the provider call timeout shorter than the pad, so a slow send can never stretch the response.
 
 ### F-23 Low: CSP and header details
-- **Location:** ARCHITECTURE.md:72.
+- **Location (first review):** ARCHITECTURE.md:72. **Now:** ARCHITECTURE.md "Security headers" (~124–136); backend/src/http/security-headers.ts:31–40 (`REACT_ARIA_STYLE_HASHES`, `STYLE_DIRECTIVES`); frontend/src/security/csp.ts:10–19.
 - **Notes and recommended change:**
-  - React's `style={…}` writes through CSSOM, which `style-src 'self'` allows. Some Radix parts (Dialog's scroll lock through `react-remove-scroll-bar`, ScrollArea) inject `<style>` elements, which it blocks. Prefer React Aria for those primitives, or confirm each Radix part in an e2e test. Add an e2e assertion that **any `securitypolicyviolation` event fails the test**. If a style exception is unavoidable, the only acceptable relaxation is `style-src-elem 'self' 'unsafe-inline'`, and only with security sign-off. `script-src` never relaxes.
+  - React's `style={…}` writes through CSSOM, which CSP does not govern. Primitives that inject `<style>` elements with *variable* content (Radix Dialog's scroll lock through `react-remove-scroll-bar`, ScrollArea) stay excluded. Add an e2e assertion that **any `securitypolicyviolation` event fails the test**. `script-src` never relaxes.
+  - **Style exception (superseded 2026-11-14).** The first review said the only acceptable relaxation was `style-src-elem 'self' 'unsafe-inline'`. The owner's ruling (mvp-planning/10 "Build round 3") replaced that with something narrower: `style-src 'self'` plus **exactly two sha256 hashes** for React Aria's fixed `<style>` blocks (`usePress`, `usePreventScroll`). No `'unsafe-inline'`, no nonce, no `'unsafe-hashes'`, no other hash. **Security sign-off given 2026-11-14** (frontend review, below). Any change to this directive, including a new hash after a React Aria upgrade, needs security sign-off again.
   - Add `report-to` (Sentry's CSP endpoint) so production violations are seen.
   - `connect-src` names the **exact** Sentry org ingest host (`o<id>.ingest.us.sentry.io`), not a wildcard.
   - Add `Cross-Origin-Resource-Policy: same-origin` and `X-Frame-Options: DENY` (older WebViews).
@@ -722,4 +730,163 @@ Checked against the owner's rulings: fix F-45 in this PR; ban bidi controls at i
   - After `lockUser(tx, scope.userId)` in `restoreDeletedBudget`, require `status = 'active'`, else NOT_FOUND. This is the data-model.md lock-order rule.
   - Add a test in both orders with lock-waiter gates, like the transfer race tests.
 - **Owner:** data-engineer. Status: deferred to a later PR by the owner (2026-11-14); fix before launch.
+
+## Frontend review 2026-11-14: `feat/frontend` (commit 371b77c vs `main`)
+Scope: the whole SPA (`frontend/`), the CSP change in backend/src/http/security-headers.ts, ARCHITECTURE "Security headers", and the already-merged PR #6 (db/src/repos/throttles.ts). `make audit` passes: gitleaks found no leaks (history and working tree), Semgrep found nothing, zizmor found nothing. osv-scanner reports only glob 13.0.7 and minimatch 10.2.6, both already ruled not exploitable. `make image` and `make image-smoke` pass on `shoestring:371b77c2be2b` (clean tree). I also ran the image by hand and probed the SPA responses.
+
+### CSP style hashes: signed off
+**Decision: sign-off given** for `style-src 'self' 'sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=' 'sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg='`, as the owner ruled.
+- **The hashes are right.** I recomputed both from the shipped bundle (`/app/public/assets`), not from the test. `usePress` is `@layer { [data-react-aria-pressable] { touch-action: … } }`; `usePreventScroll` is `@layer { * { overscroll-behavior: contain; } }`. Both are fixed text with no interpolated data.
+- **No other `<style>` source ships.** The only other `createElement('style')` in the bundle is React 19's `<style precedence>` hoisting, which the app never renders. Nothing uses `insertRule`, `adoptedStyleSheets` or `setAttribute('style')`.
+- **Why it is safe.** An injected `<style>` matches a hash only if it holds that exact CSS, so injected markup cannot add attacker CSS (no CSS exfiltration). `'unsafe-hashes'` is absent, so `style="…"` attributes stay blocked. `script-src 'self'` is unchanged.
+- **Guards hold.**
+  - The backend test pins the directive and rejects `'unsafe-*'`, `'nonce-'`, `'strict-dynamic'` and a hash in any other directive.
+  - Another test compares the backend hashes with frontend/src/security/csp.ts.
+  - frontend/scripts/csp-style-hashes.test.ts recomputes the hashes from installed react-aria and react-aria-components.
+  - If React Aria moves the injection to a package that test doesn't scan, it fails closed: the style is blocked and the UI breaks. It never fails open.
+- **Every response carries it.** The header is set in the global `onRequest` hook (backend/src/http/pipeline.ts:117). On the built image, `/`, `/index.html`, a deep-link fallback, `/sw.js` and `/manifest.webmanifest` all carry the full CSP, HSTS, nosniff, XFO, COOP and CORP. A foreign `Host` gets 400 on SPA paths too. `/preview.html` returns 404. `/api/*` never falls back to index.html. The smoke script doesn't assert any of this: F-53.
+- **Launch gates, not merge gates:**
+  - the e2e `securitypolicyviolation` gate (C3.1);
+  - the tests/ contract test that the backend `style-src` equals `style-src ` + `STYLE_SRC` (test-engineer);
+  - `report-to` and the exact Sentry host once `SENTRY_DSN` is set (sre).
+
+### What was checked and holds
+- **CSRF token:** only in a module variable (src/api/session.ts). It is sent on POST, PUT, PATCH and DELETE only, replaced by every AuthState, and cleared on sign-out, 401 and bfcache restore. Requests use `credentials: "same-origin"` and `cache: "no-store"`. A unit test covers it.
+- **Fragment tokens (F-06):**
+  - The fragment is stripped with `replaceState` even when the token is malformed.
+  - The token is format-checked and bound to the path it arrived on.
+  - It is cleared after a successful use, and nothing persists it.
+  - The service worker never sees the fragment.
+  - The ordering guarantee is weaker than its comment says: F-50.
+- **Return path:**
+  - Memory only.
+  - `safeReturnPath` rejects `//`, `/\`, schemes, controls and whitespace, then requires the same origin after URL parsing.
+  - `navigate()` routes every target through it, and `pushState` cannot leave the origin anyway.
+  - No `location.assign/href` sink takes data.
+  - Unsafe targets go to `/`. Not an open redirect. One user-binding gap: F-54.
+- **Auth guard and pending deletion:** auth routes need `signedIn`. An account pending deletion sees only the deletion screen on any auth route. Guest routes redirect signed-in users. The guard is UX only; the server enforces everything.
+- **Re-auth:** every `x-reauth: true` operation the UI calls is wrapped (I compared against the OpenAPI list). The action is retried once, and a second `REAUTH_REQUIRED` propagates. The password stays in component state.
+- **bfcache (F-32):**
+  - `pageshow.persisted` clears the query cache and the CSRF token, sets `loading`, then re-checks.
+  - Sign-out is only reachable from More, Sessions and the deletion screen, so a frozen document never shows a financial screen.
+  - Account deletion and the reset/cancel flows use in-document `forget()`.
+- **WebAuthn:** `@simplewebauthn/browser` is loaded lazily, server options are passed through, the browser enforces the RP ID, and cancels are handled.
+- **TOTP QR:** drawn on the device as SVG paths from `uqr`'s matrix; no image URL and no third-party service. The secret and otpauth URI stay in component state, never in the query cache.
+- **Recovery codes:** shown once from the confirm or regenerate response, held in component state, and dropped on Done or unmount. Copy and the `text/plain` blob download are user actions.
+- **Storage:** localStorage holds only `shoestring.theme` (`light`/`dark`) and `shoestring.lastBudgetId` (UUID-validated on read and write). TanStack Query has no persister. Mutations never auto-retry. The lint gap is F-52.
+- **Service worker:**
+  - Shell only; the precache is fixed at build and never written at runtime.
+  - `/api` and cross-origin requests are never intercepted.
+  - Navigations are network-first, with a cached `index.html` only on network failure.
+  - Old caches are deleted on activate; skip-waiting happens only on the Reload tap.
+  - `updateViaCache: "none"`, and `sw.js`/`index.html` are `no-cache`.
+  - check-dist fails on any `/api` path, `.map` file or missing file in the precache.
+- **Stale code and CSP bypass.** Neither is possible while online:
+  - Every online navigation gets the current deploy's `index.html`, with its CSP and asset names.
+  - The new hashed assets aren't in an old worker's precache, so they come from the network.
+  - An old worker only serves the offline fallback, and the cached `index.html` keeps the CSP headers it was cached with (Cache Storage stores headers).
+  - A waiting worker activates when the user taps Reload or every client closes, so it is never stuck indefinitely.
+- **XSS surface:**
+  - There are no `dangerouslySetInnerHTML`, `innerHTML`, `insertAdjacentHTML`, `eval` or `Function` sinks, and ESLint bans the first two.
+  - Payee, memo, category, budget, display and passkey names render as React text.
+  - `document.title` uses route titles only.
+  - The only hrefs built from data are `/budgets/${id}` with server UUIDs. Route params are UUID-checked.
+  - The CSV export is a blob with a fixed `download` name. Formula escaping is server-side (T35).
+- **Production build:**
+  - Only `index.html` is an entry.
+  - check-dist flags preview files, the preview sentinel, `sourceMappingURL`, inline script or style, and unhashed assets.
+  - On the image: 44 files under `/app/public`, 0 `.map`, 0 preview, no `sourceMappingURL`, no `VITE_*`, no key or DB URL patterns.
+  - The only env read in client code is `import.meta.env.PROD`.
+- **New dependencies:**
+  - All are pinned exact, and the install needed no build scripts (`onlyBuiltDependencies: []` with `strictDepBuilds`).
+  - The 7-day release age, `trustPolicy: no-downgrade` and `blockExoticSubdeps` are unchanged.
+  - `playwright-core` is dev-only and uses a local Chrome.
+  - No new advisories.
+
+### PR #6 (merged): throttle refunds do not weaken F-45
+- Charges still go through the single atomic upsert, so reserve-before-check is unchanged.
+- Refunds (`by < 0`) are a plain `UPDATE … SET count = greatest(count + by, 0)` on the exact `(scope, key_hash, window_start)` and never insert. A refund into a cleared or purged window is a no-op, and the clamp means refunds can never bank credit below zero.
+- Refunds still happen only on success, refusal or error, never on a wrong code.
+- Before the fix, every refund raised 23514 and the request returned 500. That failed closed for limits, but it broke MFA sign-in. Now it works as designed.
+- The new real-Postgres tests include the 50-way burst. **No change to F-45's verified status.**
+
+### F-50 Low (new, frontend): the link-token capture does not run first in the built bundle
+- **Location:**
+  - frontend/src/main.tsx:1–2 and frontend/src/boot/capture-link-token.ts:1–6. The comment says it "runs before any other app module (error tracking included) is evaluated".
+  - Built `assets/index-*.js`: the entry chunk statically imports shared chunks (`States-*`, `AppShell-*`, `useQuery-*` and others), and those evaluate first. For example, `States-*` runs `createApiClient()` (src/api/client.ts:84) at top level before `captureLinkToken` runs. Rolldown doesn't keep strict execution order across chunks.
+  - Also: SignupScreen.tsx:32 (`queryKey: ["signup-preview", token]`) and ResetPasswordScreen.tsx:95 (`["reset-verify", token]`) copy the token into the query cache.
+- **Scenario:**
+  1. When Sentry is added (C16.3), `Sentry.init` may land in a module that ends up in a shared chunk, for example an `observability.ts` imported by both main.tsx and errors.ts.
+  2. Init then runs while `location.hash` still holds `#token=…`.
+  3. The pageload URL and the first navigation breadcrumb carry a live sign-up, reset or email-change token to a third party. Only the `beforeSend` scrub is left, and F-06 asked for two layers.
+  
+  Today nothing reads the hash before the capture, so there is no current exposure.
+- **Recommended fix:**
+  - Load the capture as its own first module script in index.html (`<script type="module" src="/src/boot/capture-link-token.ts">` before main). Module scripts run in document order, and the first one's graph finishes before the second starts. Alternatively, set rolldown `output.strictExecutionOrder: true`.
+  - Add a check-dist assertion that the first module script in `dist/index.html` is the capture chunk, and that it imports only the link-token module.
+  - Keep `Sentry.init` in main.tsx's body, after the imports.
+  - Use fixed query keys with `gcTime: 0` for signup preview and reset verify, so the token lives in one place.
+- **Owner:** frontend-engineer. Not blocking; fix before the Sentry integration.
+
+### F-51 Low (new, frontend): sign-out reports success when the logout request fails
+- **Location:** frontend/src/app/auth.tsx:129–137 (`catch {}`, then `clearAll()` and `location.replace("/signin")`).
+- **Scenario:**
+  1. On a shared phone, the user taps Sign out while offline or on a dropped connection.
+  2. The logout `fetch` rejects, so the server session is not revoked, and the httpOnly cookie, which JavaScript can't clear, stays.
+  3. The new document gets the cached shell and shows "Couldn't reach Shoestring", which looks like being signed out.
+  4. Later, online, whoever opens the app is signed in as that user, with every shared budget readable for up to 30 days (sliding).
+  
+  Online with a 5xx, the boot check signs the user back in visibly, so the hidden case is the offline one. That is the F-32 shared-phone threat.
+- **Recommended fix:**
+  - Treat only a 2xx or a 401 `UNAUTHENTICATED` as signed out.
+  - On any other failure, stay signed in, keep the screen, and show "Couldn't sign out. Check your connection and try again." Do not navigate.
+  - Add a unit test with a rejected fetch and a 503.
+- **Owner:** frontend-engineer. Not blocking; fix before launch.
+
+### F-52 Low (new, frontend): the storage lint ban misses `window.*` and Cache Storage
+- **Location:** frontend/eslint.config.js:56–72.
+- **Problem:** `no-restricted-globals` reports references to the global *identifiers* `localStorage`, `sessionStorage` and `indexedDB`. It does not report property access such as `window.localStorage` (documented ESLint behaviour; ESLint points to `no-restricted-properties` for this). preferences.ts itself uses `window.localStorage`. Page-side `caches` (Cache Storage) is not listed at all.
+  
+  I could not run a probe file through the project's ESLint here (the scratch-copy run was not permitted, and the stdin run reported nothing for any input, so it proved nothing either way). The gap is based on the rule's documented semantics.
+- **Scenario:** a later change persists a draft (payee, memo), a query result or a link token with `window.sessionStorage.setItem(…)` or `caches.open(…)`. `make check` stays green, and financial data lands on a shared phone, contrary to ADR-0002 and C3.4.
+- **Recommended fix:**
+  - Add `no-restricted-properties` for `window`, `globalThis` and `self` × `localStorage`, `sessionStorage`, `indexedDB`, `caches`, and for `document.cookie`.
+  - Add `caches` to `no-restricted-globals`.
+  - Exempt only src/lib/preferences.ts (localStorage) and sw/.
+  - Add a lint fixture test that proves each form is rejected.
+- **Owner:** frontend-engineer. Not blocking.
+
+### F-53 Low (new, frontend/ci): image-smoke never checks the headers on the SPA document
+- **Location:** .github/scripts/image-smoke.sh:182–187 (header loop on `/api/healthz` only), :199–202 (SPA checks assert status 200 only).
+- **Scenario:** a later change serves the SPA another way, for example:
+  - an encapsulated static plugin outside the pipeline hook;
+  - a Cloudflare or static-host fallback;
+  - a `reply.raw` send.
+  
+  `index.html` then ships without the CSP, and every check stays green. The JSON healthz response is where the CSP matters least, and the HTML document is where it matters most. I verified 371b77c by hand; nothing re-checks it.
+- **Recommended fix:**
+  - Run the same header loop against `GET /` with `Accept: text/html`, a deep link and `/sw.js`.
+  - On the document, assert the exact `script-src 'self'` and the exact two-hash `style-src` directive.
+  - test-engineer's C3.2 "every route" integration test should include a static route and the fallback.
+- **Owner:** ci-engineer (smoke), test-engineer (C3.2). Not blocking.
+
+### F-54 Low (new, frontend): the stashed draft and return path are not bound to the user
+- **Location:** frontend/src/screens/budget/TransactionSheet.tsx:63–72 (`stashed`), :338; frontend/src/app/auth.tsx:157–163; frontend/src/lib/return-path.ts:28–40.
+- **Scenario:**
+  1. On a shared household phone, A's session expires or is revoked mid-entry. The quick-add draft (amount, payee, memo, category) is stashed, and A's path is remembered.
+  2. B, a co-member, signs in in the same tab.
+  3. B lands on A's path, and the sheet opens pre-filled with A's unsaved entry, which B can save as B's own.
+  
+  A non-member gets a 404, and the draft is discarded, but they learn A's last budget ID from the URL. The impact is low (co-members share the budget anyway), but unsaved text is shown to another person.
+- **Recommended fix:**
+  - Record `me.id` (from the last signed-in status) with the stash and the return path.
+  - After sign-in, use them only if the new user matches; otherwise discard both.
+  - Add a unit test with two users.
+- **Owner:** frontend-engineer. Not blocking.
+
+### Notes for the frontend-engineer (not security findings)
+- PendingDeletionScreen has no export yet ("arrives in the next update"). auth.md §15 says the deletion screen offers "cancel deletion or export". Track it as a contract gap with the architect.
+- `URL.revokeObjectURL(url)` right after `a.click()` (AccountScreen.tsx:208–213, SecurityScreen.tsx:97–104) can cancel the download in iOS Safari. Revoke it after a timeout instead.
+- Tapping Reload activates the worker, and `clients.claim()` reloads *every* controlled tab through `controllerchange`. Unsaved input in other tabs is lost, against ADR-0002's "never reload on the person's behalf".
+- Two concurrent `useReauth` calls overwrite `pendingRef`. The first promise never settles, so its spinner hangs.
 

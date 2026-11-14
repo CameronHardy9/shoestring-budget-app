@@ -1,0 +1,134 @@
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./fonts.css";
+
+/*
+ * Tailwind theme = the design tokens, and nothing else. `initial` removes the
+ * default palette, radii, shadows and type sizes, so one-off colours such as
+ * bg-blue-500 do not exist. `inline` makes utilities read the --ss-* variables
+ * directly, so a theme switch on <html> (or a subtree) applies everywhere.
+ */
+@theme inline {
+  --color-*: initial;
+  --color-canvas: var(--ss-canvas);
+  --color-surface: var(--ss-surface);
+  --color-sunken: var(--ss-sunken);
+  --color-line: var(--ss-line);
+  --color-line-strong: var(--ss-line-strong);
+  --color-fg: var(--ss-fg);
+  --color-fg-muted: var(--ss-fg-muted);
+  --color-brand: var(--ss-brand);
+  --color-brand-strong: var(--ss-brand-strong);
+  --color-brand-soft: var(--ss-brand-soft);
+  --color-on-brand: var(--ss-on-brand);
+  --color-danger: var(--ss-danger);
+  --color-danger-soft: var(--ss-danger-soft);
+  --color-success: var(--ss-success);
+  --color-success-soft: var(--ss-success-soft);
+  --color-warning: var(--ss-warning);
+  --color-warning-soft: var(--ss-warning-soft);
+  --color-track: var(--ss-track);
+  --color-focus: var(--ss-focus);
+  --color-scrim: var(--ss-scrim);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  /* Inter (self-hosted, fonts.css), then the system UI stack while it loads
+     and for characters outside its latin subset. */
+  --font-*: initial;
+  --font-sans:
+    "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji",
+    "Segoe UI Emoji";
+  /* Codes and keys (recovery codes, the TOTP key): the system monospace. */
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /* Type scale (rem, 16 px base). Inputs are never below text-base (iOS zoom). */
+  --text-*: initial;
+  --text-xs: 0.8125rem; /* 13 */
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.875rem; /* 14 */
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem; /* 16 */
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem; /* 18 */
+  --text-lg--line-height: 1.625rem;
+  --text-xl: 1.25rem; /* 20 */
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem; /* 24 */
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 2rem; /* 32 */
+  --text-3xl--line-height: 2.5rem;
+  --text-display: 2.75rem; /* 44, the quick-add amount */
+  --text-display--line-height: 3.25rem;
+
+  /* Spacing: Tailwind's 4 px grid (p-1 = 4 px, p-4 = 16 px). */
+  --spacing: 0.25rem;
+  /* Minimum touch target (ARCHITECTURE: 44 x 44 px). */
+  --spacing-touch: 2.75rem;
+
+  --radius-*: initial;
+  --radius-sm: 0.375rem; /* 6: small badges */
+  --radius-md: 0.625rem; /* 10: inputs, buttons */
+  --radius-lg: 0.875rem; /* 14: cards */
+  --radius-xl: 1.25rem; /* 20: sheet top corners */
+  --radius-full: 9999px; /* chips, pills */
+
+  --shadow-*: initial;
+  --shadow-1: var(--ss-shadow-1);
+  --shadow-2: var(--ss-shadow-2);
+  --shadow-3: var(--ss-shadow-3);
+}
+
+@layer base {
+  html {
+    background-color: var(--ss-canvas);
+    color: var(--ss-fg);
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    min-height: 100dvh;
+  }
+
+  /*
+   * Focus ring: 2 px in the brand colour with a 2 px gap, on keyboard focus
+   * only. Contrast against canvas and surface is checked in tokens.test.ts.
+   */
+  :focus-visible,
+  [data-focus-visible] {
+    outline: 2px solid var(--ss-focus);
+    outline-offset: 2px;
+  }
+
+  /* Money columns line up. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Top padding that clears the iPhone notch / status bar. */
+@utility pt-safe {
+  padding-top: max(env(safe-area-inset-top), 0.75rem);
+}
+
+/* Bottom padding that clears the iPhone home indicator. */
+@utility pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.25rem);
+}

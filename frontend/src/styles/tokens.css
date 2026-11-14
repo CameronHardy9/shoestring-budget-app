@@ -1,0 +1,111 @@
+/*
+ * Shoestring design tokens. The single source of colour, type, spacing, radius,
+ * elevation and focus values; components use them only through the Tailwind
+ * theme in index.css (bg-surface, text-fg-muted, rounded-lg, shadow-2, ...).
+ *
+ * Theme: light by default; dark follows the phone's setting
+ * (prefers-color-scheme) unless <html data-theme="light|dark"> overrides it
+ * (the manual switch, src/lib/preferences.ts).
+ *
+ * Colours are 6-digit hex on purpose: tokens.test.ts parses this file and fails
+ * if any text/background or UI pair drops below WCAG 2.2 AA, or if the two
+ * dark blocks drift apart.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --ss-canvas: #f4f5f7; /* app background */
+  --ss-surface: #ffffff; /* cards, sheets, bars */
+  --ss-sunken: #edeff2; /* chips, inputs at rest, table stripes */
+  --ss-line: #e0e3e8; /* dividers (decorative, no contrast requirement) */
+  --ss-line-strong: #7d8591; /* input and control borders (>= 3:1) */
+
+  /* Text */
+  --ss-fg: #14161a;
+  --ss-fg-muted: #585f6a;
+
+  /* Brand: indigo (recommended option A) */
+  --ss-brand: #4f46e5;
+  --ss-brand-strong: #4338ca; /* pressed, brand text on brand-soft */
+  --ss-brand-soft: #eef0fe; /* selected chip, active nav pill */
+  --ss-on-brand: #ffffff;
+
+  /* Status: always paired with text or an icon, never colour alone */
+  --ss-danger: #b42318;
+  --ss-danger-soft: #fef1f0;
+  --ss-success: #067647;
+  --ss-success-soft: #e9f7ef;
+  --ss-warning: #a15c07;
+  --ss-warning-soft: #fdf4e3;
+
+  /* Charts */
+  --ss-track: #e2e5ea; /* empty part of a bar */
+
+  /* Focus ring and overlay */
+  --ss-focus: #4f46e5;
+  --ss-scrim: rgb(20 22 26 / 0.45);
+
+  /* Elevation */
+  --ss-shadow-1: 0 1px 2px rgb(16 24 40 / 0.06), 0 1px 3px rgb(16 24 40 / 0.08);
+  --ss-shadow-2:
+    0 6px 16px -4px rgb(16 24 40 / 0.12), 0 2px 4px -2px rgb(16 24 40 / 0.06);
+  --ss-shadow-3: 0 -12px 32px -8px rgb(16 24 40 / 0.18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --ss-canvas: #0e1014;
+    --ss-surface: #171a20;
+    --ss-sunken: #21252d;
+    --ss-line: #2a2f38;
+    --ss-line-strong: #6e7682;
+    --ss-fg: #eceef1;
+    --ss-fg-muted: #a3aab5;
+    --ss-brand: #a5acff;
+    --ss-brand-strong: #c3c7ff;
+    --ss-brand-soft: #272b52;
+    --ss-on-brand: #0e1014;
+    --ss-danger: #ff8a7a;
+    --ss-danger-soft: #3a1d1a;
+    --ss-success: #4fd69c;
+    --ss-success-soft: #143024;
+    --ss-warning: #f5b544;
+    --ss-warning-soft: #352a12;
+    --ss-track: #2b3039;
+    --ss-focus: #a5acff;
+    --ss-scrim: rgb(0 0 0 / 0.6);
+    --ss-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --ss-shadow-2: 0 8px 20px -6px rgb(0 0 0 / 0.6);
+    --ss-shadow-3: 0 -12px 32px -8px rgb(0 0 0 / 0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ss-canvas: #0e1014;
+  --ss-surface: #171a20;
+  --ss-sunken: #21252d;
+  --ss-line: #2a2f38;
+  --ss-line-strong: #6e7682;
+  --ss-fg: #eceef1;
+  --ss-fg-muted: #a3aab5;
+  --ss-brand: #a5acff;
+  --ss-brand-strong: #c3c7ff;
+  --ss-brand-soft: #272b52;
+  --ss-on-brand: #0e1014;
+  --ss-danger: #ff8a7a;
+  --ss-danger-soft: #3a1d1a;
+  --ss-success: #4fd69c;
+  --ss-success-soft: #143024;
+  --ss-warning: #f5b544;
+  --ss-warning-soft: #352a12;
+  --ss-track: #2b3039;
+  --ss-focus: #a5acff;
+  --ss-scrim: rgb(0 0 0 / 0.6);
+  --ss-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --ss-shadow-2: 0 8px 20px -6px rgb(0 0 0 / 0.6);
+  --ss-shadow-3: 0 -12px 32px -8px rgb(0 0 0 / 0.7);
+}

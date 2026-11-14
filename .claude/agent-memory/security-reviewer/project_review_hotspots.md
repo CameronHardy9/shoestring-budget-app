@@ -49,6 +49,13 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
 
     - **READ COMMITTED plus `FOR UPDATE OF b`:** after a lock wait, Postgres re-checks only the locked row. Joined columns (for example `u.status`) keep the statement's old snapshot. Any status rule must be re-read in a statement issued *after* the lock (F-49).
     - The local `image-smoke` reuses `<sha>-dirty` image tags, so check the image's build time before trusting a local smoke run.
+12. **Frontend code review (2026-11-14, `feat/frontend`).**
+    - **"Imported first" is not "runs first" in a bundle.** Rolldown has no strict execution order: shared chunks imported by the entry evaluate before the entry's own top-level code. Verify ordering claims in the built `assets/index-*.js`, not in the source (F-50). Re-check this when Sentry lands.
+    - Swallowed `catch {}` around security-relevant requests (logout) turns a failure into a false "done" (F-51). Grep `catch {` in auth flows.
+    - `no-restricted-globals` doesn't see `window.x`. Storage bans need `no-restricted-properties` too (F-52).
+    - Smoke and header tests that probe only `/api/healthz` miss the HTML document, where the CSP matters (F-53). Probe the image by hand: run it with a bogus `DATABASE_URL`; the server starts and serves static files.
+    - In-memory state that survives re-login (draft stash, return path) must be bound to the user ID (F-54).
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]
