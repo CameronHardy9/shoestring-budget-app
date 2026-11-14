@@ -1,0 +1,5 @@
+dist/
+coverage/
+node_modules/
+design/style-proposal/*.png
+src/api/schema.gen.ts

@@ -79,3 +79,13 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | F-45 (Medium, MFA failure limits can be raced) | **Fix in the backend PR**, before merge. |
 | Owner of `.env.example` | **ci-engineer** (added to the CLAUDE.md table). |
 | F-48 follow-up: Unicode bidi controls in user text | **Banned at input** (API 400 + database `is_clean_text`), and also stripped in emails. U+200D (emoji) stays allowed. |
+
+## Build round 3: frontend style (2026-11-14)
+| Topic | Decision |
+|---|---|
+| Visual direction (frontend/design/style-proposal/) | **Approved as shown.** |
+| Brand colour | **Indigo** (#4F46E5 light / #A5ACFF dark). |
+| Font | **Self-hosted Inter** (variable, ~48 KB), not system fonts. |
+| React Aria's two injected `<style>` blocks vs CSP `style-src 'self'` | **Allow the two exact sha256 hashes** in `style-src` (no `'unsafe-inline'`, no nonce). Security sign-off in the frontend PR review. |
+| "Save & new" in quick-add | Kept next to Save (engineer's default; owner did not object). |
+| Quick-add default category | **No pre-selection** (tap + → amount → category → Save). |

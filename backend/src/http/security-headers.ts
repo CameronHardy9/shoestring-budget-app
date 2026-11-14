@@ -23,6 +23,21 @@ export function sentryEndpoints(dsn: string | null): SentryEndpoints | null {
   }
 }
 
+// React Aria injects two constant <style> elements at runtime (usePress, and
+// usePreventScroll on iOS). The owner approved allowing exactly these by hash on
+// 2026-11-14: no 'unsafe-inline', no nonce. frontend/src/security/csp.ts holds
+// the same hashes and recomputes them from the installed react-aria; a backend
+// test fails if the two lists drift.
+export const REACT_ARIA_STYLE_HASHES = [
+  "sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=",
+  "sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg=",
+] as const;
+
+/** The style directive(s). To split into style-src-elem/-attr, edit only here. */
+export const STYLE_DIRECTIVES: readonly string[] = [
+  `style-src 'self' ${REACT_ARIA_STYLE_HASHES.map((h) => `'${h}'`).join(" ")}`,
+];
+
 const cache = new WeakMap<Config, [string, string][]>();
 
 export function securityHeaders(config: Config): [string, string][] {
@@ -32,7 +47,7 @@ export function securityHeaders(config: Config): [string, string][] {
   const csp = [
     "default-src 'self'",
     "script-src 'self'",
-    "style-src 'self'",
+    ...STYLE_DIRECTIVES,
     "img-src 'self' data:",
     "font-src 'self'",
     `connect-src 'self'${sentry ? ` ${sentry.ingestOrigin}` : ""}`,
