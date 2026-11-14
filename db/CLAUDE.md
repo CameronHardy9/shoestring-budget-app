@@ -10,11 +10,11 @@ ADR-0004/0005/0006/0010.
 |---|---|
 | `migrations/` | dbmate migrations `YYYYMMDDHHMMSS_snake_name.sql`, each with `-- migrate:up` and a tested `-- migrate:down` |
 | `roles.sql` | Idempotent roles + grants + verification (see "Roles") |
-| `src/index.ts` | Public API: `createDal`, record types, `DalError`, clock/id/date helpers |
+| `src/index.ts` | Public API: `createDal`, record types, `DalError`, clock/id/date helpers, database URL checks (below) |
 | `src/dal.ts` | `Dal` facade: binds every repository to a pool + clock + id generator |
 | `src/repos/*.ts` | Intent-level functions, first parameter `ctx`. **Export only ctx-first functions** from a repo module (they are bound generically); pure helpers go in `src/*.ts` |
 | `src/scope.ts` | `BudgetScope` / `DeletedBudgetScope` and their only constructors (`issueBudgetScope` is module-private, F-41; never export it) |
-| `src/conn.ts` | Database URL checks (F-42): driver-parsed host, no `host`/`hostaddr` params, local-only or `sslmode=verify-full` |
+| `src/conn.ts` | Database URL checks (F-42): driver-parsed host, no `host`/`hostaddr` params, local-only or `sslmode=verify-full`. Public: `parseDatabaseUrl`, `assertSecureDatabaseUrl`, `DatabaseUrlError`, type `ParsedDatabaseUrl`; `assertLocalDatabaseUrl` stays internal (CLIs/testing only) |
 | `src/queries.ts` | The hot read queries as builders (EXPLAIN-tested) |
 | `src/testing/` | `@shoestring/db/testing`: `resetDatabase`, `createDatabaseClone` (local/test only) |
 | `src/test-support/` | Harness and fixtures for db's own tests |
@@ -38,7 +38,7 @@ ADR-0004/0005/0006/0010.
 - Versioned tables have a `bump_version` trigger (`version = old + 1` always); the DAL still filters `WHERE version = $expected`.
 - Tenancy: every budget-owned row has `budget_id`; children use composite FKs `(budget_id, x_id)`.
 - Constraint names are explicit (`<table>_<what>_check|key|fkey`); the DAL maps unique/FK violations by name.
-- Text: `is_clean_text(t, min, max)` (code points, trimmed, NFC, no C0/C1 controls); emails `citext` + `is_valid_email`.
+- Text: `is_clean_text(t, min, max)` (code points, trimmed, NFC, no C0/C1 controls, no bidi controls U+061C, U+200E/F, U+202A–E, U+2066–9 since `20261114000100`, F-48; U+200D stays allowed for emoji). Every user-text column uses it (`users.display_name`, `budgets.name`, `categories.name`, `webauthn_credentials.name`, `transactions.payee`/`memo`); a new one must too (`src/text-rule.test.ts`). Changing the function does not re-validate rows, so such a migration must check existing rows first. Emails `citext` + `is_valid_email`.
 - Deferred constraint triggers: split sum (1..20 splits, exact sum) and one owner per non-deleted budget.
 - `transaction_splits_category_fkey` is `DEFERRABLE INITIALLY DEFERRED` so budget hard deletes can cascade; `deleteCategory` sets it `IMMEDIATE`.
 
@@ -53,14 +53,22 @@ ADR-0004/0005/0006/0010.
 ## Roles (`roles.sql`)
 `migrator` owns everything; PUBLIC has no database privileges (no TEMPORARY, F-44; CONNECT is granted per role); `app` DML only (INSERT/SELECT on `security_events`, SELECT on `schema_migrations`, EXECUTE on `purge_security_events()`); `backup` SELECT only. Run it as the database owner on a new database (creates roles, database and schema grants) and as migrator after migrations or `pg_restore` (table grants). The final block verifies the full model and names who must run it if something is missing. No passwords in the file.
 
+## Public URL checks (for backend config)
+Use these instead of re-implementing URL parsing (the `new URL().hostname` check alone is bypassable, F-42). `name` is the variable name; error messages name it and never contain the URL or password.
+- `parseDatabaseUrl(name, url): ParsedDatabaseUrl` (`{ host, user, local, sslmode }`): throws `DatabaseUrlError` for a non-`postgres://` URL, any `host`/`hostaddr` query parameter, or a driver host that differs from the URL authority. `local` = localhost, loopback or the compose `postgres` host.
+- `assertSecureDatabaseUrl(name, url): ParsedDatabaseUrl`: the above, plus a non-local URL must carry `sslmode=verify-full` (F-28).
+
 ## DAL rules (for anyone adding functions)
 - Budget functions take a `BudgetScope` and call `assertBudgetScope` (runtime WeakSet check, so forged scopes fail); owner actions re-check the role under `lockBudget*`. Every sub-resource query filters by `scope.budgetId`.
 - Add every new budget-domain function to the `CASES` table in `src/isolation.test.ts` (a test fails otherwise).
+- `signup.previewSignupInvite(tokenHash)` returns `{ email, expiresAt: Date }`, exactly the contract's `SignupPreview` fields; keep it that narrow.
+- `mfa.getMfaDetail(userId)` returns `MfaSummaryRecord` + `totpConfirmedAt: Date | null` (`totp_credentials.confirmed_at`; null iff `totp` is false, also while a setup is pending) + `passkeys`, read in one REPEATABLE READ read-only snapshot so the fields agree (inside `dal.transaction` it uses the caller's transaction).
+- MFA attempt slots (F-45), per `mfa_pending` session (`sessions.*`) and per password-reset token (`tokens.*`), 5 each: `reserve…MfaAttempt(id)` BEFORE the factor check (one atomic `UPDATE … WHERE mfa_failed_attempts < 5 RETURNING`) → `{ granted: true, attempt }` or `{ granted: false, reason: "exhausted" | "invalid" }`; after the check exactly one of `fail…MfaAttempt(id)` (slot stays used; at 5 used slots it deletes the session/token, `deleted`/`invalidated` true for exactly one caller, `open` false once it is gone) or `release…MfaAttempt(id)` (no failed check: success, refusal, error; floor 0). `mfa_failed_attempts` counts failures plus attempts in flight. Reserve and fail throw `TypeError` inside `dal.transaction` (a rollback would refund the slot). `completeMfaSession`/`completePasswordReset` ignore the count (the 5th attempt can succeed); `findValidUserToken` still needs a free slot. The old `recordSessionMfaFailure`/`recordTokenMfaFailure` are gone; don't reintroduce a read-then-write counter.
 - Domain errors are `DalError` with an errors.md code; messages never contain values. Let unexpected driver errors propagate.
-- Locks (ADR-0010/F-25): budget row `FOR UPDATE` before user rows; user rows in id order. Membership-count limits lock the user row.
+- Locks (ADR-0010/F-25): budget row `FOR UPDATE` before user rows; user rows in id order. Membership-count limits lock the user row. `transferOwnership` locks the target's user row after the budget (status re-read under the lock); `requestAccountDeletion` locks owned budgets, then the user, then re-checks shared ownership without locking (`ownsSharedLiveBudget`), so a transfer and the target's deletion request serialize in either order. Anything else that makes a user an owner must lock that user's row too. `acceptInvitation` needs no owner-row lock: it locks the budget first and only then reads the invitation, owner and members (fresh READ COMMITTED reads), and every path that changes the owner, the owner's status to `pending_deletion` or the membership takes that budget lock first; keep reads that depend on them after the lock. Both orders are forced in `budgets.test.ts`; note those two tests also pass without the explicit lock (the member insert's FK key-share lock and the invitation row lock serialize them), so removing it is only caught by the unforced F-25 test (deadlock).
 - Multi-step backend flows: `dal.transaction(async (tx) => ...)`.
 - Raw SQL only via Kysely's `sql` tag with bound parameters (`sql.raw`/`sql.lit` are lint errors).
 
 ## Tests
 ESLint relaxations for tests must never cover `src/testing/**` (security review condition).
-Each test file gets its own clone of the migrated database (`createDatabaseClone`, ~100 ms) with a manual clock starting 2026-11-13T15:00Z; raw `app` and superuser pools are available for invariant tests. Fixtures build data through the DAL.
+Each test file gets its own clone of the migrated database (`createDatabaseClone`, ~100 ms) with a manual clock starting 2026-11-13T15:00Z; raw `app` and superuser pools are available for invariant tests. Fixtures build data through the DAL. Parallelism tests need a second Dal with a larger `poolMax` (the default pool has 5), see `mfa-attempts.test.ts`.

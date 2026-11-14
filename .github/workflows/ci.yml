@@ -91,6 +91,10 @@ jobs:
       # Node toolchain or install is needed here.
       - run: make audit
 
+  # Prod-image smoke (ADR-0009): builds (does not push) the production image,
+  # then runs it with production-like config, no test hooks and a throwaway
+  # Postgres. Skips until backend/ exists. Publishing to a registry is a later
+  # release workflow.
   image:
     name: image
     permissions:
@@ -102,6 +106,5 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Builds (does not push) the production image; skips until backend/ and
-      # frontend/ exist. Publishing to a registry is a later release workflow.
       - run: make image
+      - run: make image-smoke

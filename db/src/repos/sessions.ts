@@ -2,9 +2,19 @@
 // as SHA-256 hashes computed by the backend.
 import { sql } from "kysely";
 import type { Ctx } from "../context.ts";
-import { DAY_MS, HOUR_MS, MINUTE_MS, withTx } from "../context.ts";
+import {
+  DAY_MS,
+  HOUR_MS,
+  MINUTE_MS,
+  assertNoTransaction,
+  withTx,
+} from "../context.ts";
 import { notFound } from "../errors.ts";
-import type { SessionInfoRecord, SessionRecord } from "../records.ts";
+import type {
+  MfaAttemptReservation,
+  SessionInfoRecord,
+  SessionRecord,
+} from "../records.ts";
 import type {
   DeviceBrowser,
   DeviceOs,
@@ -243,29 +253,103 @@ export async function completeMfaSession(
   });
 }
 
-/** A failed second factor on a pending session; the session is deleted at the 5th. */
-export async function recordSessionMfaFailure(
+// F-45: MFA attempts on a pending session are reserved BEFORE the factor
+// check (reserve -> check -> fail | complete | release). The counter
+// (mfa_failed_attempts) counts failures plus attempts in flight, so at most 5
+// checks can ever run per pending session, however many arrive in parallel.
+
+/**
+ * Reserves one of the 5 attempt slots on an unexpired mfa_pending session in
+ * one atomic UPDATE (concurrent callers re-check `< 5` after each other's
+ * commit). Call before checking the factor; check only if `granted`. Must not
+ * run inside `dal.transaction` (a rollback would refund the slot).
+ */
+export async function reserveSessionMfaAttempt(
   ctx: Ctx,
   sessionId: string,
-): Promise<{ attempts: number; deleted: boolean }> {
-  if (!isUuid(sessionId)) return { attempts: 0, deleted: true };
-  return withTx(ctx, async (tx) => {
-    const row = await tx.db
-      .updateTable("sessions")
-      .set({
-        mfa_failed_attempts: sql<number>`least(mfa_failed_attempts + 1, 5)`,
-        updated_at: tx.clock(),
-      })
-      .where("id", "=", sessionId)
-      .returning("mfa_failed_attempts")
-      .executeTakeFirst();
-    if (!row) return { attempts: 0, deleted: true };
-    if (row.mfa_failed_attempts >= 5) {
-      await tx.db.deleteFrom("sessions").where("id", "=", sessionId).execute();
-      return { attempts: row.mfa_failed_attempts, deleted: true };
-    }
-    return { attempts: row.mfa_failed_attempts, deleted: false };
-  });
+): Promise<MfaAttemptReservation> {
+  assertNoTransaction(ctx, "reserveSessionMfaAttempt");
+  if (!isUuid(sessionId)) return { granted: false, reason: "invalid" };
+  const now = ctx.clock();
+  const row = await ctx.db
+    .updateTable("sessions")
+    .set({
+      mfa_failed_attempts: sql<number>`mfa_failed_attempts + 1`,
+      updated_at: now,
+    })
+    .where("id", "=", sessionId)
+    .where("status", "=", "mfa_pending")
+    .where("expires_at", ">", now)
+    .where("mfa_failed_attempts", "<", LIMITS.mfaAttemptsPerSessionOrToken)
+    .returning("mfa_failed_attempts")
+    .executeTakeFirst();
+  if (row) return { granted: true, attempt: row.mfa_failed_attempts };
+  const open = await ctx.db
+    .selectFrom("sessions")
+    .select("id")
+    .where("id", "=", sessionId)
+    .where("status", "=", "mfa_pending")
+    .where("expires_at", ">", now)
+    .executeTakeFirst();
+  return { granted: false, reason: open ? "exhausted" : "invalid" };
+}
+
+/**
+ * The factor check of a granted reservation failed. The slot stays used.
+ * Once all 5 slots are used, the pending session is deleted: `deleted` is
+ * true for exactly one caller (send the mfa_failures email then), `open` is
+ * false whenever the pending session no longer exists (clear the cookie).
+ * Must not run inside `dal.transaction`.
+ */
+export async function failSessionMfaAttempt(
+  ctx: Ctx,
+  sessionId: string,
+): Promise<{ attempts: number; deleted: boolean; open: boolean }> {
+  assertNoTransaction(ctx, "failSessionMfaAttempt");
+  if (!isUuid(sessionId)) return { attempts: 0, deleted: false, open: false };
+  const del = await ctx.db
+    .deleteFrom("sessions")
+    .where("id", "=", sessionId)
+    .where("status", "=", "mfa_pending")
+    .where("mfa_failed_attempts", ">=", LIMITS.mfaAttemptsPerSessionOrToken)
+    .returning("mfa_failed_attempts")
+    .executeTakeFirst();
+  if (del)
+    return { attempts: del.mfa_failed_attempts, deleted: true, open: false };
+  const row = await ctx.db
+    .selectFrom("sessions")
+    .select("mfa_failed_attempts")
+    .where("id", "=", sessionId)
+    .where("status", "=", "mfa_pending")
+    .where("expires_at", ">", ctx.clock())
+    .executeTakeFirst();
+  return row
+    ? { attempts: row.mfa_failed_attempts, deleted: false, open: true }
+    : { attempts: 0, deleted: false, open: false };
+}
+
+/**
+ * Gives back a granted slot when the attempt ended WITHOUT a failed factor
+ * check (per-user budget 429, an error before or after the check). Never
+ * after `failSessionMfaAttempt`, at most once per reservation. Not needed
+ * after `completeMfaSession`, which deletes the pending session. No-op if the
+ * session is gone.
+ */
+export async function releaseSessionMfaAttempt(
+  ctx: Ctx,
+  sessionId: string,
+): Promise<void> {
+  if (!isUuid(sessionId)) return;
+  await ctx.db
+    .updateTable("sessions")
+    .set({
+      mfa_failed_attempts: sql<number>`mfa_failed_attempts - 1`,
+      updated_at: ctx.clock(),
+    })
+    .where("id", "=", sessionId)
+    .where("status", "=", "mfa_pending")
+    .where("mfa_failed_attempts", ">", 0)
+    .execute();
 }
 
 /** POST /auth/reauth success: reauth_at = now (and mfa_verified_at when a factor was checked). */

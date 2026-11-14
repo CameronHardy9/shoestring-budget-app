@@ -50,21 +50,24 @@ export async function createSignupInvite(
   });
 }
 
-/** POST /auth/signup/preview: the invite's email, or INVITATION_INVALID. */
+/**
+ * POST /auth/signup/preview: the invite's email and expiry (exactly the
+ * contract's SignupPreview fields), or INVITATION_INVALID.
+ */
 export async function previewSignupInvite(
   ctx: Ctx,
   tokenHash: Buffer,
-): Promise<{ email: string }> {
+): Promise<{ email: string; expiresAt: Date }> {
   const row = await ctx.db
     .selectFrom("signup_invites")
-    .select(["email"])
+    .select(["email", "expires_at"])
     .where("token_hash", "=", tokenHash)
     .where("used_at", "is", null)
     .where("revoked_at", "is", null)
     .where("expires_at", ">", ctx.clock())
     .executeTakeFirst();
   if (!row) throw invalidInvite();
-  return { email: row.email };
+  return { email: row.email, expiresAt: row.expires_at };
 }
 
 /**

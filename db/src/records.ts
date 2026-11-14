@@ -175,6 +175,18 @@ export interface MonthSummaryRecord {
   transactionCount: number;
 }
 
+/**
+ * F-45: one second-factor attempt slot on an mfa_pending session or a
+ * password-reset token, reserved atomically BEFORE the factor is checked.
+ * `attempt` is the slot number (1..5). Not granted: `exhausted` = the
+ * session/token is still open but all 5 slots are taken (failures plus
+ * attempts in flight); `invalid` = it no longer exists, expired, or is no
+ * longer pending/unused.
+ */
+export type MfaAttemptReservation =
+  | { granted: true; attempt: number }
+  | { granted: false; reason: "exhausted" | "invalid" };
+
 export interface MfaSummaryRecord {
   enabled: boolean;
   totp: boolean;

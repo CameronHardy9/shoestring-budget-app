@@ -26,3 +26,9 @@ services:
       NODE_ENV: test
       TEST_HOOKS: "1"
       LOG_LEVEL: warn
+      # Hermetic: ignore any overrides in a developer's .env. The test outbox
+      # backs /api/_test/emails; no HIBP network calls in tests.
+      EMAIL_TRANSPORT: test
+      HIBP_ENABLED: "false"
+      TRUST_PROXY_HOPS: "0"
+      WEBAUTHN_RP_NAME: ""

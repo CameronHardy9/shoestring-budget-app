@@ -19,6 +19,8 @@ export const LIMITS = {
   passkeysPerUser: 10,
   activeSessionsPerUser: 20,
   pendingSessionsPerUser: 5,
+  /** Second-factor attempts per mfa_pending session and per reset token (F-45). */
+  mfaAttemptsPerSessionOrToken: 5,
   maxAmountCents: 100_000_000,
   deletedBudgetsListed: 20,
 } as const;
@@ -234,4 +236,37 @@ export async function lockOwnedBudgetsAndCheckShared(
     if (other) shared = true;
   }
   return { ownsSharedBudget: shared, ownedBudgetIds: owned.map((b) => b.id) };
+}
+
+/**
+ * Non-locking re-check of the same rule, for use after `lockUser(userId)`.
+ * Ownership can only move TO a user through transferOwnership, which locks
+ * that user's row before committing; so once the caller holds the user lock, a
+ * fresh read here sees every transfer that could have slipped in after
+ * lockOwnedBudgetsAndCheckShared, and none can commit until the caller does.
+ * (Locking those budgets here would invert the budget-before-user lock order.)
+ */
+export async function ownsSharedLiveBudget(
+  ctx: Ctx,
+  userId: string,
+): Promise<boolean> {
+  const row = await ctx.db
+    .selectFrom("budget_members as m")
+    .innerJoin("budgets as b", "b.id", "m.budget_id")
+    .select("m.budget_id")
+    .where("m.user_id", "=", userId)
+    .where("m.role", "=", "owner")
+    .where("b.deleted_at", "is", null)
+    .where((eb) =>
+      eb.exists(
+        eb
+          .selectFrom("budget_members as o")
+          .select("o.user_id")
+          .whereRef("o.budget_id", "=", "m.budget_id")
+          .where("o.user_id", "<>", userId),
+      ),
+    )
+    .limit(1)
+    .executeTakeFirst();
+  return row !== undefined;
 }

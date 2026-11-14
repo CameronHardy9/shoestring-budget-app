@@ -1,0 +1,46 @@
+{
+  "name": "@shoestring/backend",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shoestring API server (Fastify + zod), admin CLI and dev-only test hooks.",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "node --watch src/dev-server.ts",
+    "start": "node dist/server.js",
+    "admin": "node src/admin.ts",
+    "build": "node scripts/build.ts && node scripts/test-hooks-tripwire.ts",
+    "check-dist": "node scripts/test-hooks-tripwire.ts",
+    "gen:contract": "node scripts/gen-contract.ts",
+    "lint": "eslint --max-warnings=0 .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fastify/static": "10.1.8",
+    "@node-rs/argon2": "2.2.2",
+    "@shoestring/db": "workspace:*",
+    "@simplewebauthn/server": "14.0.3",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "fastify": "5.12.7",
+    "pino": "10.4.0",
+    "zod": "4.6.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@vitest/coverage-v8": "4.1.12",
+    "eslint": "10.14.0",
+    "rolldown": "1.2.16",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "4.1.12",
+    "yaml": "2.9.1"
+  }
+}

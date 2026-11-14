@@ -16,6 +16,13 @@ info:
     - Every response sets `Cache-Control: no-store`.
     - Unknown request fields are rejected (`additionalProperties: false`) with
       400 VALIDATION_FAILED. Responses never contain fields not listed here.
+    - Unknown query parameters are rejected with 400 VALIDATION_FAILED
+      (`in: query`, `unknown_field`), so clients never add cache-busting or
+      tracking parameters.
+    - An operation without a `requestBody` accepts no body or exactly `{}`;
+      any other body is 400 VALIDATION_FAILED.
+    - A path or method not defined here is 404 NOT_FOUND (no 405, no 501), and
+      every operation here is implemented (errors.md "Unknown routes").
     - Money is integer USD cents. Dates are `YYYY-MM-DD` calendar dates. Months
       are `YYYY-MM`. Timestamps are RFC 3339 UTC with `Z`.
     - Error responses use ErrorBody. The codes each operation can return beyond

@@ -209,6 +209,18 @@ ensure_local_env() {
   fi
 }
 
+# Production image release and tag for the current checkout (make image,
+# make image-smoke). Release: git SHA (+ -dirty) unless APP_RELEASE is set.
+# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty].
+_git_sha() { git rev-parse HEAD 2>/dev/null || echo unknown; }
+_git_dirty() { [ -z "$(git status --porcelain 2>/dev/null)" ] || echo -dirty; }
+image_release() { echo "${APP_RELEASE:-$(_git_sha)$(_git_dirty)}"; }
+image_tag() {
+  local sha
+  sha="$(_git_sha)"
+  echo "${IMAGE_NAME:-shoestring}:${sha:0:12}$(_git_dirty)"
+}
+
 # Workspace packages that exist (for log messages).
 workspace_pkgs_text() {
   local out="" a

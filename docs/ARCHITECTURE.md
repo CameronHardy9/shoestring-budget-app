@@ -82,8 +82,8 @@ flowchart LR
 ## Cross-cutting decisions
 - **Same origin.** One host, `https://shoestring.<domain>`, served by Cloud Run domain mapping. The SPA is under `/` and the API under `/api`. No CORS.
   - **Caching:** one container serves both. Hashed assets get `Cache-Control: public, max-age=31536000, immutable`; `index.html`, `manifest.webmanifest` and `sw.js` get `no-cache`.
-  - **SPA fallback:** every non-`/api` GET that accepts `text/html` falls back to `index.html`.
-  - **Local dev:** the Vite dev server proxies `/api` to `API_PROXY_TARGET`, so the browser still sees one origin.
+  - **SPA fallback:** every non-`/api` GET that accepts `text/html` falls back to `index.html`. The SPA routes that emails link to are contract (auth.md §15 "Email link routes"); unknown `/api` routes and methods are 404 `NOT_FOUND` (errors.md).
+  - **Local dev:** the Vite dev server proxies `/api` to `API_PROXY_TARGET`, so the browser still sees one origin. The proxy forwards the browser's `Host` unchanged (no `changeOrigin`), because the backend's Host check compares it with `APP_ORIGIN` including the port (auth.md §3).
   - **Not used:** Firebase Hosting in front (it strips cookies other than `__session`; ADR-0007).
 - **Auth.** Server-side sessions in an httpOnly `__Host-` cookie, SameSite=Strict, 30-day sliding expiry with a 90-day absolute cap. CSRF and Host checks plus `X-CSRF-Token`. Optional TOTP/passkey MFA with a per-user failure budget. Re-auth for sensitive actions, including sharing and ownership transfer. Invite-only sign-up. Admin powers only through Cloud Run jobs. See auth.md and ADR-0003.
 - **Authorization.** Deny by default. Every route explicitly declares `x-session` / `x-budget-role` / `x-reauth` in the contract, and the server refuses to start if any route lacks them or if a `{budgetId}` path is not budget-scoped. Budget access goes through a `BudgetScope` that only the membership check can create, enforced by lint/Semgrep rules. Non-members get 404. See auth.md §12, ADR-0006 and ADR-0010.
@@ -132,6 +132,7 @@ flowchart LR
   - **Runtime (service):**
     - `NODE_ENV` (required; the production image sets `production`)
     - `HOST`, `PORT`, `APP_ORIGIN`, `STATIC_DIR` (built SPA directory)
+    - `TRUST_PROXY_HOPS`: proxy hops in front of the container for Fastify `trustProxy` (auth.md §14 "Client IP"); `1` on Cloud Run per ADR-0007 constraint 8 (pending V26); default 0 locally
     - `DATABASE_URL` (app role, pooled, `sslmode=verify-full`)
     - `COOKIE_SECURE`
     - `APP_KEYRING`: a key-versioned JSON keyring, `{"current":"k2","keys":{"k1":"<base64 32 bytes>",…}}`, validated at startup. It replaces `MFA_ENCRYPTION_KEY` and `THROTTLE_KEY`; HKDF subkeys for TOTP, recovery codes, throttle keys and cursors (data-model.md "Application keyring"). Mounted only on the service and the `rewrap-mfa` job.
@@ -147,6 +148,7 @@ flowchart LR
     - `COOKIE_SECURE=false`, `TEST_HOOKS=1`, `HIBP_ENABLED=false`
     - `EMAIL_TRANSPORT≠provider`, a missing `EMAIL_DAILY_QUOTA`, or an invalid `APP_KEYRING`
     - a missing `NODE_ENV`
+    - a missing `TRUST_PROXY_HOPS`, or `0`
     - a `DATABASE_URL` without `sslmode=verify-full`
 - **Email.** One adapter interface with three transports: console (local dev), test (in-memory outbox; test-hooks.md), and provider (Resend on `mail.<domain>`, Brevo as fallback).
   - Messages are **plain text only**, with click and open tracking disabled and links built only from `APP_ORIGIN`.

@@ -101,28 +101,54 @@ export interface PasskeySummary {
   lastUsedAt: Date | null;
 }
 
-/** GET /me/mfa: the summary plus the passkey list. */
+export interface MfaDetailRecord extends MfaSummaryRecord {
+  /** When TOTP was confirmed (MfaDetail.totp.confirmedAt); null iff `totp` is false. */
+  totpConfirmedAt: Date | null;
+  passkeys: PasskeySummary[];
+}
+
+/**
+ * GET /me/mfa: the summary plus the TOTP confirmation time and the passkey
+ * list. One snapshot (REPEATABLE READ, read only), so `totp`/`totpConfirmedAt`,
+ * `passkeyCount`/`passkeys` and `enabled` always agree even while a factor is
+ * being added or removed concurrently.
+ */
 export async function getMfaDetail(
   ctx: Ctx,
   userId: string,
-): Promise<MfaSummaryRecord & { passkeys: PasskeySummary[] }> {
-  const summary = await getMfaSummary(ctx, userId);
-  const rows = await ctx.db
-    .selectFrom("webauthn_credentials")
-    .select(["id", "name", "created_at", "last_used_at"])
-    .where("user_id", "=", userId)
-    .orderBy("created_at")
-    .orderBy("id")
-    .execute();
-  return {
-    ...summary,
-    passkeys: rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      createdAt: r.created_at,
-      lastUsedAt: r.last_used_at,
-    })),
+): Promise<MfaDetailRecord> {
+  const read = async (c: Ctx): Promise<MfaDetailRecord> => {
+    const summary = await getMfaSummary(c, userId);
+    const totp = await c.db
+      .selectFrom("totp_credentials")
+      .select("confirmed_at")
+      .where("user_id", "=", userId)
+      .where("confirmed_at", "is not", null)
+      .executeTakeFirst();
+    const rows = await c.db
+      .selectFrom("webauthn_credentials")
+      .select(["id", "name", "created_at", "last_used_at"])
+      .where("user_id", "=", userId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+    return {
+      ...summary,
+      totpConfirmedAt: totp?.confirmed_at ?? null,
+      passkeys: rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        lastUsedAt: r.last_used_at,
+      })),
+    };
   };
+  if (ctx.db.isTransaction) return read(ctx);
+  return ctx.db
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .setAccessMode("read only")
+    .execute((trx) => read({ ...ctx, db: trx }));
 }
 
 // ------------------------------------------------------------------ TOTP

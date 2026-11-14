@@ -60,7 +60,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
+      # Over TCP, not the Unix socket: on first start the image's init server
+      # listens on the socket only (listen_addresses=''), so a socket check
+      # reports healthy before TCP clients (migrate, tests, the app) can
+      # connect, and they fail with ECONNREFUSED.
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -p 5432 -U postgres -d $${POSTGRES_DB}",
+        ]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -116,6 +124,13 @@ services:
       APP_RELEASE: ${APP_RELEASE:-dev}
       # JSON keyring, one random 32-byte key (docs/contracts/data-model.md).
       APP_KEYRING: ${APP_KEYRING:?APP_KEYRING is not set, run make setup to generate .env}
+      # Optional overrides from .env (see .env.example). Unset ones arrive blank,
+      # which the backend treats as unset (its defaults apply: console email,
+      # no HIBP calls, 0 proxy hops). No email API key or Sentry DSN locally.
+      EMAIL_TRANSPORT: ${EMAIL_TRANSPORT:-}
+      HIBP_ENABLED: ${HIBP_ENABLED:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-}
+      WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
     healthcheck:

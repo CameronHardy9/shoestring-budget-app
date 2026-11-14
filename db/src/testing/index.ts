@@ -106,6 +106,17 @@ export async function createDatabaseClone(
     },
     async dispose() {
       await withClient(maintenance.toString(), async (c) => {
+        // pg's Pool.end() resolves before its connections have closed. Wait
+        // (up to 2 s) for them, so FORCE only terminates real leftovers; a
+        // terminated idle client surfaces as an unhandled pool 'error'.
+        for (let i = 0; i < 100; i++) {
+          const { rows } = await c.query<{ n: number }>(
+            "select count(*)::int as n from pg_stat_activity where datname = $1",
+            [name],
+          );
+          if ((rows[0]?.n ?? 0) === 0) break;
+          await new Promise((r) => setTimeout(r, 20));
+        }
         await c.query(
           `drop database if exists ${pg.escapeIdentifier(name)} with (force)`,
         );

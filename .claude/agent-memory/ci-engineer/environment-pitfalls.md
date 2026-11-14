@@ -28,7 +28,12 @@ Facts verified 2026-11-12 that shaped the pipeline scripts:
 - Semgrep path globs with a leading `/` are anchored to the scan root; `pattern-not-inside: function f(...) {...}` also matches `export (async) function`. Test rules on fixtures in the scratchpad mounted as /src.
 
 - Semgrep's built-in .semgrepignore skips every `tests/` dir (also with --verbose: "Skipped by .semgrepignore"). Explicit file targets bypass it, so audit.sh passes tests/ files by name (2026-11-13).
-- Parallel agents running `make check` collide: make test uses a fixed compose project (shoestring-test) and port 55432, so one run's teardown kills the other's Postgres mid-migrate ("connection refused"). Rerun; consider per-run project names.
+- Parallel `make check`: since 2026-11-14 make test uses project `shoestring-test-$$` and host port 0 (read back with `compose port`), so Postgres no longer collides. Still colliding: backend's vitest coverage temp dir (backend/coverage/.tmp, JSON parse error); backend owns that config.
+- Postgres healthcheck must use TCP (`pg_isready -h 127.0.0.1`): the image's init server is socket-only (listen_addresses=''), so a socket check went healthy early and migrate got ECONNREFUSED.
+
+- pnpm filter `"./backend..."` selects backend ALONE (no workspace deps); use `"{./backend}..."`. In the image build db/ then had no node_modules and rolldown silently externalized kysely/pg (UNRESOLVED_IMPORT warning only), so the image crashed at start. Only a real run of the image caught it (2026-11-14).
+- `pnpm deploy --legacy --offline` fails on workspace deps (re-resolves them, ERR_PNPM_NO_OFFLINE_META). Use `--config.inject-workspace-packages=true` on the deploy command only (lockfile-pinned, dev symlinks untouched). Deploy copies the whole package (src/ incl. test-hooks.ts), so the Dockerfile keeps an allowlist.
+- Distroless has no shell/grep: scan image files with `docker run --entrypoint /nodejs/bin/node <img> -e '<script>'`. Admin CLI has no --help (exit 2 usage_error).
 
 **Why:** each of these cost a failed run once.
 **How to apply:** check this list before writing shell or compose changes; see [[pipeline-timings]].

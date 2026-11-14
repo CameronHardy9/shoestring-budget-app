@@ -10,7 +10,7 @@ import {
   lockBudget,
   lockBudgetAsOwner,
 } from "../scope.ts";
-import { loadMemberContacts } from "./common.ts";
+import { loadMemberContacts, lockUser } from "./common.ts";
 
 /** GET /budgets/{b}/members: owner first, then by join time. */
 export async function listMembers(
@@ -69,6 +69,8 @@ export async function removeMember(
  * budget. Demote the owner, then promote the target (the partial unique index
  * is checked per statement; the deferred trigger confirms one owner at commit).
  * Self -> VALIDATION_FAILED (userId); target not a member or not active -> NOT_FOUND.
+ * Locks the target's user row after the budget row (no race with the target's
+ * own deletion request).
  * Returns every member's contact for the notice.
  */
 export async function transferOwnership(
@@ -82,14 +84,18 @@ export async function transferOwnership(
       throw invalid({ in: "body", field: "userId", issue: "invalid_value" });
     if (!isUuid(targetUserId)) throw notFound();
     const target = await tx.db
-      .selectFrom("budget_members as m")
-      .innerJoin("users as u", "u.id", "m.user_id")
-      .select(["m.role"])
-      .where("m.budget_id", "=", scope.budgetId)
-      .where("m.user_id", "=", targetUserId)
-      .where("u.status", "=", "active")
+      .selectFrom("budget_members")
+      .select("role")
+      .where("budget_id", "=", scope.budgetId)
+      .where("user_id", "=", targetUserId)
       .executeTakeFirst();
     if (!target) throw notFound();
+    // Budget lock first, then the target's user row (ADR-0010 lock order). This
+    // serializes with the target's own deletion request: if it committed
+    // first we see pending_deletion here; if we commit first, it re-checks
+    // shared ownership under the same lock and refuses.
+    const user = await lockUser(tx, targetUserId);
+    if (user?.status !== "active") throw notFound();
     const now = tx.clock();
     await tx.db
       .updateTable("budget_members")

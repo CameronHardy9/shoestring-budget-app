@@ -40,6 +40,15 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - Postgres PUBLIC keeps database `TEMPORARY`/`CONNECT` unless revoked. "No DDL" checks must test `create temp table` (F-44).
     - Deferred FKs move failures to COMMIT. Check that the backend error serializer handles commit-time SQLSTATEs (F-07).
 
+11. **Backend code review (2026-11-14, `feat/backend-api`).**
+    - **Check-then-record limits race.** `assertUnder`/`rollingCount` before the work and `hit` after it lets a parallel burst through, and the DB pool's FIFO queue makes that reliable. It mattered for MFA (F-45). Race-free only: atomic `hitOrThrow` upserts, or `UPDATE … WHERE n < limit RETURNING`. Grep every new limit for this order.
+    - In-memory maps keyed by client data (IP /64s) need eviction by window end and a hard cap (F-46).
+    - `pnpm deploy` copies the whole package unless `files` is set or the Dockerfile allowlists `/out`. "Physically absent" claims must be checked on the image, not on `dist` (F-47).
+    - Plain-text defanging must cover Unicode dot equivalents (U+3002, U+FF0E) and bidi controls (F-48).
+    - Lock-order questions: read the *other* path's first lock. `acceptInvitation` is safe because the owner's deletion request locks every owned budget row first.
+
+    - **READ COMMITTED plus `FOR UPDATE OF b`:** after a lock wait, Postgres re-checks only the locked row. Joined columns (for example `u.status`) keep the statement's old snapshot. Any status rule must be re-read in a statement issued *after* the lock (F-49).
+    - The local `image-smoke` reuses `<sha>-dirty` image tags, so check the image's build time before trusting a local smoke run.
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

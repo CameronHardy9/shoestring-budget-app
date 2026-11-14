@@ -6,12 +6,12 @@ SCRIPTS := .github/scripts
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
-        lint typecheck test check e2e audit image
+        lint typecheck test check e2e audit image image-smoke
 
 help: ## Show targets and the phone-testing recipe
 	@echo "Shoestring: canonical commands"
 	@echo ""
-	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-10s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-12s %s\n", $$1, $$2}'
 	@echo ""
 	@echo "Test on a real phone over the LAN (phone and Mac on the same Wi-Fi):"
 	@echo "  1. make dev LAN=1   (or make dev-lan) prints  Phone  http://<mac-ip>:5173"
@@ -67,5 +67,8 @@ e2e: ## Integration, contract, end-to-end and visual tests against a throwaway s
 audit: ## Secret scan (gitleaks) + SAST (Semgrep) + dependencies (osv-scanner) + workflows (zizmor)
 	@bash $(SCRIPTS)/audit.sh
 
-image: ## Build the production image (skips until backend/ and frontend/ exist)
+image: ## Build the production image (skips until backend/ exists; API-only until frontend/ exists)
 	@bash $(SCRIPTS)/image.sh
+
+image-smoke: ## Run the production image against a throwaway Postgres and probe it (ADR-0009)
+	@bash $(SCRIPTS)/image-smoke.sh
