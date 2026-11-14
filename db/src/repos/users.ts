@@ -11,6 +11,7 @@ import {
   lockOwnedBudgetsAndCheckShared,
   lockUser,
   normalizeEmail,
+  ownsSharedLiveBudget,
 } from "./common.ts";
 import { getMfaSummary } from "./mfa.ts";
 
@@ -191,6 +192,9 @@ export async function requestAccountDeletion(
       await lockOwnedBudgetsAndCheckShared(tx, userId);
     if (ownsSharedBudget) throw new DalError("OWNS_SHARED_BUDGET");
     await lockUser(tx, userId);
+    // A transfer to this user may have committed while we waited for the lock.
+    if (await ownsSharedLiveBudget(tx, userId))
+      throw new DalError("OWNS_SHARED_BUDGET");
     const user = await tx.db
       .selectFrom("users")
       .select(["status", "deletion_requested_at", "purge_after"])

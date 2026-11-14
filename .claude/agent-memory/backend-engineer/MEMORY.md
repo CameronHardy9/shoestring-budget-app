@@ -1,0 +1,2 @@
+- [Backend gotchas](gotchas.md) — formatter un-escapes \u in writes, fetch can't set Host, Semgrep string matches, safe deps (rolldown, @node-rs/argon2)
+- [Backend status](phase-a-status.md) — all 63 ops done (2026-11-13); open DAL/contract gaps and deliberate deviations to re-check

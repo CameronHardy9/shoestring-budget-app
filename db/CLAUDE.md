@@ -10,11 +10,11 @@ ADR-0004/0005/0006/0010.
 |---|---|
 | `migrations/` | dbmate migrations `YYYYMMDDHHMMSS_snake_name.sql`, each with `-- migrate:up` and a tested `-- migrate:down` |
 | `roles.sql` | Idempotent roles + grants + verification (see "Roles") |
-| `src/index.ts` | Public API: `createDal`, record types, `DalError`, clock/id/date helpers |
+| `src/index.ts` | Public API: `createDal`, record types, `DalError`, clock/id/date helpers, database URL checks (below) |
 | `src/dal.ts` | `Dal` facade: binds every repository to a pool + clock + id generator |
 | `src/repos/*.ts` | Intent-level functions, first parameter `ctx`. **Export only ctx-first functions** from a repo module (they are bound generically); pure helpers go in `src/*.ts` |
 | `src/scope.ts` | `BudgetScope` / `DeletedBudgetScope` and their only constructors (`issueBudgetScope` is module-private, F-41; never export it) |
-| `src/conn.ts` | Database URL checks (F-42): driver-parsed host, no `host`/`hostaddr` params, local-only or `sslmode=verify-full` |
+| `src/conn.ts` | Database URL checks (F-42): driver-parsed host, no `host`/`hostaddr` params, local-only or `sslmode=verify-full`. Public: `parseDatabaseUrl`, `assertSecureDatabaseUrl`, `DatabaseUrlError`, type `ParsedDatabaseUrl`; `assertLocalDatabaseUrl` stays internal (CLIs/testing only) |
 | `src/queries.ts` | The hot read queries as builders (EXPLAIN-tested) |
 | `src/testing/` | `@shoestring/db/testing`: `resetDatabase`, `createDatabaseClone` (local/test only) |
 | `src/test-support/` | Harness and fixtures for db's own tests |
@@ -53,11 +53,17 @@ ADR-0004/0005/0006/0010.
 ## Roles (`roles.sql`)
 `migrator` owns everything; PUBLIC has no database privileges (no TEMPORARY, F-44; CONNECT is granted per role); `app` DML only (INSERT/SELECT on `security_events`, SELECT on `schema_migrations`, EXECUTE on `purge_security_events()`); `backup` SELECT only. Run it as the database owner on a new database (creates roles, database and schema grants) and as migrator after migrations or `pg_restore` (table grants). The final block verifies the full model and names who must run it if something is missing. No passwords in the file.
 
+## Public URL checks (for backend config)
+Use these instead of re-implementing URL parsing (the `new URL().hostname` check alone is bypassable, F-42). `name` is the variable name; error messages name it and never contain the URL or password.
+- `parseDatabaseUrl(name, url): ParsedDatabaseUrl` (`{ host, user, local, sslmode }`): throws `DatabaseUrlError` for a non-`postgres://` URL, any `host`/`hostaddr` query parameter, or a driver host that differs from the URL authority. `local` = localhost, loopback or the compose `postgres` host.
+- `assertSecureDatabaseUrl(name, url): ParsedDatabaseUrl`: the above, plus a non-local URL must carry `sslmode=verify-full` (F-28).
+
 ## DAL rules (for anyone adding functions)
 - Budget functions take a `BudgetScope` and call `assertBudgetScope` (runtime WeakSet check, so forged scopes fail); owner actions re-check the role under `lockBudget*`. Every sub-resource query filters by `scope.budgetId`.
 - Add every new budget-domain function to the `CASES` table in `src/isolation.test.ts` (a test fails otherwise).
+- `signup.previewSignupInvite(tokenHash)` returns `{ email, expiresAt: Date }`, exactly the contract's `SignupPreview` fields; keep it that narrow.
 - Domain errors are `DalError` with an errors.md code; messages never contain values. Let unexpected driver errors propagate.
-- Locks (ADR-0010/F-25): budget row `FOR UPDATE` before user rows; user rows in id order. Membership-count limits lock the user row.
+- Locks (ADR-0010/F-25): budget row `FOR UPDATE` before user rows; user rows in id order. Membership-count limits lock the user row. `transferOwnership` locks the target's user row after the budget (status re-read under the lock); `requestAccountDeletion` locks owned budgets, then the user, then re-checks shared ownership without locking (`ownsSharedLiveBudget`), so a transfer and the target's deletion request serialize in either order. Anything else that makes a user an owner must lock that user's row too.
 - Multi-step backend flows: `dal.transaction(async (tx) => ...)`.
 - Raw SQL only via Kysely's `sql` tag with bound parameters (`sql.raw`/`sql.lit` are lint errors).
 

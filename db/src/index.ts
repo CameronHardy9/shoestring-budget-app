@@ -26,6 +26,12 @@ export { csvCell, formatCents } from "./csv.ts";
 export { summarize } from "./summary-math.ts";
 export type { SummaryInputRow } from "./summary-math.ts";
 export { LATEST_MIGRATION_VERSION } from "./migrations.ts";
+export {
+  assertSecureDatabaseUrl,
+  DatabaseUrlError,
+  parseDatabaseUrl,
+} from "./conn.ts";
+export type { ParsedDatabaseUrl } from "./conn.ts";
 export { SECURITY_EVENT_TYPES } from "./schema.ts";
 export type {
   CategoryKind,

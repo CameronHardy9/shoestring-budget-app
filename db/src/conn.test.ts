@@ -10,6 +10,7 @@ import {
   assertSecureDatabaseUrl,
   parseDatabaseUrl,
 } from "./conn.ts";
+import * as publicApi from "./index.ts";
 import * as scopeModule from "./scope.ts";
 
 const DB_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -110,6 +111,19 @@ describe("F-42: database URL checks", () => {
       ).local,
     ).toBe(false);
     expect(assertSecureDatabaseUrl("X", local).local).toBe(true);
+  });
+
+  it("exports the shared checks from the public entry, and not the local-only one", () => {
+    expect(publicApi.parseDatabaseUrl).toBe(parseDatabaseUrl);
+    expect(publicApi.assertSecureDatabaseUrl).toBe(assertSecureDatabaseUrl);
+    expect(publicApi.DatabaseUrlError).toBe(DatabaseUrlError);
+    expect("assertLocalDatabaseUrl" in publicApi).toBe(false);
+    expect(() =>
+      publicApi.assertSecureDatabaseUrl(
+        "DATABASE_URL",
+        "postgres://app:x@db.example.net/shoestring?sslmode=require",
+      ),
+    ).toThrow(publicApi.DatabaseUrlError);
   });
 
   it("never puts the URL or password in error messages", () => {

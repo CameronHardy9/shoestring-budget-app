@@ -1,5 +1,6 @@
 // Test data built through the DAL itself (the same paths the backend uses).
 import { randomBytes, randomUUID } from "node:crypto";
+import type pg from "pg";
 import { expect } from "vitest";
 import type { Dal } from "../dal.ts";
 import type { BudgetRecord } from "../records.ts";
@@ -98,4 +99,36 @@ export async function expectPgError(
   code: string,
 ): Promise<void> {
   await expect(p).rejects.toMatchObject({ code });
+}
+
+/**
+ * Resolves once at least `n` sessions on this database wait for a lock, so a
+ * test can prove that a call is blocked (not just slow) before releasing the
+ * transaction it waits for. `admin` is the superuser pool (sees every session).
+ */
+export async function waitForLockWaiters(
+  admin: pg.Pool,
+  n = 1,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { rows } = await admin.query<{ n: number }>(
+      `select count(*)::int as n from pg_stat_activity
+        where datname = current_database() and wait_event_type = 'Lock'`,
+    );
+    if ((rows[0]?.n ?? 0) >= n) return;
+    if (Date.now() > deadline)
+      throw new Error(`no session waited for a lock within ${timeoutMs} ms`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+/** A promise plus its resolver, to hold a transaction open at a chosen point. */
+export function gate(): { promise: Promise<void>; open: () => void } {
+  let open!: () => void;
+  const promise = new Promise<void>((r) => {
+    open = r;
+  });
+  return { promise, open };
 }

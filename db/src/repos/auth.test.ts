@@ -35,12 +35,23 @@ describe("sign-up invites", () => {
     const first = hash32();
     const second = hash32();
     await t.dal.signup.createSignupInvite(email, first);
-    await t.dal.signup.createSignupInvite(email.toUpperCase(), second);
+    t.clock.advance(MINUTE_MS);
+    const createdAt = t.clock.clock().getTime();
+    const created = await t.dal.signup.createSignupInvite(
+      email.toUpperCase(),
+      second,
+    );
+    t.clock.advance(MINUTE_MS);
     await expectDalError(
       t.dal.signup.previewSignupInvite(first),
       "INVITATION_INVALID",
     );
-    expect(await t.dal.signup.previewSignupInvite(second)).toEqual({ email });
+    // Exactly the SignupPreview fields: no id, hash, or timestamps beyond expiry.
+    expect(await t.dal.signup.previewSignupInvite(second)).toStrictEqual({
+      email,
+      expiresAt: created.expiresAt,
+    });
+    expect(created.expiresAt.getTime()).toBe(createdAt + 7 * DAY_MS);
     const { userId } = await t.dal.signup.signUpWithInvite({
       tokenHash: second,
       displayName: "New Person",
@@ -66,6 +77,7 @@ describe("sign-up invites", () => {
       t.dal.signup.createSignupInvite(email, hash32()),
       "ALREADY_EXISTS",
     );
+    t.clock.set(START);
   });
 
   it("expires after 7 days and stores only argon2id hashes", async () => {
