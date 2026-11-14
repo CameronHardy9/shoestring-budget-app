@@ -1,7 +1,7 @@
 # Threat model
 Owner: security-reviewer. Updated whenever a new endpoint, data flow, integration, or role appears.
 
-- **Version:** v2.3 (2026-11-13), after the first code review (the data layer, §5.6). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review. The backend and frontend do not exist yet.
+- **Version:** v2.6 (2026-11-14), after the frontend code review (§5.8). Earlier code reviews: data layer (v2.3, §5.6) and backend (v2.4–v2.5, §5.7). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review.
 - **Sources reviewed:** ARCHITECTURE.md; contracts auth.md (rev 2), data-model.md, errors.md, api.openapi.yaml, admin-commands.md, test-hooks.md; ADR-0001 to ADR-0010; mvp-planning/README.md and 01–10 (10 holds the owner's rulings OD-1 to OD-8 and the hosting decision).
 - **Statuses in §5:** each row's *mitigation* reflects revision 2. Where a row cites a finding, that finding's current status (`contract-fixed`, `partially-fixed`, `open`) is in the FINDINGS.md summary table, which is the source of truth. New threats from revision 2 are T80 to T92 (§5.4).
 - **Findings:** each `F-xx` below is described in [FINDINGS.md](FINDINGS.md). The implementation checklist is in [mvp-security-checklist.md](mvp-security-checklist.md).
@@ -131,7 +131,7 @@ flowchart LR
 | TB7 | GitHub Actions to host, DB and backup storage | Deploy identity, DB creds for cron jobs, backups | Environment-scoped secrets, OIDC attribute conditions, SHA pins, no secrets on fork PRs (F-16, F-17, F-02) |
 | TB8 | Owner to admin CLI and consoles | Prod credentials, target emails | Platform-side execution, no PII in output, MFA on every operator account (F-02, F-03) |
 | TB9 | Backup storage | Full encrypted dumps | Private, write-only CI credential, expiry of 35 days or less, offline key (F-17) |
-| TB-DEV | The user's device | Session cookie, in-memory data, downloaded CSV, URL history | No API data cached, `no-store`, sign-out clears state, bfcache handling (F-32) |
+| TB-DEV | The user's device | Session cookie, in-memory data (query cache, CSRF token, link token, return path, unsaved draft), downloaded CSV and recovery-code file, clipboard (recovery codes), URL history, Cache Storage (app shell only), localStorage (theme, last budget ID) | No API data cached, `no-store`, service worker never touches `/api`, sign-out clears state, bfcache handling (F-32); a failed logout leaves the session live (F-51); the draft and return path are not bound to the user (F-54) |
 | TB-TEN | **Between budgets** (logical) | IDs in paths and bodies, cursors, idempotency keys | `BudgetScope`, composite FKs, 404 for non-members, generated isolation tests (F-18) |
 | — | **Between co-members of one budget** | Everything in the budget | **None by design.** Members are equal; owner-only actions are limited to sharing and deletion (R-4) |
 
@@ -181,7 +181,7 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T38 | All | argon2id memory exhaustion; autoscaling drives cost (denial of wallet) | D | Login rate limits | **F-15** |
 | T39 | All | Client IP spoofed via X-Forwarded-For, bypassing per-IP limits and forging audit IPs | S/R | "Trusted only as configured" | **F-08** |
 | T40 | Email | Email bombing via reset requests exhausts the free daily email quota, blocking recovery for everyone | D | 3 per email per hour (silent), 5 per IP per hour | **F-09** |
-| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low) |
+| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low): implemented 2026-11-14, e2e pending (T117) |
 
 ### 5.2 Admin CLI, test hooks, backups and CI
 | ID | Area | Threat | STRIDE | Mitigation in contract | Status |
@@ -271,6 +271,28 @@ New code-level surfaces: the Fastify pipeline (Host, global limit, session, CSRF
 | T113 | Deleted-budget restore | A restore waiting on the budget lock succeeds after the owner's deletion request commits; the owner's status is read in the locking statement, and the `lockUser` result is unchecked | T/E | The purge re-check skips the user and fails its run (alert) | **F-49** (Low, deferred by the owner 2026-11-14) |
 | T112 | Logs | Financial data, emails, tokens or IPs in app logs | I | F-07 allowlist serializer with DB fixtures, pino redaction, one request line with the route template and opaque IDs, transports never log bodies or recipients, console transport refused in production | Holds (reviewed 2026-11-14) |
 
+### 5.8 Frontend implementation (code review 2026-11-14, `feat/frontend`)
+New code-level surfaces:
+- the SPA served same-origin from `STATIC_DIR` by the backend (SPA fallback for non-`/api` HTML GETs);
+- a service worker with a build-time shell precache in Cache Storage;
+- localStorage for the theme and last budget ID;
+- in-memory session state (CSRF token, link token, return path, quick-add draft stash, TanStack Query cache);
+- client-side QR rendering (`uqr`);
+- passkeys via `@simplewebauthn/browser`;
+- blob downloads (CSV export, recovery codes) and the clipboard (recovery codes).
+
+No new endpoint, role or third-party integration. The CSP gains exactly two `style-src` hashes (owner ruling and security sign-off, 2026-11-14).
+
+| ID | Area | Threat | STRIDE | Mitigation in code | Status |
+|---|---|---|---|---|---|
+| T114 | CSP styles | The style exception lets injected markup add attacker CSS (exfiltration via selectors, UI redress) | I/T | `style-src 'self'` plus two sha256 hashes of React Aria's fixed `<style>` text; no `'unsafe-inline'`, nonce or `'unsafe-hashes'`; backend pin and guard tests, frontend recompute test, cross-package drift test | **Signed off 2026-11-14**; e2e violation gate pending (C3.1); smoke gap F-53 |
+| T115 | Service worker | A stale worker or cached `index.html` serves old code, or a cached response drops the CSP, or API data lands in Cache Storage | T/I | Shell-only precache fixed at build; `/api` and cross-origin never intercepted; network-first navigations; the cached shell keeps its original headers; `updateViaCache: none`; check-dist rejects `/api` and `.map` entries | Holds (reviewed 2026-11-14) |
+| T116 | Link tokens | The token leaks to error tracking before the fragment is stripped | I | Capture module imported first; `replaceState` before render; token held in memory | **F-50** (Low): shared chunks evaluate first in the bundle; no exposure until Sentry is added |
+| T117 | Sign-out on a shared phone | The UI shows sign-in while the server session is still live, so the next person is signed in | S/I | Memory cleared and `location.replace('/signin')` | **F-51** (Low): logout failure ignored |
+| T118 | Device storage | A future change persists financial data or tokens to web storage despite ADR-0002 | I | Only preferences.ts touches localStorage; ESLint bans | **F-52** (Low): the lint ban misses `window.*` and `caches` |
+| T119 | Same-tab user switch | The next user inherits the previous user's unsaved draft and return path | I | Draft scoped to a budget ID; non-members get 404 | **F-54** (Low) |
+| T120 | Open redirect and URL sinks | A return path or a server value navigates off-site or into `javascript:` | S | `safeReturnPath` on every `navigate()`; hrefs only from route constants and server UUIDs; `script-src 'self'` blocks `javascript:` | Holds (reviewed 2026-11-14) |
+
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
 
@@ -354,6 +376,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-13 | v2.3 | First code review (data layer, `feat/db-data-layer`): §5.6 T101–T106; §6 rows for idempotent replay, split category IDs and export resolved in the DAL; R-7 progress noted; F-25, F-26 and F-35 verified; new F-41 (Medium) and F-42 to F-44 (Low); three data-engineer deviations accepted. |
 | 2026-11-14 | v2.4 | Backend code review (`feat/backend-api`): §5.7 T107–T112; new F-45 (Medium) and F-46 to F-48 (Low); the email-budget constant-key deviation is accepted; the `acceptInvitation` owner-status race is assessed as not exploitable (serialized by the budget row lock). |
 | 2026-11-14 | v2.5 | Final pass before the PR: F-45 to F-48 fixed and verified; F-10 verified at image level; new T113 / F-49 (Low, deferred by the owner). |
+| 2026-11-14 | v2.6 | Frontend code review (`feat/frontend`, 371b77c): §5.8 T114–T120; TB-DEV expanded (Cache Storage shell, localStorage, clipboard, blob downloads); CSP two-hash `style-src` signed off; F-32 implemented; new F-50 to F-54 (Low); PR #6 throttle refunds checked against F-45 (no weakening). |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.

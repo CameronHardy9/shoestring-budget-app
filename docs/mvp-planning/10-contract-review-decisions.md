@@ -88,4 +88,13 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Font | **Self-hosted Inter** (variable, ~48 KB), not system fonts. |
 | React Aria's two injected `<style>` blocks vs CSP `style-src 'self'` | **Allow the two exact sha256 hashes** in `style-src` (no `'unsafe-inline'`, no nonce). Security sign-off in the frontend PR review. |
 | "Save & new" in quick-add | Kept next to Save (engineer's default; owner did not object). |
-| Quick-add default category | **No pre-selection** (tap + → amount → category → Save). |
+| Quick-add default category | **No pre-selection** (tap + → amount → category → Save). || Category reordering | **After the MVP** (server order; quick-add chips already put recent categories first). |
+
+## Build round 4: frontend security review (2026-11-14)
+| Topic | Decision |
+|---|---|
+| CSP sign-off (two React Aria hashes) | **Signed off** by security-reviewer; recorded in FINDINGS. |
+| F-51 (sign-out ignores a failed logout while offline) | **Follow-up hardening PR before launch.** |
+| F-50 (link-token capture not first in the production bundle) | **Hard requirement of the Sentry integration PR** (no exposure until Sentry exists). |
+| F-52, F-53, F-54 | **One hardening PR before launch**, together with F-51. |
+
