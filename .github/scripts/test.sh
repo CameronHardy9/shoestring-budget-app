@@ -34,6 +34,52 @@ if has_pkg db; then
   fi
 fi
 
+# CPU budget. Vitest defaults every package to about cpus-1 workers, so running
+# db, backend and frontend at once used to start roughly 3x the cores and the
+# axe-heavy frontend tests slowed down more than 10x (5 s timeouts). Each
+# package gets an equal share of the cores instead.
+#   TEST_PKG_CONCURRENCY  packages tested at once (default: all with a test script)
+#   TEST_MAX_WORKERS      Vitest workers per package (default: cpus / packages,
+#                         rounded up, at least 2; 2 on GitHub's 4-vCPU runners)
+cpu_count() {
+  getconf _NPROCESSORS_ONLN 2>/dev/null || node -p 'require("os").availableParallelism()'
+}
+test_pkgs=0
+for a in frontend backend db tests; do has_script "$a" test && test_pkgs=$((test_pkgs + 1)); done
+cpus="$(cpu_count)"
+pkg_conc="${TEST_PKG_CONCURRENCY:-$test_pkgs}"
+case "$pkg_conc" in 0) pkg_conc=1 ;; '' | *[!0-9]*) die "TEST_PKG_CONCURRENCY must be a positive integer" ;; esac
+workers=$(((cpus + pkg_conc - 1) / pkg_conc))
+[ "$workers" -ge 2 ] || workers=2
+workers="${TEST_MAX_WORKERS:-$workers}"
+case "$workers" in '' | 0 | *[!0-9]*) die "TEST_MAX_WORKERS must be a positive integer" ;; esac
+
+# Per-run coverage directory (relative, so one per package): Vitest keeps its
+# raw coverage in <reportsDirectory>/.tmp and deletes reportsDirectory at the
+# start of a run, so two concurrent runs sharing coverage/ corrupt each other.
+# coverage/ is gitignored, so lint and prettier never see it. Removed on exit.
+COVERAGE_DIR="coverage/make-test-$$"
+remove_coverage_dirs() {
+  local a
+  for a in frontend backend db tests; do
+    if [ -d "$ROOT/$a/$COVERAGE_DIR" ]; then rm -rf "${ROOT:?}/$a/$COVERAGE_DIR"; fi
+    rmdir "$ROOT/$a/coverage" 2>/dev/null || true
+  done
+}
+if has_pkg db; then
+  trap 'remove_coverage_dirs; cleanup' EXIT
+else
+  trap remove_coverage_dirs EXIT
+fi
+
 log "Unit tests: workspace packages ($(workspace_pkgs_text))"
-pnpm -r --if-present run test
+note "$cpus CPUs: $pkg_conc package(s) at a time, $workers Vitest worker(s) each"
+# pnpm's topological order starts backend only after db has finished, which
+# keeps fewer packages competing at once without lengthening the run (frontend
+# is the longest). pnpm forwards arguments after the script name to it (no
+# `--`, which Vitest would read as a file filter). --coverage.* only
+# configures; it does not turn coverage on in packages whose test script
+# leaves it off.
+pnpm -r --if-present --workspace-concurrency="$pkg_conc" run test \
+  --maxWorkers="$workers" --coverage.reportsDirectory="$COVERAGE_DIR"
 log "make test: done in $(elapsed)"

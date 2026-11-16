@@ -53,4 +53,15 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
     - Accepted trade-off: in a parallel burst, the failure that reaches 5 deletes the session or token while a correct attempt is in flight. It fails closed and burns that factor.
     - **F-49 (Low): restore vs the owner's deletion race, deferred by the owner 2026-11-14.** Fix: re-check status after `lockUser` in `restoreDeletedBudget`. Fix it before launch.
     - The earlier image shipping `src/` was ruled no exposure: the `db/testing` import is missing, `NODE_ENV=production` refuses `TEST_HOOKS`, and nothing was ever deployed.
+- **Test-suite review 2026-11-16 (`feat/test-suite`): nothing blocks.** New Lows F-55 and F-56.
+  - Verified by tests: F-01, F-18, F-23 (except the SPA document, F-53, and Sentry), F-33, F-34, F-36; also C2.4, C3.1, C3.6, C8.4, C8.7, C8.8, C8.9.
+  - Partial: F-06, F-09, F-21, F-22; C3.2–C3.5, C15.7. Downgraded: F-32 (bfcache unproven). Not tested in tests/: F-08.
+  - Ruled OK:
+    - the prod-server Origin rewrite (only its own origin; loopback);
+    - the axe `[data-live-announcer]` exclusion;
+    - the visual `snap()` discard (visual suite only; filtering recommended);
+    - public CI failure traces (throwaway stack).
+  - **BUG-1 (GET bodies ignored) is not a security issue.** I recommended the architect exempt GET/HEAD in the contract.
+  **How to apply:** don't reopen these. Flip F-09/F-21/F-22/F-32 only when the missing cases listed in FINDINGS land.
+
 Related: [[project-review-hotspots]]

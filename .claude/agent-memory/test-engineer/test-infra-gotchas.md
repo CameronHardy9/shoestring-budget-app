@@ -1,0 +1,29 @@
+---
+name: test-infra-gotchas
+description: Non-obvious traps in the Shoestring e2e stack and tooling that broke or nearly broke tests/ (Vite proxy, vitest BASE_URL, formatter unescaping, pool size)
+metadata:
+  type: project
+---
+
+Learned building Phase A (2026-11-14/16):
+
+- **API suites must hit the backend directly, not the Vite proxy.** Vite answers OPTIONS itself (204 + CORS headers), which breaks the contract's "unknown method = 404, no CORS" rules. make e2e exports BACKEND_PORT (undocumented); tests/support/env.ts falls back to it. Asked ci-engineer to export API_URL.
+- **Vitest sets process.env.BASE_URL = "/"** (Vite base), so never use BASE_URL presence to detect the stack. env.ts keys off APP_ORIGIN.
+- **A format-on-write hook rewrites `"‮"` escapes into literal characters.** Literal bidi/zero-width chars then trip Semgrep's Trojan Source rule. Build such strings with String.fromCodePoint, and grep for invisible chars after editing.
+- **Backend DAL pool is 5.** Holding a DB lock that blocks 5 requests starves the pool, so later requests hang instead of answering. For F-45 "in flight", block exactly one request (4 sequential failures + 1 blocked by an EXCLUSIVE lock on auth_throttles).
+- **The outbox is not cleared by /api/_test/reset.** resetStack also calls DELETE /api/_test/emails.
+- Frozen clock + test login: sessions expire after 30 days of the frozen clock, so sign in again after advancing more than 30 days.
+- frontend/src/App.test.tsx "auth guard" tests flaked once under the parallel `make test` load (stuck on Loading). Reported to frontend-engineer 2026-11-16.
+
+- **Vite dev sends no CSP** (and injects inline styles in dev), so the CSP gate runs on the production build: tests/scripts/prod-server.mjs serves tests/.prod-build with the backend's headers copied from /api/healthz. Coordinator ruling 2026-11-16: SPA/static header checks belong to image-smoke, not e2e.
+- **axe flags React Aria's LiveAnnouncer** (transient `div role=img` with a dangling aria-labelledby in `[data-live-announcer]`); exclude that node only, as frontend/src/test/axe.ts does.
+- React Aria injects usePreventScroll's <style> only on iOS; Playwright's iPhone emulation needs navigator.platform overridden to "iPhone".
+- page.request shares the browser context's cookie jar, so POST /api/_test/login there signs the browser in.
+- The Bash auto-mode classifier sometimes fails repeatedly; after 10 misses in a row the turn stops. Switch to Read/Write work and retry later.
+
+**Why:** each of these cost a debugging round or would mislead the next person.
+**How to apply:** check this list before changing tests/support or adding concurrency tests. Related: [[test-data-strategy]].
+- **bfcache under Playwright (verified 2026-11-16, PW 1.65):** Chromium gets `--disable-back-forward-cache` by default, and the headless shell never caches anyway (CDP reason BackForwardCacheDisabledForDelegate). It works with `channel: "chromium"` plus `ignoreDefaultArgs: ["--disable-back-forward-cache"]`, but then `page.goBack()` must use `waitUntil: "commit"` (a restore fires no load event, so the default hangs). Playwright's WebKit never restores from bfcache, headed or headless.
+- **WebKit screenshots inject `<style>body {}</style>`** (inPagePrepareForScreenshots, sync animations). The violation has an empty `sample` (no 'report-sample' in the CSP) and the event target is the document, so it can only be identified by line/column in the evaluated helper (5:30 in 1.65). Chromium injects nothing. Caret hiding uses inline style via CSSOM, which CSP allows.
+- `exposeBinding` survives navigations; use it for anything collected from the page across documents.
+- **Building RegExps from strings (2026-11-16):** CodeQL `js/incomplete-sanitization` fails PRs on partial escaping, and Semgrep's `detect-non-literal-regexp` taints every function parameter that reaches `new RegExp`, ignoring escaping. Use `support/regex.ts` (`escapeRegExp`, `openApiPathRegex`, `templateRegex`, `endsWithRegex`); its private `compile()` holds the one justified nosemgrep. `RegExp.escape` exists in Node 24 but the tests tsconfig lib is ES2024, so it isn't typed.

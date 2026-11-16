@@ -56,6 +56,14 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - Smoke and header tests that probe only `/api/healthz` miss the HTML document, where the CSP matters (F-53). Probe the image by hand: run it with a bogus `DATABASE_URL`; the server starts and serves static files.
     - In-memory state that survives re-login (draft stash, return path) must be bound to the user ID (F-54).
 
+13. **Test-suite review (2026-11-16, `feat/test-suite`). Judging whether a test proves its claim.**
+    - **Per-document collectors.** `addInitScript` arrays (`window.__x`) reset on every navigation. A teardown check reads only the last document, so any `page.goto` mid-test drops earlier events (F-55). Collect them Node-side (`exposeBinding`).
+    - **Behaviour vs mechanism.** A "Back after sign-out" test can pass on a plain reload. To prove bfcache, assert `pageshow.persisted` (F-32 stays unverified until then). The Vite dev server's HMR socket can make a page ineligible for bfcache.
+    - **Gates against the dev server are vacuous.** Vite sends no CSP, so only the csp-prod and visual projects (`tests/scripts/prod-server.mjs`) test the policy. prod-server copies headers from `/api/healthz`, so it proves nothing about what the image serves on `index.html` (F-53).
+    - **Single-IP stacks can't test IP-keyed rules** (F-21's (email, IP) key, F-08 XFF). Check before accepting such a claim.
+    - **Test env precedence.** In tests/support/env.ts the process env beats `.env.stack`, with no local-only guard on DB URLs (F-56). HTTP paths fail closed through the `_test/reset` = 204 probe; direct DB connections don't.
+    - Read test names against their bodies: "single-use challenge" tested cross-session binding instead.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

@@ -1,7 +1,7 @@
 // Accessibility sweep: every route renders through the real App and guard,
 // with one <h1>, a main landmark, and no serious/critical axe violations.
 import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { App } from "./App.tsx";
 import { queryClient } from "./app/query.ts";
 import { apiError, json, mockApi } from "./test/api-mock.ts";
@@ -16,6 +16,7 @@ import {
   summary,
   transaction,
 } from "./test/fixtures.ts";
+import { preloadScreens } from "./test/preload-screens.ts";
 
 const B = `/budgets/${BUDGET_ID}`;
 const signedInApi = {
@@ -42,6 +43,8 @@ const signedInApi = {
   }),
 };
 
+beforeAll(preloadScreens);
+
 afterEach(() => {
   queryClient.clear();
 });
@@ -50,11 +53,7 @@ async function check(path: string, heading: RegExp | string) {
   window.history.replaceState(null, "", path);
   const view = render(<App />);
   expect(
-    await screen.findByRole(
-      "heading",
-      { level: 1, name: heading },
-      { timeout: 3000 },
-    ),
+    await screen.findByRole("heading", { level: 1, name: heading }),
   ).toBeInTheDocument();
   expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   expect(view.container.querySelector("main")).not.toBeNull();
