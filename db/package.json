@@ -38,8 +38,8 @@
     "new-migration": "dbmate --migrations-dir ./migrations new"
   },
   "dependencies": {
-    "dbmate": "2.37.0",
-    "kysely": "0.28.19",
+    "dbmate": "2.38.0",
+    "kysely": "0.29.8",
     "pg": "8.23.1"
   },
   "devDependencies": {
