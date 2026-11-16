@@ -103,4 +103,5 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 |---|---|
 | F-55 (CSP gate loses violations on navigation), F-56 (test DB URLs not forced local), F-32 bfcache assertion | **Fix in the test-suite PR** before merge. |
 | BUG-1 (GET ignores a request body) | **Exempt GET and HEAD** from the body rules in the contract; no backend change. |
-
+| GitGuardian on PR #13 (incident 40152085, generated test passwords) | **False positive**, marked by the owner in the GitGuardian dashboard. No code change; tests/ stays scanned. |
+| Dependabot #11 (TypeScript 7) | **Closed.** typescript-eslint doesn't support TS 7 yet; stay on TS 6. ci-engineer makes Dependabot skip TypeScript majors until it does (hardening PR). |
