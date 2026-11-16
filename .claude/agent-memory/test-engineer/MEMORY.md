@@ -1,0 +1,2 @@
+- [Test infra gotchas](test-infra-gotchas.md) — Vite proxy vs backend, vitest BASE_URL, formatter unescaping bidi, pool size 5, outbox reset
+- [Test data strategy](test-data-strategy.md) — serial + per-test reset, recipes/oracle design, Phase A timing, known BUG-1
