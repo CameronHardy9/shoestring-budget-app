@@ -73,7 +73,9 @@ export default function SessionsScreen() {
           }),
         );
         if (revoking.current) {
-          await signOut();
+          // Already revoked by the DELETE: a failed logout call can't leave
+          // this session live, so leave even if it fails (F-51).
+          await signOut({ revoked: true });
           return;
         }
         toast(`Signed out ${deviceLabel(revoking)}`);

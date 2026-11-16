@@ -128,6 +128,33 @@ describe("steps 3-4: session, then CSRF (auth.md §3)", () => {
     expect((await w.owner.client.post(path, body)).status).toBe(201);
   });
 
+  it("a valid X-CSRF-Token does not excuse the Origin check: foreign or cross-site → 403 CSRF_FAILED, and nothing is written", async () => {
+    const w = await seedWorld();
+    const path = `/budgets/${w.budget.id}/categories`;
+    const body = { name: "Transport", kind: "expense" };
+    const attempts = [
+      { origin: "https://evil.example" },
+      { origin: "http://localhost" }, // APP_ORIGIN's name without its port
+      { origin: "null" }, // sandboxed iframe, file: URL
+      { origin: null, headers: { "sec-fetch-site": "cross-site" } },
+      { origin: null, headers: { "sec-fetch-site": "same-site" } },
+      { origin: null }, // neither header
+    ];
+    for (const opts of attempts) {
+      const res = await w.owner.client.post(path, body, opts);
+      expect(
+        [res.status, codeOf(res)],
+        `${JSON.stringify(opts)} with the session's own token`,
+      ).toEqual([403, "CSRF_FAILED"]);
+    }
+    const list = await w.owner.client.get<{ items: { name: string }[] }>(
+      `/budgets/${w.budget.id}/categories`,
+    );
+    expect(list.body.items.map((c) => c.name)).not.toContain("Transport");
+    // The same request from the app's own origin goes through.
+    expect((await w.owner.client.post(path, body)).status).toBe(201);
+  });
+
   it("public endpoints ignore a session cookie, so no CSRF token is needed there", async () => {
     const w = await seedWorld();
     const res = await w.owner.client.post(

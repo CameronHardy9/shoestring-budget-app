@@ -10,6 +10,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function storage(): Storage | null {
   try {
+    // The app's single allowed device-storage access (ADR-0002, F-52): only
+    // the two keys above, through read()/write().
+    // eslint-disable-next-line no-restricted-properties -- the one wrapper
     return window.localStorage;
   } catch {
     return null;

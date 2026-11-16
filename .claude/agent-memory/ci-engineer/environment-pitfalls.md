@@ -1,6 +1,6 @@
 ---
 name: environment-pitfalls
-description: Owner's Mac and tool-image quirks that break naive CI/Makefile scripts (bash 3.2, make 3.81, corepack shim, Playwright image Node, denied rm -rf)
+description: Owner's Mac and tool-image quirks that break naive CI/Makefile scripts (bash 3.2, make 3.81, corepack shim, Playwright image Node, denied rm -rf), compose and pnpm traps, e2e edge proxy client-IP topology
 metadata:
   type: project
 ---
@@ -40,3 +40,9 @@ Facts verified 2026-11-12 that shaped the pipeline scripts:
 
 **Why:** each of these cost a failed run once.
 **How to apply:** check this list before writing shell or compose changes; see [[pipeline-timings]].
+
+- e2e client IP (2026-11-16): backend/frontend publish NO host ports in docker-compose.test.yml; the `edge` service (.github/scripts/e2e-edge.mjs) publishes BACKEND_PORT and FRONTEND_PORT and appends the TCP peer (or `X-E2E-Client-IP`) to X-Forwarded-For; backend TRUST_PROXY_HOPS=1. Vite's /api proxy has no xfwd, so it is transparent. If frontend ever sets `xfwd: true`, the browser path derives the edge's IP. Observed peer on OrbStack: the compose network gateway (192.168.97.1 that run); verify with a failed login, then `security_events.ip` via psql in the postgres container.
+- Content-hash dirty tags change on every edit other agents make, so make image-smoke often rebuilds the image right after make image when agents work in parallel. Expected, not a bug.
+- The e2e backend runs `node --watch` through the bind mount, so another agent editing backend/ mid-run restarts it: the edge logs `ECONNREFUSED` and the suites get 502 "edge: upstream unavailable" (9 failures in one run, 2026-11-16). Check `docker logs <backend> | grep Restarting` before blaming a change. CI is unaffected (nobody edits files there).
+- Edge upstream stays `agent: false` (2026-11-16). A keep-alive agent cut ~0.3 ms/request but no measurable suite time (API phase 168 s both), and caused EPIPE -> 502 on the >64 KiB 413 tests (backend closes without reading the body; on a reused socket the write fails before the 413 is read). Suite time swings 168-215 s with machine load alone; A/B on one stack with the backend un-watched (scratch compose override: `pnpm --filter ./backend exec node src/dev-server.ts`).
+- CodeQL locally (2026-11-16, free): `gh release download codeql-bundle-v<CI version> -R github/codeql-action -p codeql-bundle-javascript-linux64.tar.zst` (136 MB; macOS tar extracts zstd), run it in `debian:trixie-slim --platform linux/amd64` with `database create --build-mode=none --source-root=<dir>` and `database analyze ... javascript-security-extended.qls`. One file takes about 1 min. It reproduced alert #6 exactly. CodeQL treats an http client response (`ures`) as user input, and it counted `writeHead`'s status argument as a header-name sink. Fix: keep headers in flat raw arrays, check names against the token regex, set `res.statusCode` and call `appendHeader`.

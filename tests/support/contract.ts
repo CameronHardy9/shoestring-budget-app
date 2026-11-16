@@ -209,19 +209,26 @@ export const errorStatus: ReadonlyMap<string, number> = (() => {
   return map;
 })();
 
+/**
+ * Operation paths that errors.md's code registry names in a code's "When"
+ * prose (e.g. MFA_REQUIRED: "`/auth/reauth` or `/auth/password-reset/complete`
+ * without `mfa`"), relative to /api. contract/oracle.test.ts checks that each
+ * such operation lists the code in its `x-error-codes`, so the oracle needs no
+ * side list of codes documented only in prose.
+ */
+export const proseErrorCodePaths: readonly { code: string; path: string }[] =
+  (() => {
+    const text = readFileSync(docPath("errors.md"), "utf8");
+    const out: { code: string; path: string }[] = [];
+    for (const row of text.matchAll(/^\| \d{3} \| `([A-Z_]+)` \| (.*)$/gm))
+      for (const m of row[2]!.matchAll(/`(\/[a-z][\w/{}.-]*)`/g))
+        out.push({ code: row[1]!, path: m[1]!.replace(/^\/api(?=\/)/, "") });
+    return out;
+  })();
+
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 /** Methods the body rules apply to (errors.md "Request bodies"). */
 const BODY_METHODS = UNSAFE;
-
-/**
- * Codes errors.md assigns to one operation in prose without the OpenAPI
- * `x-error-codes` listing them. Each entry cites its source; see the report's
- * contract notes (architect) for aligning x-error-codes.
- */
-const PROSE_CODES: Record<string, string[]> = {
-  // errors.md MFA_REQUIRED row and auth.md §8 step 4.
-  completePasswordReset: ["MFA_REQUIRED"],
-};
 
 /** Every code an operation may answer (errors.md "Implicit codes" + x-error-codes). */
 export function allowedErrorCodes(op: Operation): Set<string> {
@@ -239,7 +246,6 @@ export function allowedErrorCodes(op: Operation): Set<string> {
       ? ["PAYLOAD_TOO_LARGE", "UNSUPPORTED_MEDIA_TYPE"]
       : []),
     ...op.errorCodes,
-    ...(PROSE_CODES[op.operationId] ?? []),
   ]);
   if (op.session !== "none" && op.session !== "optional")
     codes.add("UNAUTHENTICATED");

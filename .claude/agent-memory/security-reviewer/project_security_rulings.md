@@ -1,6 +1,6 @@
 ---
 name: project-security-rulings
-description: Security-reviewer rulings on Shoestring's MVP design and code reviews (2026-11-12 to 2026-11-14) and the reasons for each, so later reviews do not reopen or contradict them
+description: Security-reviewer rulings on Shoestring's MVP design and code reviews (2026-11-12 to 2026-11-16) and the reasons for each, so later reviews do not reopen or contradict them
 metadata:
   type: project
 ---
@@ -63,5 +63,13 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
     - public CI failure traces (throwaway stack).
   - **BUG-1 (GET bodies ignored) is not a security issue.** I recommended the architect exempt GET/HEAD in the contract.
   **How to apply:** don't reopen these. Flip F-09/F-21/F-22/F-32 only when the missing cases listed in FINDINGS land.
+
+- **Hardening review 2026-11-16 (`fix/pre-launch-hardening`): approve with follow-ups.** Closed F-51 to F-54. F-08 (V26 still open), F-09 (app side; the alert is sre's), F-21 and F-22 verified by integration tests. F-32, F-55 and F-56 verified from #13. New F-57 (Medium, the read-then-increment class, fixed in the PR) and F-58 (Low, open).
+  - Ruled that the login failure counters' check-then-increment overshoot is **acceptable for launch**: about 2x at worst, bounded by the per-IP `hitOrThrow` and the argon2 semaphore. **But the `login_throttled` notice (`=== 100` on a rolling sum) must become one-shot before launch.**
+  - Ruled the F-22 slow-mailer test hook **not needed**: it would widen the hook surface.
+  - The e2e `edge` proxy and its `X-E2E-Client-IP` header are test-only and cannot reach the image (`.github` is dockerignored, and the backend has no code for the header). Re-check this if a Dockerfile COPY or the deploy config changes.
+  - `reserveRolling` (upsert, then sum) fails closed under concurrency. Accepted.
+  - Follow-up (same day): the F-58 notice was fixed in #14 (one-shot per UTC day; no repeat for a same-day re-lockout or after a reset, accepted), and the counter conversion is owner-deferred. CodeQL #6 (remote-property-injection in e2e-edge.mjs) was ruled Info, not an F-number: test-only, and assigning a string to `__proto__` is a no-op. It was fixed anyway with raw header arrays and token/value validation.
+  - I did not run `make audit` because the tech lead was running it at the same time (both write `.audit/`). Check `.audit/` timestamps against the edit times.
 
 Related: [[project-review-hotspots]]

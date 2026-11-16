@@ -10,16 +10,14 @@ import {
 } from "react";
 import { ApiError } from "../../api/errors.ts";
 import type { Budget, Transaction } from "../../api/types.ts";
+import { useMe } from "../../app/auth.tsx";
 import { useBudget, useCategories } from "../../app/data.ts";
+import { takeStashedDraft } from "../../app/draft-stash.ts";
 import { AppShell, type NavId } from "../../components/AppShell.tsx";
 import { ErrorState, LoadingState } from "../../components/States.tsx";
 import { setLastBudgetId } from "../../lib/preferences.ts";
 import { NotFoundScreen } from "../NotFoundScreen.tsx";
-import {
-  takeStashedDraft,
-  TransactionSheet,
-  type SheetMode,
-} from "./TransactionSheet.tsx";
+import { TransactionSheet, type SheetMode } from "./TransactionSheet.tsx";
 
 interface BudgetContextValue {
   budget: Budget;
@@ -44,11 +42,12 @@ export function BudgetLayout({
   active: NavId;
   children: ReactNode;
 }) {
+  const me = useMe();
   const budget = useBudget(budgetId);
   // Warm the categories cache so the sheet opens ready.
   useCategories(budgetId);
   const [mode, setMode] = useState<SheetMode | null>(() => {
-    const draft = takeStashedDraft(budgetId);
+    const draft = takeStashedDraft(budgetId, me.id);
     return draft ? { kind: "create", draft } : null;
   });
 

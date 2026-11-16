@@ -7,7 +7,8 @@ metadata:
 
 Learned building Phase A (2026-11-14/16):
 
-- **API suites must hit the backend directly, not the Vite proxy.** Vite answers OPTIONS itself (204 + CORS headers), which breaks the contract's "unknown method = 404, no CORS" rules. make e2e exports BACKEND_PORT (undocumented); tests/support/env.ts falls back to it. Asked ci-engineer to export API_URL.
+- **API suites must hit the backend directly, not the Vite proxy.** Vite answers OPTIONS itself (204 + CORS headers), which breaks the contract's "unknown method = 404, no CORS" rules. make e2e / e2e-up export API_URL (since 2026-11-16, also into the visual container).
+- **Since 2026-11-16 an edge proxy sits in front of backend and Vite (TRUST_PROXY_HOPS=1).** Per-client IPs only via X-E2E-Client-IP (ApiClient `clientIp`); the default peer IP is the Docker gateway and differs on Linux CI. tests/scripts/stack.sh is gone: use make e2e-up/e2e-down.
 - **Vitest sets process.env.BASE_URL = "/"** (Vite base), so never use BASE_URL presence to detect the stack. env.ts keys off APP_ORIGIN.
 - **A format-on-write hook rewrites `"‮"` escapes into literal characters.** Literal bidi/zero-width chars then trip Semgrep's Trojan Source rule. Build such strings with String.fromCodePoint, and grep for invisible chars after editing.
 - **Backend DAL pool is 5.** Holding a DB lock that blocks 5 requests starves the pool, so later requests hang instead of answering. For F-45 "in flight", block exactly one request (4 sequential failures + 1 blocked by an EXCLUSIVE lock on auth_throttles).
@@ -22,6 +23,10 @@ Learned building Phase A (2026-11-14/16):
 - The Bash auto-mode classifier sometimes fails repeatedly; after 10 misses in a row the turn stops. Switch to Read/Write work and retry later.
 
 **Why:** each of these cost a debugging round or would mislead the next person.
+- **Recurring backend pattern: count-then-hit limits** are not race-safe. The reset-request per-address rows had it; fixed 2026-11-16 as F-57 (reserve first: add, compare, refund). Look for the pattern in new limits. A deterministic race test is hard because the per-IP upsert runs before the count; the owner has not asked for an API burst test.
+- Timing (F-22) tests: run known/unknown samples concurrently and compare medians; observed gap ~1 ms on OrbStack, all ~1020-1060 ms.
+- **Flaky area: taps right after navigation (seen on iphone-webkit 2026-11-16, twice).** (a) /more swaps a 1-row skeleton for the budget list and pushes Sign out down, so the tap misses; wait for the "New budget" link (sign-out-back.ts openMoreSettled). (b) The quick-add + is inert until the budget loads (BudgetLayout `if (budget.data)`); wait for `total-remaining` first. Diagnose with the trace timeline (click time vs API responses).
+
 **How to apply:** check this list before changing tests/support or adding concurrency tests. Related: [[test-data-strategy]].
 - **bfcache under Playwright (verified 2026-11-16, PW 1.65):** Chromium gets `--disable-back-forward-cache` by default, and the headless shell never caches anyway (CDP reason BackForwardCacheDisabledForDelegate). It works with `channel: "chromium"` plus `ignoreDefaultArgs: ["--disable-back-forward-cache"]`, but then `page.goBack()` must use `waitUntil: "commit"` (a restore fires no load event, so the default hangs). Playwright's WebKit never restores from bfcache, headed or headless.
 - **WebKit screenshots inject `<style>body {}</style>`** (inPagePrepareForScreenshots, sync animations). The violation has an empty `sample` (no 'report-sample' in the CSP) and the event target is the document, so it can only be identified by line/column in the evaluated helper (5:30 in 1.65). Chromium injects nothing. Caret hiding uses inline style via CSSOM, which CSP allows.

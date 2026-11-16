@@ -1,13 +1,13 @@
 // /more: switch budget, settings, sign out.
 import { useState } from "react";
 import { Link } from "react-aria-components";
-import { useAuth, useMe } from "../app/auth.tsx";
+import { useMe } from "../app/auth.tsx";
 import { useBudgets } from "../app/data.ts";
 import { AppShell } from "../components/AppShell.tsx";
-import { Button } from "../components/Button.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
 import { ErrorState, LoadingState } from "../components/States.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
+import { SignOutButton } from "../components/SignOutButton.tsx";
 import {
   getLastBudgetId,
   getThemePreference,
@@ -47,7 +47,6 @@ function Row({
 
 export default function MoreScreen() {
   const me = useMe();
-  const { signOut } = useAuth();
   const budgets = useBudgets();
   const last = getLastBudgetId();
   const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
@@ -163,14 +162,7 @@ export default function MoreScreen() {
             </p>
           </div>
         </section>
-        <Button
-          variant="secondary"
-          className="w-full"
-          onPress={() => void signOut()}
-          data-testid="sign-out"
-        >
-          <Icon name="logout" /> Sign out
-        </Button>
+        <SignOutButton />
       </div>
     </AppShell>
   );

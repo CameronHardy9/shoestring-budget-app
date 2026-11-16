@@ -49,8 +49,7 @@ async function expectHook(
 
 // ------------------------------------------------------------ teardown
 // Modules with open resources (support/dal.ts) register here, so runners that
-// never load them (the visual suite in the Playwright container, which has no
-// database packages) need not import them to clean up.
+// never load them (the visual suite) need not import them to clean up.
 const teardowns: (() => Promise<void>)[] = [];
 
 export function onTeardown(fn: () => Promise<void>): void {

@@ -8,6 +8,7 @@ import {
   matchOperation,
   operation,
   operations,
+  proseErrorCodePaths,
   validateResponse,
 } from "../support/contract.ts";
 import type { ObservedResponse } from "../support/contract.ts";
@@ -155,6 +156,33 @@ describe("contract oracle", () => {
     expect(
       allowedErrorCodes(operation("getMe")).has("ACCOUNT_PENDING_DELETION"),
     ).toBe(false);
+  });
+
+  it("every code errors.md assigns to a named operation in prose is in that operation's x-error-codes", () => {
+    // The registry's "When" column names some operations by path (MFA_REQUIRED:
+    // `/auth/reauth`, `/auth/password-reset/complete`). Such a code must be in
+    // the operation's x-error-codes, or be implicit for every operation
+    // (errors.md "Implicit codes"); the oracle keeps no side list of codes
+    // that only the prose documents.
+    const everyOperation = new Set(["INTERNAL", "RATE_LIMITED", "UNAVAILABLE"]);
+    expect(proseErrorCodePaths).toEqual(
+      expect.arrayContaining([
+        { code: "MFA_REQUIRED", path: "/auth/reauth" },
+        { code: "MFA_REQUIRED", path: "/auth/password-reset/complete" },
+      ]),
+    );
+    for (const { code, path } of proseErrorCodePaths) {
+      const ops = operations.filter((o) => o.path === path);
+      expect(
+        ops.length,
+        `errors.md names ${path} under ${code}, but api.openapi.yaml has no such path`,
+      ).toBeGreaterThan(0);
+      for (const op of ops)
+        expect(
+          everyOperation.has(code) || op.errorCodes.includes(code),
+          `errors.md: ${code} for ${path}, but ${op.operationId}'s x-error-codes lack it (architect)`,
+        ).toBe(true);
+    }
   });
 
   it("allows 413 and 415 only on POST, PUT, PATCH and DELETE (errors.md 'Request bodies')", () => {

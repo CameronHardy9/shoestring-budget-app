@@ -12,6 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../../api/errors.ts";
 import { newIdempotencyKey } from "../../api/ids.ts";
 import type { Budget, Category, Transaction } from "../../api/types.ts";
+import { useMe } from "../../app/auth.tsx";
 import {
   getTransaction,
   useCategories,
@@ -20,6 +21,7 @@ import {
   useReplaceTransaction,
   useTransactions,
 } from "../../app/data.ts";
+import { stashDraft } from "../../app/draft-stash.ts";
 import { useToast } from "../../app/toast.tsx";
 import {
   buildTransaction,
@@ -58,18 +60,6 @@ import {
 } from "../../lib/money.ts";
 import { remainderFor } from "../../lib/splits.ts";
 import { describeSplits } from "./TransactionRow.tsx";
-
-/** Unsaved quick-add input kept in memory across a sign-in (errors.md "Client handling"). */
-let stashed: { budgetId: string; draft: Draft } | null = null;
-function stashDraft(budgetId: string, draft: Draft): void {
-  stashed = { budgetId, draft };
-}
-export function takeStashedDraft(budgetId: string): Draft | null {
-  if (!stashed || stashed.budgetId !== budgetId) return null;
-  const { draft } = stashed;
-  stashed = null;
-  return draft;
-}
 
 export type SheetMode =
   | { kind: "create"; draft?: Draft }
@@ -203,6 +193,7 @@ function Editor({
   mode: SheetMode;
   onClose: () => void;
 }) {
+  const me = useMe();
   const toast = useToast();
   const categoriesQuery = useCategories(budget.id);
   const recent = useTransactions(budget.id, {
@@ -335,7 +326,8 @@ function Editor({
       }
     } catch (error) {
       if (error instanceof ApiError) {
-        if (error.code === "UNAUTHENTICATED") stashDraft(budget.id, draft);
+        if (error.code === "UNAUTHENTICATED")
+          stashDraft(budget.id, me.id, draft);
         if (error.code === "VERSION_CONFLICT" && editing) {
           try {
             setConflict(await getTransaction(budget.id, editing.id));

@@ -5,6 +5,7 @@ import { Throttles } from "../http/rate-limit.ts";
 import { createLogger } from "../logging.ts";
 import {
   fakeThrottles,
+  slowThrottles,
   strictDal,
   testKeyring,
 } from "../test-support/harness.ts";
@@ -16,9 +17,12 @@ import type { EmailTransport, OutgoingEmail } from "./transports.ts";
 const n = new Notifications("https://app.test");
 const silent = createLogger({ logLevel: "silent", release: "t" });
 
-function mailer(transport: EmailTransport, quota = 10) {
+function mailer(
+  transport: EmailTransport,
+  quota = 10,
+  t: { dal: ReturnType<typeof fakeThrottles>["dal"] } = fakeThrottles(),
+) {
   const clock = createAppClock();
-  const t = fakeThrottles();
   const throttles = new Throttles(
     strictDal({ throttles: t.dal }),
     parseKeyring(testKeyring()),
@@ -75,6 +79,79 @@ describe("daily email budget (F-09)", () => {
         ),
     };
     expect(await mailer(slow).send(msg(true))).toBe("failed");
+  });
+});
+
+describe("daily email budget under concurrency (reserve-first)", () => {
+  const sentCount = (rs: string[]) => rs.filter((r) => r === "sent").length;
+  const total = (rows: Map<string, number>) =>
+    [...rows.values()].reduce((a, b) => a + b, 0);
+
+  it("a burst of bulk mail stops at 60%, and priority mail still gets the rest up to 100%", async () => {
+    const out = new Outbox(() => new Date());
+    const t = slowThrottles();
+    const m = mailer(out, 10, t);
+    const bulk = await Promise.all(
+      Array.from({ length: 20 }, () => m.send(msg(false))),
+    );
+    expect(sentCount(bulk)).toBe(6);
+    expect(bulk.filter((r) => r !== "sent").every((r) => r === "dropped")).toBe(true);
+    expect(total(t.rows)).toBe(6); // dropped mail holds no slot
+    const priority = await Promise.all(
+      Array.from({ length: 20 }, () => m.send(msg(true))),
+    );
+    expect(sentCount(priority)).toBe(4);
+    expect(out.list()).toHaveLength(10);
+    expect(total(t.rows)).toBe(10);
+  });
+
+  it("mixed bursts never exceed the quota, and bulk never exceeds 60%", async () => {
+    const out = new Outbox(() => new Date());
+    const t = slowThrottles();
+    const m = mailer(out, 10, t);
+    const sends = Array.from({ length: 40 }, (_, i) => msg(i % 2 === 0));
+    const rs = await Promise.all(sends.map((s) => m.send(s)));
+    expect(sentCount(rs)).toBeLessThanOrEqual(10);
+    expect(
+      rs.filter((r, i) => r === "sent" && !sends[i]!.priority).length,
+    ).toBeLessThanOrEqual(6);
+    expect(out.list()).toHaveLength(sentCount(rs));
+    expect(total(t.rows)).toBe(sentCount(rs));
+    expect([...t.rows.values()].every((n) => n >= 0)).toBe(true);
+  });
+
+  it("a send the provider fails keeps its slot (the quota errs on the safe side)", async () => {
+    let calls = 0;
+    const flaky: EmailTransport = {
+      name: "provider",
+      send: () =>
+        ++calls <= 2 ? Promise.reject(new Error("boom")) : Promise.resolve(),
+    };
+    const t = fakeThrottles();
+    const m = mailer(flaky, 3, t);
+    expect(await m.send(msg(true))).toBe("failed");
+    expect(await m.send(msg(true))).toBe("failed");
+    expect(await m.send(msg(true))).toBe("sent");
+    expect(await m.send(msg(true))).toBe("dropped");
+    expect(calls).toBe(3);
+  });
+
+  it("an unavailable budget store fails closed without sending", async () => {
+    let sent = 0;
+    const out: EmailTransport = {
+      name: "provider",
+      send: () => {
+        sent++;
+        return Promise.resolve();
+      },
+    };
+    const broken = fakeThrottles();
+    broken.dal.hitThrottle = () => Promise.reject(new Error("db down"));
+    expect(await mailer(out, 10, broken).send(msg(true))).toBe("failed");
+    const unreadable = fakeThrottles();
+    unreadable.dal.sumThrottle = () => Promise.reject(new Error("db down"));
+    expect(await mailer(out, 10, unreadable).send(msg(true))).toBe("failed");
+    expect(sent).toBe(0);
   });
 });
 

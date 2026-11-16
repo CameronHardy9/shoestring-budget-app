@@ -8,7 +8,7 @@ import { authenticationOptions, newChallenge } from "../auth/webauthn.ts";
 import { randomToken, sha256 } from "../crypto/keyring.ts";
 import type { AppDeps } from "../deps.ts";
 import { ApiError, fieldError, validationFailed } from "../errors.ts";
-import { DAY, HOUR, ipKey } from "../http/rate-limit.ts";
+import { DAY, HOUR, ipKey, rateLimited } from "../http/rate-limit.ts";
 import type { MfaProofInput } from "./mfa.ts";
 import { assertMfaBudget, refusedAttempt, relyingParty, verifySecondFactor } from "./mfa.ts";
 import { mfaMethods } from "../auth/session.ts";
@@ -43,6 +43,13 @@ export async function resetTokenIpLimit(
  * POST /auth/password-reset/request: always 202 (the route pads to 1 s).
  * Mails a 30-minute token when the account exists and the silent per-email
  * limits (3 per hour, 5 per 24 h, F-09) allow it.
+ *
+ * Reserve-first (F-45): each limit is charged before it is compared, so
+ * concurrent requests for one address (from many IPs) cannot all pass a
+ * read-then-write check. A refused request refunds what it reserved, so the
+ * counters hold only requests that went on to the lookup; a request that got
+ * past both limits keeps its slots whatever happens next (unknown address,
+ * daily email budget, error), as before.
  */
 export async function requestPasswordReset(
   deps: AppDeps,
@@ -50,15 +57,17 @@ export async function requestPasswordReset(
   email: string,
 ): Promise<void> {
   const t = deps.throttles;
-  const hourKey = t.key("reset-request:email_hour", email);
-  const dayKey = t.key("reset-request:email_day", email);
-  if (
-    (await t.count(hourKey, HOUR)) >= 3 ||
-    (await t.rollingCount(dayKey, DAY)) >= 5
-  )
+  const hour = await t.reserve(t.key("reset-request:email_hour", email), HOUR);
+  if (hour.count > 3) {
+    await t.release(hour);
     return;
-  await t.hit(hourKey, HOUR);
-  await t.rollingHit(dayKey, DAY);
+  }
+  const day = await t.reserveRolling(t.key("reset-request:email_day", email), DAY);
+  if (day.count > 5) {
+    await t.release(day);
+    await t.release(hour);
+    return;
+  }
   const userId = await deps.dal.users.findUserIdByEmail(email);
   if (!userId) return;
   const token = randomToken();
@@ -161,14 +170,20 @@ export async function completePasswordReset(
 
 // ---------------------------------------------------------------- email change
 
-/** email-change-request: 5 per user per day (429); the DAL adds the one-per-24 h rule (F-33). */
+const EMAIL_CHANGE_REQUESTS_PER_DAY = 5;
+
+/**
+ * email-change-request: 5 per user per day (429); the DAL adds the one-per-24 h
+ * rule (F-33). A read-only pre-check at errors.md step 7; requestEmailChange
+ * enforces the cap race-safely with a reservation.
+ */
 export async function emailChangeRequestLimit(
   deps: AppDeps,
   auth: AuthContext,
 ): Promise<void> {
   await deps.throttles.assertUnder(
     deps.throttles.key("email-change:user", auth.session.userId),
-    5,
+    EMAIL_CHANGE_REQUESTS_PER_DAY,
     DAY,
   );
 }
@@ -185,30 +200,40 @@ export async function emailChangeIpLimit(
   );
 }
 
-/** POST /me/email-change: 202 either way (the route pads to 1 s). */
+/**
+ * POST /me/email-change: 202 either way (the route pads to 1 s).
+ *
+ * Reserve-first (F-45): the per-user daily slot is charged before anything
+ * else, so concurrent requests (each "email_taken" one mails the new address)
+ * cannot all pass a stale read. Only requests the DAL accepts ("created" or
+ * "email_taken") keep the slot; any refusal (cap, own address, the DAL's
+ * one-per-24 h rule, an error) refunds it before the error propagates.
+ */
 export async function requestEmailChange(
   deps: AppDeps,
   auth: AuthContext,
   newEmail: string,
 ): Promise<void> {
   const { dal } = deps;
+  const t = deps.throttles;
   const userId = auth.session.userId;
-  const me = await dal.users.getUserContact(userId);
-  if (me.email === newEmail)
-    throw validationFailed([fieldError("body", "newEmail", "invalid_value")]);
+  const slot = await t.reserve(t.key("email-change:user", userId), DAY);
   const changeToken = randomToken();
   const cancelToken = randomToken();
-  const r = await dal.tokens.requestEmailChange({
-    userId,
-    sessionId: auth.session.id,
-    newEmail,
-    changeTokenHash: sha256(changeToken),
-    cancelTokenHash: sha256(cancelToken),
+  const r = await t.refundOnError([slot], async () => {
+    if (slot.count > EMAIL_CHANGE_REQUESTS_PER_DAY)
+      throw rateLimited(t.retryAfter(DAY));
+    const me = await dal.users.getUserContact(userId);
+    if (me.email === newEmail)
+      throw validationFailed([fieldError("body", "newEmail", "invalid_value")]);
+    return dal.tokens.requestEmailChange({
+      userId,
+      sessionId: auth.session.id,
+      newEmail,
+      changeTokenHash: sha256(changeToken),
+      cancelTokenHash: sha256(cancelToken),
+    });
   });
-  await deps.throttles.hit(
-    deps.throttles.key("email-change:user", userId),
-    DAY,
-  );
   await dal.securityEvents.recordSecurityEvent({
     type: "email_change_requested",
     userId,

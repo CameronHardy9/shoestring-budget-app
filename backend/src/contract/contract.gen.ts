@@ -269,6 +269,7 @@ export const operations: readonly ContractOperation[] = [
     ],
     "errorCodes": [
       "INVALID_CREDENTIALS",
+      "MFA_REQUIRED",
       "MFA_FAILED"
     ],
     "parameters": [],
@@ -518,6 +519,7 @@ export const operations: readonly ContractOperation[] = [
     ],
     "errorCodes": [
       "TOKEN_INVALID",
+      "MFA_REQUIRED",
       "MFA_FAILED"
     ],
     "parameters": [],

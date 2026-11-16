@@ -14,6 +14,7 @@ import { Alert } from "../../components/Alert.tsx";
 import { AppShell } from "../../components/AppShell.tsx";
 import { Button } from "../../components/Button.tsx";
 import { ConfirmDialog } from "../../components/ConfirmDialog.tsx";
+import { ExportButtons } from "../../components/ExportButtons.tsx";
 import { PageColumn, Section } from "../../components/Section.tsx";
 import { FormError } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
@@ -188,59 +189,6 @@ function PasswordForm() {
         Change password
       </Button>
     </form>
-  );
-}
-
-function ExportButtons() {
-  const reauth = useReauth();
-  const action = useAction();
-  const download = (kind: "transactions" | "plans") =>
-    void action.run(async () => {
-      const blob = await reauth(() =>
-        unwrap(
-          api.POST("/me/export", {
-            body: { kind },
-            parseAs: "blob",
-            headers: { Accept: "text/csv" },
-          }),
-        ),
-      );
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `shoestring-${kind}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-    });
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-fg-muted">
-        A spreadsheet file of every budget you're in. It stays on this device
-        once downloaded, so keep it somewhere private.
-      </p>
-      <FormError error={action.error} />
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="secondary"
-          isPending={action.busy}
-          onPress={() => {
-            download("transactions");
-          }}
-          data-testid="export-transactions"
-        >
-          Transactions (CSV)
-        </Button>
-        <Button
-          variant="secondary"
-          isPending={action.busy}
-          onPress={() => {
-            download("plans");
-          }}
-        >
-          Monthly limits (CSV)
-        </Button>
-      </div>
-    </div>
   );
 }
 

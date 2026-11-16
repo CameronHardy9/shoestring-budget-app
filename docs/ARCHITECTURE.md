@@ -95,6 +95,7 @@ flowchart LR
   - API responses are `Cache-Control: no-store`.
   - Query caches live in memory only (no localStorage/IndexedDB persistence).
   - Sign-out clears them and does a full `location.replace('/signin')`.
+  - **Sign-out must be confirmed (F-51):** only a 2xx or a 401 from `POST /api/auth/logout` counts as signed out. Any other outcome (network error, 5xx, 429, 403) keeps the person signed in and shows a retryable error, so a shared phone never shows the sign-in screen over a live session.
   - **bfcache (F-32):** on `pageshow` with `event.persisted`, the SPA re-checks `GET /api/auth/session` and clears all in-memory state **before** rendering anything. If the check fails, it shows the sign-in screen.
   - Allowed in localStorage: the theme preference and the last-used budget ID only.
 - **Request IDs and logging.**
@@ -180,7 +181,7 @@ flowchart LR
 | First load | LCP < 2.5 s on a mid-range Android phone (Moto G Power class) over 4G (Lighthouse mobile throttling), warm server, first visit | Lighthouse CI against the production build (ci-engineer) |
 | Repeat load | App shell from the service worker; usable UI < 1 s; data after the API responds | e2e timing check |
 | JS budget | Initial route ≤ 150 KB gzip JS, ≤ 30 KB gzip CSS, ≤ 2 self-hosted woff2 fonts ≤ 60 KB total. MFA, QR, WebAuthn and chart code are lazy-loaded. | size check in `make check` (ci-engineer) |
-| API latency (warm, server-side) | p95 ≤ 300 ms for reads (incl. month summary with 2,000 transactions in the month), ≤ 500 ms for writes, ≤ 1 s for login/reauth (argon2id) | integration perf test + EXPLAIN checks; production logs |
+| API latency (warm, server-side) | p95 ≤ 300 ms for reads (incl. month summary with 2,000 transactions in the month), ≤ 500 ms for writes, ≤ 1 s for login/reauth (argon2id) | db EXPLAIN checks (`db/src/queries.explain.test.ts`, owner ruling 2026-11-16: no API-level timing test at beta scale): on a seeded database with 2,000+ transactions in the month, the transaction list and month summary use their indexes (no seq scans), and `EXPLAIN (ANALYZE, TIMING OFF)` of the month summary reads per table at most the month's transactions and the budget's splits, with all plan nodes together handling at most 5× those rows. Row counts, not wall-clock time, so the check is deterministic in CI. Production logs for the real p95 |
 | Cold start | First API response after idle ≤ 3 s p95 (Cloud Run start + Neon wake). Measured by sre at first deploy (ADR-0007 V9) | sre measurement |
 | Quick-add | 3 taps, < 10 s, one-handed, on a 375 px wide phone | e2e journey J2 + owner's manual phone check |
 | Accessibility | WCAG 2.2 AA; touch targets ≥ 44 × 44 px; inputs ≥ 16 px font (no iOS zoom); colour never the only signal; charts have table equivalents | axe in e2e (fail on serious/critical) + manual VoiceOver/TalkBack checklist per release |

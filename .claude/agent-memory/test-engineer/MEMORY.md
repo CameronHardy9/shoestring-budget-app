@@ -1,2 +1,2 @@
-- [Test infra gotchas](test-infra-gotchas.md) — Vite proxy vs backend, vitest BASE_URL, bidi, pool 5, outbox, bfcache, WebKit screenshot style, RegExp-from-string helper
+- [Test infra gotchas](test-infra-gotchas.md) — edge/X-E2E-Client-IP, Vite proxy vs backend, pool 5, outbox, bfcache, WebKit style, regex helper, count-then-hit races
 - [Test data strategy](test-data-strategy.md) — serial + per-test reset, recipes/oracle design, Phase A timing, BUG-1 closed, local-only env

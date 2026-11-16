@@ -81,9 +81,14 @@ export async function login(
       userId: creds?.userId ?? null,
       ip: req.ip,
     });
-    if (creds && failures === LOGIN_EMAIL_FAILURES) {
-      const contact = await dal.users.getUserContact(creds.userId);
-      await deps.mailer.send(deps.notifications.loginThrottled(contact.email));
+    if (creds && failures >= LOGIN_EMAIL_FAILURES) {
+      // F-58: exactly one notice per window, even when concurrent failures
+      // cross the line together (the rolling sum can skip past 100).
+      const notice = await deps.throttles.reserve(deps.throttles.key("login:throttled_notice", creds.userId), DAY);
+      if (notice.count === 1) {
+        const contact = await dal.users.getUserContact(creds.userId);
+        await deps.mailer.send(deps.notifications.loginThrottled(contact.email));
+      }
     }
     throw new ApiError("INVALID_CREDENTIALS");
   }

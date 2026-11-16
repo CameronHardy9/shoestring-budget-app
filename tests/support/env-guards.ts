@@ -6,7 +6,7 @@
 // Where the values come from:
 //   - `make e2e` (.github/scripts/e2e.sh) exports APP_ORIGIN and the rest:
 //     the process environment is used as is;
-//   - otherwise tests/.env.stack (bash tests/scripts/stack.sh up) is used
+//   - otherwise tests/.env.stack (make e2e-up) is used
 //     WHOLE. A stack variable that is also exported in the shell with another
 //     value is an error, never a silent override: an exported DATABASE_URL
 //     meant for something else must not beat the local stack's.
@@ -31,7 +31,7 @@ export const STACK_VARS = [
 
 export type Source = Readonly<Record<string, string | undefined>>;
 
-/** KEY=value lines as written by tests/scripts/stack.sh (values may be single-quoted). */
+/** KEY=value lines as written by `make e2e-up` (values may be single-quoted). */
 export function parseStackFile(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split("\n")) {

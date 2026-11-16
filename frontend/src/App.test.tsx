@@ -1,6 +1,6 @@
 // The auth guard, return-after-sign-in, MFA at sign-in, pending deletion and
 // sign-up from an emailed link, through the real App with a mocked API.
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { getCsrfToken } from "./api/session.ts";
@@ -16,6 +16,7 @@ import {
   CSRF,
   me,
   summary,
+  uuid,
 } from "./test/fixtures.ts";
 import { preloadScreens } from "./test/preload-screens.ts";
 
@@ -149,6 +150,9 @@ describe("auth guard", () => {
         name: "Account scheduled for deletion",
       }),
     ).toBeInTheDocument();
+    // auth.md §15: keep the account, export, or sign out.
+    expect(screen.getByTestId("export-transactions")).toBeInTheDocument();
+    expect(screen.getByTestId("sign-out")).toBeInTheDocument();
     await userEvent.click(
       screen.getByRole("button", { name: "Keep my account" }),
     );
@@ -250,5 +254,80 @@ describe("emailed links", () => {
     expect(
       await screen.findByRole("heading", { name: "Invitation not valid" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("session expiry mid-entry (F-54)", () => {
+  const other = {
+    ...authenticated,
+    user: {
+      ...me,
+      id: uuid(903),
+      email: "sam@example.com",
+      displayName: "Sam",
+    },
+  };
+  const TX = `/budgets/${BUDGET_ID}/transactions`;
+
+  /** A types a quick-add, the session expires on Save, then `next` signs in. */
+  async function expireThenSignIn(next: typeof authenticated) {
+    let signedIn = true;
+    const api = mockApi({
+      ...budgetRoutes,
+      "GET /auth/session": () =>
+        signedIn ? json(200, authenticated) : apiError(401, "UNAUTHENTICATED"),
+      [`POST ${TX}`]: () => {
+        signedIn = false;
+        return apiError(401, "UNAUTHENTICATED");
+      },
+      "POST /auth/login": json(200, next),
+    });
+    start(`${TX}?month=2026-10`);
+    await screen.findByRole("heading", { name: "Transactions" });
+    await userEvent.click(screen.getByTestId("quick-add-open"));
+    const sheet = await screen.findByTestId("quick-add-sheet");
+    await userEvent.type(
+      within(sheet).getByRole("textbox", { name: "Amount" }),
+      "12.34",
+    );
+    await userEvent.click(
+      within(sheet).getByText("Groceries", { exact: true }),
+    );
+    await userEvent.click(within(sheet).getByTestId("quick-add-save"));
+    expect(
+      await screen.findByRole("heading", { name: "Sign in" }),
+    ).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByRole("textbox", { name: "Email" }),
+      next.user.email,
+    );
+    await userEvent.type(screen.getByLabelText("Password"), "a long password!");
+    await userEvent.click(screen.getByTestId("sign-in-submit"));
+    return api;
+  }
+
+  it("gives the same person their page and unsaved entry back", async () => {
+    await expireThenSignIn(authenticated);
+    const sheet = await screen.findByTestId("quick-add-sheet");
+    expect(within(sheet).getByRole("textbox", { name: "Amount" })).toHaveValue(
+      "12.34",
+    );
+    expect(window.location.pathname + window.location.search).toBe(
+      `${TX}?month=2026-10`,
+    );
+  });
+
+  it("discards both when someone else signs in on the same phone", async () => {
+    await expireThenSignIn(other);
+    expect(await screen.findByTestId("total-remaining")).toBeInTheDocument();
+    expect(window.location.pathname + window.location.search).toBe(
+      `/budgets/${BUDGET_ID}`,
+    );
+    expect(screen.queryByTestId("quick-add-sheet")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("quick-add-open"));
+    const sheet = await screen.findByTestId("quick-add-sheet");
+    expect(within(sheet).getByRole("textbox", { name: "Amount" })).toHaveValue(
+      "",
+    );
   });
 });

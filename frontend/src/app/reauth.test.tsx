@@ -115,4 +115,45 @@ describe("re-authentication", () => {
       expect(screen.getByText("cancelled")).toBeInTheDocument();
     });
   });
+
+  it("asks once when two actions need re-authentication at the same time", async () => {
+    let calls = 0;
+    const mock = mockApi({
+      "POST /me/mfa/totp": () =>
+        ++calls <= 2 ? apiError(403, "REAUTH_REQUIRED") : json(200, setup),
+      "POST /auth/reauth": json(200, {
+        reauthenticatedUntil: "2026-11-14T15:14:05.000Z",
+      }),
+    });
+    function Twice() {
+      const reauth = useReauth();
+      const [results, setResults] = useState<string[]>([]);
+      const once = () =>
+        reauth(() => unwrap(api.POST("/me/mfa/totp"))).then(() => {
+          setResults((r) => [...r, "done"]);
+        });
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() => {
+              void once();
+              void once();
+            }}
+          >
+            Both
+          </button>
+          <p>{results.join(" ")}</p>
+        </>
+      );
+    }
+    renderWithApp(<Twice />);
+    await userEvent.click(screen.getByRole("button", { name: "Both" }));
+    await userEvent.type(await screen.findByLabelText("Password"), "pw");
+    expect(screen.getAllByTestId("reauth-dialog")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByText("done done")).toBeInTheDocument();
+    expect(mock.find("POST", "/auth/reauth")).toHaveLength(1);
+    expect(calls).toBe(4);
+  });
 });

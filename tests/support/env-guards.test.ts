@@ -69,7 +69,7 @@ describe("database URLs must be local (F-56)", () => {
   it("refuses a missing URL with a hint to start the stack", () => {
     const e = errorOf(() => localDatabaseUrl("DATABASE_ADMIN_URL", undefined));
     expect(e).toBeInstanceOf(StackEnvError);
-    expect(e.message).toMatch(/DATABASE_ADMIN_URL is not set.*stack\.sh up/);
+    expect(e.message).toMatch(/DATABASE_ADMIN_URL is not set.*make e2e-up/);
   });
 });
 

@@ -64,6 +64,11 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - **Test env precedence.** In tests/support/env.ts the process env beats `.env.stack`, with no local-only guard on DB URLs (F-56). HTTP paths fail closed through the `_test/reset` = 204 probe; direct DB connections don't.
     - Read test names against their bodies: "single-use challenge" tested cross-session binding instead.
 
+14. **Hardening review (2026-11-16).**
+    - **One-shot notices keyed on `=== N` over a non-atomic sum** (`rollingHit` is upsert then sum) are skipped when two hits interleave, and the attacker controls that concurrency (F-58). The right pattern is a dedicated `reserve(noticeKey)` with `count === 1`, as for `mfa:locked_notice`. Grep for `=== LIMIT` near rolling counters.
+    - Every new limit: grep for `count`/`rollingCount`/`assertUnder` followed later by `hit`. Read-only pre-checks are fine only when a reservation enforces the limit afterwards (F-57).
+    - Test proxies that honour a spoof header (`X-E2E-Client-IP`) are fine only if they are confined to test compose and dockerignored paths. Verify against .dockerignore and the Dockerfile COPY lines each time.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

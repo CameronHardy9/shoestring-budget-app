@@ -25,16 +25,28 @@ export function safeReturnPath(candidate: unknown): string | null {
   return parsed.pathname + parsed.search;
 }
 
-let pending: string | null = null;
+// Bound to the user who was signed in when the path was left (F-54): on a
+// shared phone, B signing in after A's session expired must not land on A's
+// page. `userId` null means nobody had signed in in this tab yet (a deep link
+// opened while signed out), so whoever signs in may use it.
+let pending: { path: string; userId: string | null } | null = null;
 
 /** Remember where to go after sign-in (memory only). */
-export function rememberReturnPath(path: unknown): void {
-  pending = safeReturnPath(path);
+export function rememberReturnPath(path: unknown, userId: string | null): void {
+  const safe = safeReturnPath(path);
+  pending = safe === null ? null : { path: safe, userId };
 }
 
-/** Take (and forget) the remembered path. */
-export function takeReturnPath(): string | null {
-  const path = pending;
+/** Take (and forget) the remembered path, if it belongs to `userId`. */
+export function takeReturnPath(userId: string): string | null {
+  const taken = pending;
   pending = null;
-  return path;
+  return taken && (taken.userId === null || taken.userId === userId)
+    ? taken.path
+    : null;
+}
+
+/** Forget a path that another user left behind (on sign-in). */
+export function forgetReturnPathUnlessFor(userId: string): void {
+  if (pending?.userId != null && pending.userId !== userId) pending = null;
 }

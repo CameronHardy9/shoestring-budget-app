@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  forgetReturnPathUnlessFor,
   rememberReturnPath,
   safeReturnPath,
   takeReturnPath,
@@ -40,13 +41,42 @@ describe("safeReturnPath", () => {
 });
 
 describe("remembered return path", () => {
+  const A = "user-a";
+  const B = "user-b";
+
   it("is taken once", () => {
-    rememberReturnPath("/invitations");
-    expect(takeReturnPath()).toBe("/invitations");
-    expect(takeReturnPath()).toBeNull();
+    rememberReturnPath("/invitations", A);
+    expect(takeReturnPath(A)).toBe("/invitations");
+    expect(takeReturnPath(A)).toBeNull();
   });
+
   it("drops unsafe values", () => {
-    rememberReturnPath("//evil.example");
-    expect(takeReturnPath()).toBeNull();
+    rememberReturnPath("//evil.example", A);
+    expect(takeReturnPath(A)).toBeNull();
+  });
+
+  it("is only for the user who left it (F-54), and is gone after another user's try", () => {
+    rememberReturnPath("/budgets/x", A);
+    expect(takeReturnPath(B)).toBeNull();
+    expect(takeReturnPath(A)).toBeNull();
+  });
+
+  it("is for anyone when nobody had signed in in this tab (a deep link)", () => {
+    rememberReturnPath("/budgets/x", null);
+    expect(takeReturnPath(B)).toBe("/budgets/x");
+  });
+
+  it("is forgotten when a different user signs in", () => {
+    rememberReturnPath("/budgets/x", A);
+    forgetReturnPathUnlessFor(A);
+    expect(takeReturnPath(A)).toBe("/budgets/x");
+
+    rememberReturnPath("/budgets/x", A);
+    forgetReturnPathUnlessFor(B);
+    expect(takeReturnPath(A)).toBeNull();
+
+    rememberReturnPath("/budgets/y", null);
+    forgetReturnPathUnlessFor(B);
+    expect(takeReturnPath(B)).toBe("/budgets/y");
   });
 });

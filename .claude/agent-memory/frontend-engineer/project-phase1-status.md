@@ -10,3 +10,6 @@ All 15 frontend MVP tasks delivered on feat/frontend (uncommitted by me; tech le
 
 **Why:** owner paces work with checkpoints and reviews screenshots.
 **How to apply:** remaining risk is device-only: iOS keypad auto-open on sheet open, keyboard inset, VoiceOver/TalkBack pass, PWA install on iPhone/Android, passkeys on real devices. Initial JS ~136 KB of 150: new screens must stay lazy.
+
+Pre-launch hardening (2026-11-16, fix/pre-launch-hardening): F-51 (honest sign-out), F-52 (storage lint ban), F-54 (resume state bound to user ID) done, plus pending-deletion export, delayed revokeObjectURL, shared re-auth prompt, reset MFA_REQUIRED → MFA step. Still open by design: "Reload" banner reloads every tab (needs an owner decision), F-50 (with the Sentry PR), lastBudgetId in localStorage is not user-bound (ADR-0002 accepted; Home only uses it if it is in the new user's list).
+

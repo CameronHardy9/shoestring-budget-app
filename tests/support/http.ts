@@ -40,7 +40,19 @@ export interface RequestOptions {
   requestId?: string | null;
   /** Check the response against the contract (default true; false only for /api/_test hooks). */
   contract?: boolean;
+  /** Act as this client IP for this request (overrides the client's own; see `CLIENT_IP_HEADER`). */
+  clientIp?: string;
 }
+
+/**
+ * The e2e edge (.github/scripts/e2e-edge.mjs, the one trusted proxy hop in the
+ * stack) appends this header's value to X-Forwarded-For instead of the TCP
+ * peer, and strips it, so the backend sees the request as coming from that
+ * address. One IPv4 or IPv6 address; anything else is a 400 from the edge.
+ * Without it every request comes from the same Docker gateway address, which
+ * differs between OrbStack and Linux CI: never hard-code that one.
+ */
+export const CLIENT_IP_HEADER = "x-e2e-client-ip";
 
 export interface ApiResponse<T = unknown> {
   status: number;
@@ -121,9 +133,15 @@ export class ApiClient {
   readonly label: string;
   /** Last AuthState / Me user id seen (for assertions). */
   userId: string | null = null;
+  /** The client IP this browser appears to come from (via the e2e edge); null = the edge's TCP peer. */
+  clientIp: string | null;
 
-  constructor(label = `client-${++clientCount}`) {
+  constructor(
+    label = `client-${++clientCount}`,
+    opts: { clientIp?: string } = {},
+  ) {
     this.label = label;
+    this.clientIp = opts.clientIp ?? null;
   }
 
   /** `path` is relative to /api (`/me`) unless it already starts with /api or is outside it (`/x`, with `raw`). */
@@ -169,6 +187,8 @@ export class ApiClient {
     if (opts.cookie !== false && this.sessionToken)
       headers.cookie = `${COOKIE_NAME}=${this.sessionToken}`;
     if (opts.idempotencyKey) headers["idempotency-key"] = opts.idempotencyKey;
+    const ip = opts.clientIp ?? this.clientIp;
+    if (ip !== null) headers[CLIENT_IP_HEADER] = ip;
     let body: Buffer | null = null;
     if (opts.rawBody !== undefined) {
       body = Buffer.isBuffer(opts.rawBody)
@@ -296,7 +316,7 @@ export class ApiClient {
 
   /** A second browser holding the same cookie (to replay a stolen or stale session). */
   clone(label = `${this.label}-copy`): ApiClient {
-    const c = new ApiClient(label);
+    const c = new ApiClient(label, this.clientIp === null ? {} : { clientIp: this.clientIp });
     c.sessionToken = this.sessionToken;
     c.csrfToken = this.csrfToken;
     c.userId = this.userId;
