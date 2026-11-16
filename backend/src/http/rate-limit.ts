@@ -202,6 +202,24 @@ export class Throttles {
     await this.dal.throttles.hitThrottle(r.key, r.windowStart, -1);
   }
 
+  /** Refunds several reservations, best effort: a failed refund only over-counts (the safe direction). */
+  async releaseAll(slots: readonly Reservation[]): Promise<void> {
+    await Promise.allSettled(slots.map((r) => this.release(r)));
+  }
+
+  /** Runs `fn`; if it throws, refunds `slots` (best effort) and rethrows. */
+  async refundOnError<T>(
+    slots: readonly Reservation[],
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (e) {
+      await this.releaseAll(slots);
+      throw e;
+    }
+  }
+
   /** Throws RATE_LIMITED when `count >= limit` for the fixed window. */
   async assertUnder(
     key: ThrottleKey,

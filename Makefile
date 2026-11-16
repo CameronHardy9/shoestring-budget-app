@@ -6,7 +6,7 @@ SCRIPTS := .github/scripts
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
-        lint typecheck test check e2e audit image image-smoke
+        lint typecheck test check e2e e2e-up e2e-down audit image image-smoke
 
 help: ## Show targets and the phone-testing recipe
 	@echo "Shoestring: canonical commands"
@@ -63,6 +63,12 @@ check: lint typecheck test ## lint + typecheck + unit tests (must pass before "d
 
 e2e: ## Integration, contract, end-to-end and visual tests against a throwaway stack
 	@bash $(SCRIPTS)/e2e.sh
+
+e2e-up: ## Start a long-lived e2e stack for running single suites (writes tests/.env.stack)
+	@bash $(SCRIPTS)/e2e.sh up
+
+e2e-down: ## Stop the e2e-up stack and delete tests/.env.stack
+	@bash $(SCRIPTS)/e2e.sh down
 
 audit: ## Secret scan (gitleaks) + SAST (Semgrep) + dependencies (osv-scanner) + workflows (zizmor)
 	@bash $(SCRIPTS)/audit.sh

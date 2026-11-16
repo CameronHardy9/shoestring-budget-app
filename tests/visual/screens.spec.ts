@@ -3,8 +3,10 @@
 // server clock is frozen (DEFAULT_NOW), the browser clock is fixed to the same
 // instant, data and names are fixed, animations and the caret are off, and
 // fonts are self-hosted and awaited.
-// Data goes in over HTTP only (test hooks + API): the Playwright container has
-// no database packages, so this suite never loads the DAL.
+// Data goes in over HTTP only (test hooks + API, straight to the backend at
+// API_URL through the e2e edge), so the suite needs nothing but the stack's
+// addresses. The Playwright container has the database packages too, but this
+// suite does not load the DAL.
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -170,6 +172,8 @@ for (const scheme of ["light", "dark"] as const) {
     test("quick-add", async ({ page, cspViolations }) => {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
+      // The + is inert until the budget has loaded (BudgetLayout).
+      await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       await page.keyboard.type("12.50");
       await page
@@ -182,6 +186,8 @@ for (const scheme of ["light", "dark"] as const) {
     test("quick-add split", async ({ page, cspViolations }) => {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
+      // The + is inert until the budget has loaded (BudgetLayout).
+      await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       const sheet = page.getByTestId("quick-add-sheet");
       await page.keyboard.type("60");

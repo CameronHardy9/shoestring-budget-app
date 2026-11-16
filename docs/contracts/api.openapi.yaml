@@ -263,7 +263,7 @@ paths:
       x-reauth: false
       x-pending-deletion-allowed: true
       x-rate-limit: [reauth, mfa-failures]
-      x-error-codes: [INVALID_CREDENTIALS, MFA_FAILED]
+      x-error-codes: [INVALID_CREDENTIALS, MFA_REQUIRED, MFA_FAILED]
       requestBody:
         required: true
         content:
@@ -429,7 +429,7 @@ paths:
       x-budget-role: none
       x-reauth: false
       x-rate-limit: [password-reset-complete, mfa-failures]
-      x-error-codes: [TOKEN_INVALID, MFA_FAILED]
+      x-error-codes: [TOKEN_INVALID, MFA_REQUIRED, MFA_FAILED]
       requestBody:
         required: true
         content:

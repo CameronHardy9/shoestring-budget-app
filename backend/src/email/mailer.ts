@@ -34,13 +34,32 @@ export class Mailer {
     return this.o.transport.name;
   }
 
+  /**
+   * Reserve-first: a send is counted with the atomic upsert before it goes
+   * out, and the returned position is what the limits are checked against, so
+   * concurrent sends cannot all pass a stale read. A cheap read comes first so
+   * that, once a limit is reached, dropped mail costs no write and in-flight
+   * bulk reservations rarely crowd out priority mail. A dropped send refunds
+   * its slot; a send the provider fails keeps it (the quota errs safe).
+   */
   async send(message: OutgoingEmail): Promise<SendOutcome> {
     // App-wide counter: the key is a constant with no PII, so it needs no
     // keyring HMAC (the admin job sends mail without mounting APP_KEYRING).
     const key = { scope: "email:daily", keyHash: sha256("email:daily\0app") };
-    let used: number;
+    const quota = this.o.dailyQuota;
+    const softLimit = Math.floor(quota * 0.6);
+    // Over the limit for this message once `used` sends are already counted.
+    const over = (used: number) =>
+      used >= quota || (!message.priority && used >= softLimit);
     try {
-      used = await this.o.throttles.count(key, DAY);
+      const used = await this.o.throttles.count(key, DAY);
+      if (used >= softLimit) this.warnOnce();
+      if (over(used)) return this.dropped(message);
+      const slot = await this.o.throttles.reserve(key, DAY);
+      if (over(slot.count - 1)) {
+        await this.o.throttles.release(slot);
+        return this.dropped(message);
+      }
     } catch {
       this.o.logger.error(
         { email: undefined, kind: message.kind, outcome: "failed" },
@@ -48,18 +67,7 @@ export class Mailer {
       );
       return "failed";
     }
-    const quota = this.o.dailyQuota;
-    const softLimit = Math.floor(quota * 0.6);
-    if (used >= softLimit) this.warnOnce();
-    if (used >= quota || (!message.priority && used >= softLimit)) {
-      this.o.logger.warn(
-        { kind: message.kind, outcome: "dropped" },
-        "email dropped by the daily budget",
-      );
-      return "dropped";
-    }
     try {
-      await this.o.throttles.hit(key, DAY);
       await this.o.transport.send(
         message,
         AbortSignal.timeout(this.o.timeoutMs ?? 700),
@@ -78,6 +86,14 @@ export class Mailer {
   /** Sends several messages concurrently (e.g. a notice to every member). */
   async sendAll(messages: OutgoingEmail[]): Promise<SendOutcome[]> {
     return Promise.all(messages.map((m) => this.send(m)));
+  }
+
+  private dropped(message: OutgoingEmail): SendOutcome {
+    this.o.logger.warn(
+      { kind: message.kind, outcome: "dropped" },
+      "email dropped by the daily budget",
+    );
+    return "dropped";
   }
 
   private warnOnce(): void {

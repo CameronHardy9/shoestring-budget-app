@@ -5,7 +5,8 @@ import type {
   MemberContact,
 } from "@shoestring/db";
 import { afterEach, describe, expect, it } from "vitest";
-import { T0, makeHarness } from "../test-support/harness.ts";
+import { DAY } from "../http/rate-limit.ts";
+import { T0, makeHarness, slowThrottles } from "../test-support/harness.ts";
 import type { DalOverrides, Harness } from "../test-support/harness.ts";
 
 const OWNER = "01a1d7ab-0000-7000-8000-00000000000a";
@@ -559,6 +560,99 @@ describe("budget invitations", () => {
         })
       ).statusCode,
     ).toBe(201);
+  });
+
+  describe("daily caps under concurrency (reserve-first)", () => {
+    function racingHarness(fail?: (email: string) => DalError | null) {
+      const slow = slowThrottles();
+      const created: string[] = [];
+      const ready = harness({
+        throttles: slow.dal,
+        invitations: {
+          createBudgetInvitation: async (_s: unknown, email: string) => {
+            await new Promise<void>((r) => setImmediate(r));
+            const err = fail?.(email);
+            if (err) throw err;
+            created.push(email);
+            return { invitation: invitation(email), inviteeHasAccount: false };
+          },
+        },
+      });
+      return { slow, created, ready };
+    }
+    const invite = (s: { token: string; csrf: string }, email: string) =>
+      h.req("POST", `/api/budgets/${B}/invitations`, {
+        auth: s,
+        body: { email },
+      });
+    const counters = async () => {
+      const t = h.deps.throttles;
+      return {
+        budget: await t.count(t.key("invite:budget", B), DAY),
+        user: await t.count(t.key("invite:user", OWNER), DAY),
+      };
+    };
+
+    it("25 concurrent invites create at most 20 (per-budget cap); the rest are 429 and hold no slot", async () => {
+      const r = racingHarness();
+      h = await r.ready;
+      const s = h.sessions.add({ userId: OWNER });
+      const rs = await Promise.all(
+        Array.from({ length: 25 }, (_, i) => invite(s, `p${i}@example.test`)),
+      );
+      expect(r.created).toHaveLength(20);
+      expect(rs.filter((x) => x.statusCode === 201)).toHaveLength(20);
+      const refused = rs.filter((x) => x.statusCode !== 201);
+      expect(refused.map((x) => [x.statusCode, json(x).code])).toEqual(
+        Array.from({ length: 5 }, () => [429, "RATE_LIMITED"]),
+      );
+      expect(refused.every((x) => Number(x.headers["retry-after"]) > 0)).toBe(true);
+      expect(await counters()).toEqual({ budget: 20, user: 20 });
+      expect([...r.slow.rows.values()].every((n) => n >= 0)).toBe(true);
+    });
+
+    it("the per-user cap holds too, and a refusal by it refunds the per-budget slot", async () => {
+      const r = racingHarness();
+      h = await r.ready;
+      const t = h.deps.throttles;
+      await t.reserve(t.key("invite:user", OWNER), DAY); // 1 already used elsewhere today
+      for (let i = 0; i < 28; i++)
+        await t.reserve(t.key("invite:user", OWNER), DAY); // 29 used
+      const s = h.sessions.add({ userId: OWNER });
+      const rs = await Promise.all(
+        Array.from({ length: 5 }, (_, i) => invite(s, `q${i}@example.test`)),
+      );
+      expect(r.created).toHaveLength(1);
+      expect(rs.filter((x) => x.statusCode === 429)).toHaveLength(4);
+      expect(await counters()).toEqual({ budget: 1, user: 30 });
+    });
+
+    it("an invite the DAL refuses (already invited or a member, limit reached) refunds both slots", async () => {
+      const r = racingHarness((email) =>
+        email.startsWith("dup")
+          ? new DalError("ALREADY_EXISTS")
+          : email.startsWith("full")
+            ? new DalError("LIMIT_REACHED")
+            : null,
+      );
+      h = await r.ready;
+      const s = h.sessions.add({ userId: OWNER });
+      const rs = await Promise.all([
+        ...Array.from({ length: 5 }, (_, i) => invite(s, `dup${i}@example.test`)),
+        ...Array.from({ length: 5 }, (_, i) => invite(s, `full${i}@example.test`)),
+        invite(s, "ok@example.test"),
+      ]);
+      expect(rs.map((x) => json(x).code ?? x.statusCode).sort()).toEqual([
+        201,
+        ...Array<string>(5).fill("ALREADY_EXISTS"),
+        ...Array<string>(5).fill("LIMIT_REACHED"),
+      ]);
+      expect(await counters()).toEqual({ budget: 1, user: 1 });
+      // The refunded slots are usable: 19 more fit under the per-budget cap.
+      for (let i = 0; i < 19; i++)
+        expect((await invite(s, `later${i}@example.test`)).statusCode).toBe(201);
+      expect(json(await invite(s, "late@example.test")).code).toBe("RATE_LIMITED");
+    });
   });
 
   it("accept: returns the budget, records the event and emails the owner", async () => {

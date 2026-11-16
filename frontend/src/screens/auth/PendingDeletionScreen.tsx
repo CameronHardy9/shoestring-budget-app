@@ -1,15 +1,16 @@
 // Shown instead of any signed-in screen while the account is pending
-// deletion (auth.md §11, §15): keep the account, or sign out. Export arrives
-// in Phase 2b.
+// deletion (auth.md §11, §15): keep the account, export the data, or sign out.
 import { useState } from "react";
 import { api, unwrap } from "../../api/client.ts";
 import { useAuth } from "../../app/auth.tsx";
 import { Button } from "../../components/Button.tsx";
+import { ExportButtons } from "../../components/ExportButtons.tsx";
+import { SignOutButton } from "../../components/SignOutButton.tsx";
 import { FormError } from "../../components/States.tsx";
 import { AuthLayout } from "./AuthLayout.tsx";
 
 export default function PendingDeletionScreen() {
-  const { status, setMe, signOut } = useAuth();
+  const { status, setMe } = useAuth();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const deletion = status.kind === "signedIn" ? status.me.deletion : null;
@@ -40,16 +41,13 @@ export default function PendingDeletionScreen() {
       >
         Keep my account
       </Button>
-      <p className="text-sm text-fg-muted">
-        Exporting your data from here arrives in the next update.
-      </p>
-      <Button
-        variant="secondary"
-        className="w-full"
-        onPress={() => void signOut()}
-      >
-        Sign out
-      </Button>
+      <section aria-labelledby="export-heading" className="flex flex-col gap-2">
+        <h2 id="export-heading" className="text-base font-semibold text-fg">
+          Export your data
+        </h2>
+        <ExportButtons />
+      </section>
+      <SignOutButton />
     </AuthLayout>
   );
 }

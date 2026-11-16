@@ -5,7 +5,8 @@
 import type { BudgetScope } from "@shoestring/db";
 import type { AuthContext } from "../auth/session.ts";
 import type { AppDeps } from "../deps.ts";
-import { DAY } from "../http/rate-limit.ts";
+import { DAY, rateLimited } from "../http/rate-limit.ts";
+import type { Reservation } from "../http/rate-limit.ts";
 import { toBudget, toInvitation } from "../http/mappers.ts";
 import { idempotencyRequestHash } from "../domain/idempotency.ts";
 
@@ -125,8 +126,10 @@ function inviteKeys(deps: AppDeps, scope: BudgetScope) {
 
 /**
  * errors.md step 7 for POST /budgets/{b}/invitations: 20 per budget and 30 per
- * user per UTC day. Counted only on success, so a non-member (who gets 404 at
- * step 8) can never spend another budget's quota.
+ * user per UTC day. A read-only pre-check (keeps the 429 at step 7 and costs
+ * no write when a cap is already spent), so a non-member (who gets 404 at step
+ * 8) can never spend another budget's quota. The caps are enforced race-safely
+ * by the reservations in createInvitation.
  */
 export async function invitationRateLimit(
   deps: AppDeps,
@@ -145,18 +148,38 @@ export async function invitationRateLimit(
   );
 }
 
-/** Same response whether or not the invitee has an account; mail only if they do. */
+/**
+ * Same response whether or not the invitee has an account; mail only if they do.
+ *
+ * Reserve-first (F-45): both daily caps are charged with the atomic upsert
+ * before the invitation is created, and the returned counts are compared, so
+ * concurrent invites cannot all pass a stale read. Only created invitations
+ * keep their slots: a refusal by either cap (429) or by the DAL (ALREADY_EXISTS,
+ * LIMIT_REACHED, NOT_FOUND, ...) refunds both before the error propagates.
+ */
 export async function createInvitation(
   deps: AppDeps,
   auth: AuthContext,
   scope: BudgetScope,
   email: string,
 ) {
-  const { invitation, inviteeHasAccount } =
-    await deps.dal.invitations.createBudgetInvitation(scope, email);
+  const t = deps.throttles;
   const k = inviteKeys(deps, scope);
-  await deps.throttles.hit(k.budget, DAY);
-  await deps.throttles.hit(k.user, DAY);
+  const slots: Reservation[] = [];
+  for (const [key, cap] of [
+    [k.budget, INVITES_PER_BUDGET_PER_DAY],
+    [k.user, INVITES_PER_USER_PER_DAY],
+  ] as const) {
+    const r = await t.reserve(key, DAY);
+    slots.push(r);
+    if (r.count > cap) {
+      await t.releaseAll(slots);
+      throw rateLimited(t.retryAfter(DAY));
+    }
+  }
+  const { invitation, inviteeHasAccount } = await t.refundOnError(slots, () =>
+    deps.dal.invitations.createBudgetInvitation(scope, email),
+  );
   await deps.dal.securityEvents.recordSecurityEvent({
     type: "budget_invitation_created",
     userId: auth.session.userId,

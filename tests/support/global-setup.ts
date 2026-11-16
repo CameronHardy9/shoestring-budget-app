@@ -15,7 +15,7 @@ export default async function globalSetup(): Promise<void> {
   } catch (e) {
     throw new Error(
       `Cannot reach the backend at ${env.apiUrl} (${(e as Error).message}). ` +
-        "Run through `make e2e`, or start a local stack: bash tests/scripts/stack.sh up",
+        "Run through `make e2e`, or start a local stack: make e2e-up",
       { cause: e },
     );
   }

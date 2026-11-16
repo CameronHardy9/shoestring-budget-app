@@ -1,7 +1,21 @@
-# Override for `make test` (Postgres only) and `make e2e` (whole stack).
-# Used together with docker-compose.yml under a separate project name
-# (shoestring-test / shoestring-e2e), so it never touches your dev data.
+# Override for `make test` (Postgres only) and `make e2e` / `make e2e-up` (whole
+# stack). Used together with docker-compose.yml under a separate project name
+# (shoestring-test-*, shoestring-e2e, shoestring-e2e-local), so it never touches
+# your dev data.
 # Throwaway database in tmpfs, no seed data, test hooks on, host-only ports.
+#
+# Client IP in e2e (F-08, F-21): the backend trusts exactly one proxy hop
+# (TRUST_PROXY_HOPS=1), and that hop is `edge` (.github/scripts/e2e-edge.mjs).
+# The backend and frontend publish no host ports here; the edge publishes
+# BACKEND_PORT (-> backend) and FRONTEND_PORT (-> Vite) instead, so every
+# request from the host passes it:
+#   API suites  host -> edge :BACKEND_PORT  -> backend
+#   browsers    host -> edge :FRONTEND_PORT -> Vite (/api proxy) -> backend
+# The edge appends the client address to X-Forwarded-For. Vite's proxy passes
+# X-Forwarded-For through unchanged (no xfwd), so on both paths the backend
+# takes the edge's entry, the rightmost one. A forged entry sent by the client
+# stays to its left and is ignored. Details and the X-E2E-Client-IP header that
+# lets a test act as another client: .github/scripts/e2e-edge.mjs.
 services:
   postgres:
     volumes: !reset []
@@ -30,5 +44,50 @@ services:
       # backs /api/_test/emails; no HIBP network calls in tests.
       EMAIL_TRANSPORT: test
       HIBP_ENABLED: "false"
-      TRUST_PROXY_HOPS: "0"
+      # One hop: the edge below (same count as production, ADR-0007).
+      TRUST_PROXY_HOPS: "1"
       WEBAUTHN_RP_NAME: ""
+    # Reachable only through the edge (see the header).
+    ports: !reset []
+
+  frontend:
+    ports: !reset []
+
+  edge:
+    profiles: [backend]
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: shoestring-dev:local
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["node", "/edge/e2e-edge.mjs"]
+    volumes:
+      - ./.github/scripts/e2e-edge.mjs:/edge/e2e-edge.mjs:ro
+    environment:
+      # <listen port>=<upstream host>:<port>. Without the frontend profile the
+      # FRONTEND_PORT route answers 502; nothing uses it then.
+      EDGE_ROUTES: "${FRONTEND_PORT:-5173}=frontend:${FRONTEND_PORT:-5173},${BACKEND_PORT:-3000}=backend:${BACKEND_PORT:-3000}"
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
+      - "127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "Promise.all(process.env.EDGE_ROUTES.split(',').map(r=>fetch('http://127.0.0.1:'+r.split('=')[0]+'/__edge/healthz').then(x=>{if(!x.ok)throw 1}))).then(()=>process.exit(0),()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+        required: false

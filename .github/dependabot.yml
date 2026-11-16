@@ -20,6 +20,12 @@ updates:
       # Node major upgrades are a deliberate decision (LTS line pinned in .nvmrc).
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
+      # Stay on TypeScript 6 until typescript-eslint supports TypeScript 7
+      # (owner ruling 2026-11-16, docs/mvp-planning/10 "Build round 5"; PR #11
+      # closed). Remove this entry once typescript-eslint's supported range
+      # includes 7.x, then upgrade both in one PR.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
     commit-message:
       prefix: "chore(deps)"
 

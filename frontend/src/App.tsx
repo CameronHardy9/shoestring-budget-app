@@ -24,15 +24,17 @@ function FullPage({ children }: { children: React.ReactNode }) {
 }
 
 function SendToSignIn({ href }: { href: string }) {
+  const { lastUserId } = useAuth();
   useEffect(() => {
-    rememberReturnPath(href);
+    // Bound to whoever was last signed in here (F-54).
+    rememberReturnPath(href, lastUserId());
     navigate("/signin", { replace: true });
-  }, [href]);
+  }, [href, lastUserId]);
   return null;
 }
 
-function AfterSignIn() {
-  const [to] = useState(() => takeReturnPath() ?? "/");
+function AfterSignIn({ userId }: { userId: string }) {
+  const [to] = useState(() => takeReturnPath(userId) ?? "/");
   return <Redirect to={to} />;
 }
 
@@ -83,7 +85,7 @@ function Routes() {
     }
   }
   if (route.access === "guest" && status.kind === "signedIn")
-    return <AfterSignIn />;
+    return <AfterSignIn userId={status.me.id} />;
   return (
     <Suspense
       fallback={

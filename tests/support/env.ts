@@ -1,6 +1,6 @@
 // Where the stack is. `make e2e` (.github/scripts/e2e.sh) exports BASE_URL,
-// APP_ORIGIN and the three database URLs; the local helper
-// (tests/scripts/stack.sh up) writes the same names to tests/.env.stack, which
+// APP_ORIGIN, API_URL, BACKEND_PORT and the three database URLs; `make e2e-up`
+// writes the same names to tests/.env.stack, which
 // is used (whole) only when APP_ORIGIN is not exported (env-guards.ts). Every
 // address must be loopback (F-56). The database URLs, checked to be local, are
 // in db-env.ts, so this module loads no database packages.
@@ -19,7 +19,7 @@ function required(name: string): string {
   const v = source[name];
   if (!v)
     throw new StackEnvError(
-      `${name} is not set. Run the suites through \`make e2e\`, or start a local stack first: bash tests/scripts/stack.sh up`,
+      `${name} is not set. Run the suites through \`make e2e\`, or start a local stack first: make e2e-up`,
     );
   return v;
 }
@@ -54,9 +54,9 @@ export const env = Object.freeze({
 export const appHost = new URL(env.appOrigin).host;
 
 /**
- * True when no backend address is known and API calls go through the Vite dev
- * proxy (the visual suite in the Playwright container gets only BASE_URL). Vite
- * then adds its own CORS headers, which the contract oracle must not blame on
- * the backend.
+ * True when no backend address is known (neither API_URL nor BACKEND_PORT) and
+ * API calls go through the Vite dev proxy. Vite then adds its own CORS
+ * headers, which the contract oracle must not blame on the backend. make e2e
+ * and make e2e-up always provide API_URL, also to the visual container.
  */
 export const viaDevProxy = env.apiUrl === env.baseUrl;

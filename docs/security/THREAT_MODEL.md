@@ -131,7 +131,7 @@ flowchart LR
 | TB7 | GitHub Actions to host, DB and backup storage | Deploy identity, DB creds for cron jobs, backups | Environment-scoped secrets, OIDC attribute conditions, SHA pins, no secrets on fork PRs (F-16, F-17, F-02) |
 | TB8 | Owner to admin CLI and consoles | Prod credentials, target emails | Platform-side execution, no PII in output, MFA on every operator account (F-02, F-03) |
 | TB9 | Backup storage | Full encrypted dumps | Private, write-only CI credential, expiry of 35 days or less, offline key (F-17) |
-| TB-DEV | The user's device | Session cookie, in-memory data (query cache, CSRF token, link token, return path, unsaved draft), downloaded CSV and recovery-code file, clipboard (recovery codes), URL history, Cache Storage (app shell only), localStorage (theme, last budget ID) | No API data cached, `no-store`, service worker never touches `/api`, sign-out clears state, bfcache handling (F-32); a failed logout leaves the session live (F-51); the draft and return path are not bound to the user (F-54) |
+| TB-DEV | The user's device | Session cookie, in-memory data (query cache, CSRF token, link token, return path, unsaved draft), downloaded CSV and recovery-code file, clipboard (recovery codes), URL history, Cache Storage (app shell only), localStorage (theme, last budget ID) | No API data cached, `no-store`, service worker never touches `/api`, sign-out clears state, bfcache handling (F-32, verified 2026-11-16); a sign-out the server did not confirm keeps the person signed in and says so (F-51, verified); the draft and return path are bound to the user ID (F-54, verified); storage ban covers `window.*`, `caches`, `cookieStore` and `document.cookie` (F-52, verified) |
 | TB-TEN | **Between budgets** (logical) | IDs in paths and bodies, cursors, idempotency keys | `BudgetScope`, composite FKs, 404 for non-members, generated isolation tests (F-18) |
 | — | **Between co-members of one budget** | Everything in the budget | **None by design.** Members are equal; owner-only actions are limited to sharing and deletion (R-4) |
 
@@ -160,7 +160,7 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T17 | J6 | Device-access attacker or stolen session invites the attacker's own existing account, giving persistent access that survives session revocation and password change | E | Owner-only; rate limits | **F-13** (no re-auth), **F-12** (no notification on acceptance) |
 | T18 | J6 | Email change used to claim invitations addressed to an address the attacker controls | E | Email change requires a confirmation token at the new address | designed: proving control of the address is the intended authorization. See §7 |
 | T19 | J6 | Invitation flooding or harassment; budget name used to inject phishing text into emails | D/S | 10 pending per budget, 20/budget/day, 30/user/day; notifications only to existing accounts | **F-29**, **F-31** (Low) |
-| T20 | J6 | Enumerating whether an email has an account through invitation creation | I | Identical response; 1 s padding | designed; timing caveat **F-22** |
+| T20 | J6 | Enumerating whether an email has an account through invitation creation | I | Identical response; 1 s padding | **F-22** verified 2026-11-16 (invite, reset and email-change timing tests) |
 | T21 | J6 | Removed member keeps access | E | Membership checked on every request (no cached roles) | designed |
 | T22 | J6 | Compromised owner deletes the shared budget; members cannot recover it | T/D | Re-auth (password only if no MFA); soft delete | **F-14**, F-12 |
 | T23 | J7 login | Credential stuffing / phished password, with no MFA | S | Breached-password check, login rate limits, invite-only | **R-1** (accepted 2026-11-12); detective control gap **F-12** |
@@ -168,7 +168,7 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T25 | J7 | Offline cracking of recovery codes from a DB or backup leak | S/I | SHA-256, ~50 bits | **F-04** |
 | T26 | J7 password reset | Reset used to bypass MFA | E | MFA required at `complete`; passkey challenge bound to the token; 5 failures invalidate it; all sessions revoked | designed (F-05) |
 | T27 | J7 email change | Attacker with the password requests an email change; the victim resets the password; the attacker then confirms with the still-valid token and takes over | S/E | Re-auth; notice to the old address | **F-01 (High)** |
-| T28 | J7 | Account lockout by sending 10 bad passwords per 15 min for a victim's email | D | Per-email limit, identical for unknown emails | **F-21** (Low) |
+| T28 | J7 | Account lockout by sending 10 bad passwords per 15 min for a victim's email | D | (email, IP) key, per-email ceiling of 100 per day with notice, reset clears counters | **F-21** verified 2026-11-16; concurrency residual and skippable notice: **F-58** (Low) |
 | T29 | J7 | Evicting a victim's sessions by creating many `mfa_pending` sessions | D | 20-session cap | **F-20** (Low) |
 | T30 | J7 device list | Spoofed device label; attacker revokes the victim's sessions | S/D | Coarse label; password change revokes the others | designed; label from a fixed vocabulary (F-20) |
 | T31 | J7 | Stolen cookie valid indefinitely if used every 30 days | S | Sliding expiry, device list, revoke | **R-3** / **F-19** (owner decision) |
@@ -179,9 +179,9 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T36 | All unsafe routes | CSRF from a sibling subdomain (same-site, so SameSite does not help) | S | Exact Origin match; `__Host-` blocks cookie tossing; CSRF token | designed |
 | T37 | All | DNS rebinding / Host header injection into email links | S/I | APP_ORIGIN config | **F-23** (Host check), **F-30** (local dev) |
 | T38 | All | argon2id memory exhaustion; autoscaling drives cost (denial of wallet) | D | Login rate limits | **F-15** |
-| T39 | All | Client IP spoofed via X-Forwarded-For, bypassing per-IP limits and forging audit IPs | S/R | "Trusted only as configured" | **F-08** |
-| T40 | Email | Email bombing via reset requests exhausts the free daily email quota, blocking recovery for everyone | D | 3 per email per hour (silent), 5 per IP per hour | **F-09** |
-| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low): implemented 2026-11-14. The e2e test exists (2026-11-16), but it does not prove a bfcache restore (`pageshow.persisted` not asserted), so the finding stays contract-fixed (T117) |
+| T39 | All | Client IP spoofed via X-Forwarded-For, bypassing per-IP limits and forging audit IPs | S/R | Hop-count trust, never `true`; IPv6 /64 keys | **F-08** verified in code and tests 2026-11-16 (forged-XFF integration tests through the e2e edge); production hop count waits for V26 |
+| T40 | Email | Email bombing via reset requests exhausts the free daily email quota, blocking recovery for everyone | D | 3 per email per hour and 5 per 24 h (silent), 5 per IP per hour, 60 per day app budget with priority mail, all reserve-first | **F-09** verified (app) 2026-11-16; owner alert with sre; race class **F-57** fixed |
+| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low): implemented 2026-11-14. The e2e test exists (2026-11-16), but it does not prove a bfcache restore (`pageshow.persisted` not asserted), so the finding stays contract-fixed (T117). **Verified 2026-11-16:** the production-build test asserts `pageshow.persisted === true` on Chromium (#13) |
 
 ### 5.2 Admin CLI, test hooks, backups and CI
 | ID | Area | Threat | STRIDE | Mitigation in contract | Status |
@@ -288,9 +288,9 @@ No new endpoint, role or third-party integration. The CSP gains exactly two `sty
 | T114 | CSP styles | The style exception lets injected markup add attacker CSS (exfiltration via selectors, UI redress) | I/T | `style-src 'self'` plus two sha256 hashes of React Aria's fixed `<style>` text; no `'unsafe-inline'`, nonce or `'unsafe-hashes'`; backend pin and guard tests, frontend recompute test, cross-package drift test | **Signed off 2026-11-14.** The e2e violation gate on the production build (WebKit as iOS, plus Chromium) and the tests/ drift test were verified 2026-11-16 (F-23 verified). Gate hardening: F-55. Smoke gap: F-53 |
 | T115 | Service worker | A stale worker or cached `index.html` serves old code, or a cached response drops the CSP, or API data lands in Cache Storage | T/I | Shell-only precache fixed at build; `/api` and cross-origin never intercepted; network-first navigations; the cached shell keeps its original headers; `updateViaCache: none`; check-dist rejects `/api` and `.map` entries | Holds (reviewed 2026-11-14) |
 | T116 | Link tokens | The token leaks to error tracking before the fragment is stripped | I | Capture module imported first; `replaceState` before render; token held in memory | **F-50** (Low): shared chunks evaluate first in the bundle; no exposure until Sentry is added |
-| T117 | Sign-out on a shared phone | The UI shows sign-in while the server session is still live, so the next person is signed in | S/I | Memory cleared and `location.replace('/signin')` | **F-51** (Low): logout failure ignored |
-| T118 | Device storage | A future change persists financial data or tokens to web storage despite ADR-0002 | I | Only preferences.ts touches localStorage; ESLint bans | **F-52** (Low): the lint ban misses `window.*` and `caches` |
-| T119 | Same-tab user switch | The next user inherits the previous user's unsaved draft and return path | I | Draft scoped to a budget ID; non-members get 404 | **F-54** (Low) |
+| T117 | Sign-out on a shared phone | The UI shows sign-in while the server session is still live, so the next person is signed in | S/I | Memory cleared and `location.replace('/signin')` | **F-51** verified 2026-11-16: only 2xx or 401 counts as signed out; otherwise the person stays signed in and is told |
+| T118 | Device storage | A future change persists financial data or tokens to web storage despite ADR-0002 | I | Only preferences.ts touches localStorage; ESLint bans | **F-52** verified 2026-11-16 (`no-restricted-properties` plus a 29-case fixture test) |
+| T119 | Same-tab user switch | The next user inherits the previous user's unsaved draft and return path | I | Draft scoped to a budget ID and the user ID; return path bound to the user ID; non-members get 404 | **F-54** verified 2026-11-16 |
 | T120 | Open redirect and URL sinks | A return path or a server value navigates off-site or into `javascript:` | S | `safeReturnPath` on every `navigate()`; hrefs only from route constants and server UUIDs; `script-src 'self'` blocks `javascript:` | Holds (reviewed 2026-11-14) |
 
 ### 5.9 Test infrastructure (review 2026-11-16, `feat/test-suite`)
@@ -308,9 +308,22 @@ No new endpoint, role or integration.
 | ID | Area | Threat | STRIDE | Mitigation | Status |
 |---|---|---|---|---|---|
 | T121 | Test proxy | The Origin rewrite masks a CSRF gap, or the proxy is reachable from the LAN | S/T | Listens on 127.0.0.1; rewrites only its own origin, so a foreign Origin passes through and is refused; CSRF is proven directly against the API (`check-order.test.ts`) and in backend unit tests | Holds (reviewed 2026-11-16) |
-| T122 | Suites vs real databases | An exported shell `DATABASE_URL`/`DATABASE_ADMIN_URL` overrides the stack file; the factories write synthetic rows, or a superuser `LOCK TABLE` blocks sign-ins, on a non-local database | T/D | HTTP hooks fail closed (global setup needs `_test/reset` = 204); the direct DB URLs are not checked | **F-56** (Low) |
+| T122 | Suites vs real databases | An exported shell `DATABASE_URL`/`DATABASE_ADMIN_URL` overrides the stack file; the factories write synthetic rows, or a superuser `LOCK TABLE` blocks sign-ins, on a non-local database | T/D | HTTP hooks fail closed (global setup needs `_test/reset` = 204); DB URLs checked local with pg's parser; stack file used whole | **F-56** verified 2026-11-16 (#13) |
 | T123 | Real data in artifacts | Screenshots, fixtures or CI traces carry real financial data or secrets into a public repo | I | Fixed synthetic household; `@example.test` only; passwords and tokens generated at run time; throwaway CI stack; gitleaks over the working tree | Holds (24 baselines inspected 2026-11-16) |
-| T124 | CSP gate | A real CSP violation goes unreported because the gate reads only the last document, or the visual suite clears it | T | Gate on the production build in WebKit (as iOS) and Chromium, and proves itself live; both hashes still exercised on the last page | **F-55** (Low) |
+| T124 | CSP gate | A real CSP violation goes unreported because the gate reads only the last document, or the visual suite clears it | T | Gate on the production build in WebKit (as iOS) and Chromium, and proves itself live; violations collected Node-side across navigations | **F-55** verified 2026-11-16 (#13) |
+
+### 5.10 Pre-launch hardening (review 2026-11-16, `fix/pre-launch-hardening`)
+New surfaces:
+- The e2e `edge` proxy (.github/scripts/e2e-edge.mjs), in docker-compose.test.yml only. It is the one trusted hop in the e2e stack and honours a test-only `X-E2E-Client-IP` override.
+- `make e2e-up`/`e2e-down`, a long-lived local e2e stack writing tests/.env.stack (mode 600).
+- The CSV export on the pending-deletion screen: the same `exportMyData` endpoint, already `x-pending-deletion-allowed` and `x-reauth`.
+
+No new production endpoint, role, integration or data flow.
+
+| ID | Area | Threat | STRIDE | Mitigation | Status |
+|---|---|---|---|---|---|
+| T125 | e2e edge | The client-IP override (a spoofing primitive by design) or `TRUST_PROXY_HOPS=1` reaches the production image or a deployed config | S | `.github` is dockerignored, and the Dockerfile copies only `/out` and `/public`; the edge exists only in docker-compose.test.yml; the backend has no code for the header; ports bound to 127.0.0.1 | Holds (reviewed 2026-11-16) |
+| T126 | Rate limits | A concurrent burst passes read-then-increment limits (reset per address, daily email budget, invite caps, email change, login failure counters) | D/S | Reserve-first atomic upsert with refund on refusal; one-shot notices | **F-57** fixed and verified; login counters and the `login_throttled` notice: **F-58** (Low, open) |
 
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
@@ -397,6 +410,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-14 | v2.5 | Final pass before the PR: F-45 to F-48 fixed and verified; F-10 verified at image level; new T113 / F-49 (Low, deferred by the owner). |
 | 2026-11-14 | v2.6 | Frontend code review (`feat/frontend`, 371b77c): §5.8 T114–T120; TB-DEV expanded (Cache Storage shell, localStorage, clipboard, blob downloads); CSP two-hash `style-src` signed off; F-32 implemented; new F-50 to F-54 (Low); PR #6 throttle refunds checked against F-45 (no weakening). |
 | 2026-11-16 | v2.7 | Test-suite review (`feat/test-suite`, 52a556a plus the Phase B tree): §5.9 T121–T124. F-01, F-18, F-23, F-33, F-34 and F-36 verified by tests. §6 plan and cursor rows resolved. T41/F-32 e2e present but the bfcache path is unproven. New F-55 and F-56 (Low). BUG-1 (GET bodies ignored) ruled not a security issue. |
+| 2026-11-16 | v2.8 | Pre-launch hardening review (`fix/pre-launch-hardening`): §5.10 T125–T126. F-51, F-52, F-53 and F-54 closed; F-08 (V26 still open), F-09 (app), F-21 and F-22 verified by integration tests; F-32, F-55 and F-56 verified from #13. New F-57 (Medium, fixed in the PR) and F-58 (Low, open). TB-DEV, T20, T28, T39, T40, T41, T117–T119, T122 and T124 updated. |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.

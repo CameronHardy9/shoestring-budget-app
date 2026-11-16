@@ -210,10 +210,30 @@ ensure_local_env() {
 }
 
 # Production image release and tag for the current checkout (make image,
-# make image-smoke). Release: git SHA (+ -dirty) unless APP_RELEASE is set.
-# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty].
+# make image-smoke). Release: git SHA (+ -dirty-<hash>) unless APP_RELEASE is set.
+# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty-<hash>].
+# <hash> is 12 hex characters of a SHA-256 over the uncommitted changes (staged,
+# unstaged and deletions as a binary diff against HEAD, plus the name and
+# content hash of every untracked, not-ignored file), so two different dirty
+# trees never share a tag and the same dirty tree always gets the same one.
+# Nothing is written to .git (git hash-object without -w).
 _git_sha() { git rev-parse HEAD 2>/dev/null || echo unknown; }
-_git_dirty() { [ -z "$(git status --porcelain 2>/dev/null)" ] || echo -dirty; }
+_sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
+_git_dirty() {
+  [ -n "$(git status --porcelain 2>/dev/null)" ] || return 0
+  local untracked h
+  untracked="$(git ls-files -z --others --exclude-standard | tr '\0' '\n')"
+  h="$(
+    {
+      git diff --binary --no-ext-diff --no-textconv HEAD --
+      if [ -n "$untracked" ]; then
+        printf '%s\n' "$untracked"
+        printf '%s\n' "$untracked" | git hash-object --no-filters --stdin-paths
+      fi
+    } | _sha256 | cut -c1-12
+  )"
+  echo "-dirty-$h"
+}
 image_release() { echo "${APP_RELEASE:-$(_git_sha)$(_git_dirty)}"; }
 image_tag() {
   local sha

@@ -32,6 +32,7 @@ import {
   LoadingState,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
+import { saveBlob } from "../../lib/download.ts";
 import { getLastBudgetId } from "../../lib/preferences.ts";
 
 /** QR code drawn as SVG rectangles from uqr's module matrix. */
@@ -94,14 +95,10 @@ export function RecoveryCodes({
           variant="secondary"
           className="flex-1"
           onPress={() => {
-            const url = URL.createObjectURL(
+            saveBlob(
               new Blob([text], { type: "text/plain" }),
+              "shoestring-recovery-codes.txt",
             );
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "shoestring-recovery-codes.txt";
-            a.click();
-            URL.revokeObjectURL(url);
           }}
         >
           Download

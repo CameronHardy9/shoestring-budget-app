@@ -164,17 +164,19 @@ function ReauthDialog({
 
 export function ReauthProvider({ children }: { children: ReactNode }) {
   const [pending, setPending] = useState<Pending | null>(null);
-  const pendingRef = useRef<Pending | null>(null);
+  // One prompt at a time: a second REAUTH_REQUIRED while the dialog is open
+  // waits for the same answer instead of replacing it (which would leave the
+  // first caller's promise, and its spinner, hanging forever).
+  const askingRef = useRef<Promise<void> | null>(null);
 
-  const ask = useCallback(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const next = { resolve, reject };
-        pendingRef.current = next;
-        setPending(next);
-      }),
-    [],
-  );
+  const ask = useCallback(() => {
+    if (askingRef.current) return askingRef.current;
+    const asking = new Promise<void>((resolve, reject) => {
+      setPending({ resolve, reject });
+    });
+    askingRef.current = asking;
+    return asking;
+  }, []);
 
   const run = useCallback<Run>(
     async (action) => {
@@ -198,7 +200,7 @@ export function ReauthProvider({ children }: { children: ReactNode }) {
         <ReauthDialog
           pending={pending}
           onDone={() => {
-            pendingRef.current = null;
+            askingRef.current = null;
             setPending(null);
           }}
         />

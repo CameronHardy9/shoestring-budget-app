@@ -173,48 +173,98 @@ export class FakeSessions {
       reserveSessionMfaAttempt: (id: string) => {
         const now = this.clock.now();
         for (const v of this.rows.values())
-          if (v.session.id === id && v.session.status === "mfa_pending" && v.session.expiresAt > now) {
-            if (v.session.mfaFailedAttempts >= 5) return Promise.resolve({ granted: false as const, reason: "exhausted" as const });
-            v.session = { ...v.session, mfaFailedAttempts: v.session.mfaFailedAttempts + 1 };
-            return Promise.resolve({ granted: true as const, attempt: v.session.mfaFailedAttempts });
+          if (
+            v.session.id === id &&
+            v.session.status === "mfa_pending" &&
+            v.session.expiresAt > now
+          ) {
+            if (v.session.mfaFailedAttempts >= 5)
+              return Promise.resolve({
+                granted: false as const,
+                reason: "exhausted" as const,
+              });
+            v.session = {
+              ...v.session,
+              mfaFailedAttempts: v.session.mfaFailedAttempts + 1,
+            };
+            return Promise.resolve({
+              granted: true as const,
+              attempt: v.session.mfaFailedAttempts,
+            });
           }
-        return Promise.resolve({ granted: false as const, reason: "invalid" as const });
+        return Promise.resolve({
+          granted: false as const,
+          reason: "invalid" as const,
+        });
       },
       failSessionMfaAttempt: (id: string) => {
         for (const [k, v] of this.rows)
           if (v.session.id === id && v.session.status === "mfa_pending") {
             if (v.session.mfaFailedAttempts >= 5) {
               this.rows.delete(k);
-              return Promise.resolve({ attempts: v.session.mfaFailedAttempts, deleted: true, open: false });
+              return Promise.resolve({
+                attempts: v.session.mfaFailedAttempts,
+                deleted: true,
+                open: false,
+              });
             }
-            return Promise.resolve({ attempts: v.session.mfaFailedAttempts, deleted: false, open: true });
+            return Promise.resolve({
+              attempts: v.session.mfaFailedAttempts,
+              deleted: false,
+              open: true,
+            });
           }
         return Promise.resolve({ attempts: 0, deleted: false, open: false });
       },
       releaseSessionMfaAttempt: (id: string) => {
         for (const v of this.rows.values())
           if (v.session.id === id && v.session.mfaFailedAttempts > 0)
-            v.session = { ...v.session, mfaFailedAttempts: v.session.mfaFailedAttempts - 1 };
+            v.session = {
+              ...v.session,
+              mfaFailedAttempts: v.session.mfaFailedAttempts - 1,
+            };
         return Promise.resolve();
       },
-      completeMfaSession: async (pendingId: string, next: { tokenHash: Buffer; csrfToken: string }) => {
+      completeMfaSession: async (
+        pendingId: string,
+        next: { tokenHash: Buffer; csrfToken: string },
+      ) => {
         let pending: SessionRecord | null = null;
         for (const [k, v] of this.rows)
-          if (v.session.id === pendingId && v.session.status === "mfa_pending") {
+          if (
+            v.session.id === pendingId &&
+            v.session.status === "mfa_pending"
+          ) {
             pending = v.session;
             this.rows.delete(k);
           }
         if (!pending) return null;
-        const created = await this.dal().createSession({ userId: pending.userId, tokenHash: next.tokenHash, csrfToken: next.csrfToken, status: "active" });
+        const created = await this.dal().createSession({
+          userId: pending.userId,
+          tokenHash: next.tokenHash,
+          csrfToken: next.csrfToken,
+          status: "active",
+        });
         const row = this.rows.get(next.tokenHash.toString("hex"));
-        if (row) row.session = { ...row.session, mfaVerifiedAt: this.clock.now() };
+        if (row)
+          row.session = { ...row.session, mfaVerifiedAt: this.clock.now() };
         return row?.session ?? created;
       },
       listSessions: (userId: string) =>
         Promise.resolve(
           [...this.rows.values()]
-            .filter((v) => v.session.userId === userId && v.session.status === "active")
-            .map((v) => ({ id: v.session.id, browser: v.session.deviceBrowser, os: v.session.deviceOs, createdAt: v.session.createdAt, lastSeenAt: v.session.lastSeenAt, expiresAt: v.session.expiresAt })),
+            .filter(
+              (v) =>
+                v.session.userId === userId && v.session.status === "active",
+            )
+            .map((v) => ({
+              id: v.session.id,
+              browser: v.session.deviceBrowser,
+              os: v.session.deviceOs,
+              createdAt: v.session.createdAt,
+              lastSeenAt: v.session.lastSeenAt,
+              expiresAt: v.session.expiresAt,
+            })),
         ),
       revokeSession: (userId: string, id: string) => {
         for (const [k, v] of this.rows)
@@ -251,9 +301,23 @@ export function fakeThrottles() {
   return {
     rows,
     dal: {
+      // Mirrors db/src/repos/throttles.ts: a charge upserts; a refund (by < 0)
+      // clamps at 0 and never inserts (missing window -> no-op returning 0).
       hitThrottle: (k: ThrottleKey, w: Date, by = 1) => {
-        const n = (rows.get(id(k, w)) ?? 0) + by;
-        rows.set(id(k, w), n);
+        if (!Number.isSafeInteger(by) || Math.abs(by) > 2_147_483_647)
+          return Promise.reject(
+            new RangeError("throttle increment must be a 32-bit integer"),
+          );
+        const key = id(k, w);
+        const current = rows.get(key);
+        if (by < 0) {
+          if (current === undefined) return Promise.resolve(0);
+          const n = Math.max(current + by, 0);
+          rows.set(key, n);
+          return Promise.resolve(n);
+        }
+        const n = (current ?? 0) + by;
+        rows.set(key, n);
         return Promise.resolve(n);
       },
       sumThrottle: (k: ThrottleKey, since: Date) => {
@@ -272,6 +336,33 @@ export function fakeThrottles() {
         for (const key of [...rows.keys()])
           if (key.startsWith(prefix)) rows.delete(key);
         return Promise.resolve();
+      },
+    },
+  };
+}
+
+/**
+ * Throttle DAL whose every call yields to the event loop first, so concurrent
+ * requests interleave between their throttle reads and writes as they can
+ * against Postgres.
+ */
+export function slowThrottles() {
+  const t = fakeThrottles();
+  const tick = () => new Promise<void>((r) => setImmediate(r));
+  return {
+    rows: t.rows,
+    dal: {
+      hitThrottle: async (...a: Parameters<typeof t.dal.hitThrottle>) => {
+        await tick();
+        return t.dal.hitThrottle(...a);
+      },
+      sumThrottle: async (...a: Parameters<typeof t.dal.sumThrottle>) => {
+        await tick();
+        return t.dal.sumThrottle(...a);
+      },
+      clearThrottle: async (...a: Parameters<typeof t.dal.clearThrottle>) => {
+        await tick();
+        return t.dal.clearThrottle(...a);
       },
     },
   };
@@ -338,6 +429,8 @@ export interface Harness {
       body?: unknown;
       auth?: { token: string; csrf: string };
       headers?: Record<string, string>;
+      /** Client socket address (default: light-my-request's 127.0.0.1). */
+      remoteAddress?: string;
     },
   ): Promise<LightMyRequestResponse>;
   close(): Promise<void>;
@@ -425,6 +518,9 @@ export async function makeHarness(o: HarnessOptions = {}): Promise<Harness> {
         method,
         url,
         headers,
+        ...(opts.remoteAddress !== undefined
+          ? { remoteAddress: opts.remoteAddress }
+          : {}),
         ...(opts.body !== undefined
           ? {
               payload: JSON.stringify(opts.body),

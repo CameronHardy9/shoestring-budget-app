@@ -7,7 +7,8 @@
 #      test-hook sentinel appears nowhere in /app, and dist/ has no `_test` word
 #   2. config refuses TEST_HOOKS=1 and a missing TRUST_PROXY_HOPS
 #   3. /api/healthz and /api/readyz respond 200
-#   4. the security headers and CSP are present
+#   4. the security headers and CSP (exact script-src and style-src) on
+#      /api/healthz, and on /, an SPA deep link and /sw.js once frontend/ exists (F-53)
 #   5. the Host check rejects a foreign host
 #   6. /api/_test/reset and /api/_test/login return 404
 #   7. the SPA loads from STATIC_DIR (once frontend/ exists)
@@ -176,15 +177,74 @@ HOST_H="Host: shoestring.test"
 # status <curl args...>: prints the HTTP status code only.
 status() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
+# The exact script-src and style-src every response must carry (F-23, F-53).
+# style-src allows exactly the two React Aria hashes the owner approved
+# (2026-11-14, security sign-off in FINDINGS F-23), read from their source of
+# truth: frontend/src/security/csp.ts, whose unit test recomputes them from the
+# installed react-aria (the backend's copy is pinned to it by a backend test).
+WANT_SCRIPT_SRC="script-src 'self'"
+WANT_STYLE_SRC=""
+if has_pkg frontend; then
+  CSP_SOURCE="$ROOT/frontend/src/security/csp.ts"
+  [ -f "$CSP_SOURCE" ] || die "$CSP_SOURCE is missing: the smoke reads the approved style hashes from it"
+  style_hashes="$(awk '/REACT_ARIA_STYLE_HASHES *=/ { on = 1 } on { print } on && /\]/ { exit }' "$CSP_SOURCE" |
+    grep -oE "sha256-[A-Za-z0-9+/]+=*" || true)"
+  n_hashes="$(printf '%s' "$style_hashes" | grep -c . || true)"
+  # Exactly two: another hash is a CSP change that needs security sign-off.
+  [ "$n_hashes" = 2 ] ||
+    die "expected exactly 2 sha256 hashes in REACT_ARIA_STYLE_HASHES ($CSP_SOURCE), found $n_hashes"
+  WANT_STYLE_SRC="style-src 'self' $(printf '%s\n' "$style_hashes" | sed "s/.*/'&'/" | paste -sd ' ' -)"
+fi
+SEC_HEADERS=("content-security-policy: default-src 'self'" "frame-ancestors 'none'"
+  "strict-transport-security: max-age=" "x-content-type-options: nosniff"
+  "x-frame-options: deny" "referrer-policy: no-referrer" "cross-origin-opener-policy: same-origin"
+  "cross-origin-resource-policy: same-origin")
+
+# content_type <curl args...>: the Content-Type of a GET, without parameters.
+content_type() { curl -s -o /dev/null -w '%{content_type}' -H "$HOST_H" "$@" | sed 's/;.*//' || true; }
+
+# check_headers <label> [curl args...] <url>: status 200 with the app Host,
+# every header in SEC_HEADERS (case-insensitive), and in the CSP exactly one
+# script-src and one style-src with the exact values above, no -elem/-attr
+# variant that would override them, and no 'unsafe-*' or nonce source.
+check_headers() {
+  local label="$1" raw code low csp d n_script=0 n_style=0 h
+  shift
+  raw="$(curl -s -D - -o /dev/null -w '\n%{http_code}' -H "$HOST_H" "$@" | tr -d '\r' || true)"
+  code="$(printf '%s' "$raw" | tail -n 1)"
+  expect "$label" 200 "$code"
+  low="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  for h in "${SEC_HEADERS[@]}"; do
+    if printf '%s' "$low" | grep -qF "$h"; then pass "$label header: $h"; else fail "$label missing header: $h"; fi
+  done
+  # Values keep their case: the hashes are base64.
+  csp="$(printf '%s\n' "$raw" | sed -n 's/^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ss][Ee][Cc][Uu][Rr][Ii][Tt][Yy]-[Pp][Oo][Ll][Ii][Cc][Yy]: *//p')"
+  [ "$(printf '%s\n' "$csp" | grep -c .)" -le 1 ] || fail "$label: more than one Content-Security-Policy header"
+  while IFS= read -r d; do
+    d="$(printf '%s' "$d" | sed -E 's/^ +//; s/ +$//')"
+    case "$d" in
+      "script-src "*)
+        n_script=$((n_script + 1))
+        expect "$label CSP script-src" "$WANT_SCRIPT_SRC" "$d"
+        ;;
+      "style-src "*)
+        n_style=$((n_style + 1))
+        if [ -n "$WANT_STYLE_SRC" ]; then expect "$label CSP style-src" "$WANT_STYLE_SRC" "$d"; fi
+        ;;
+      script-src-* | style-src-*) fail "$label CSP has $d (overrides script-src/style-src)" ;;
+    esac
+  done <<EOF_CSP
+$(printf '%s' "$csp" | tr ';' '\n')
+EOF_CSP
+  [ "$n_script" -eq 1 ] || fail "$label CSP: $n_script script-src directives, want 1"
+  [ "$n_style" -eq 1 ] || fail "$label CSP: $n_style style-src directives, want 1"
+  if printf '%s' "$csp" | grep -qiE "'unsafe-|'nonce-"; then fail "$label CSP allows 'unsafe-*' or a nonce"; fi
+}
+
 expect "GET /api/healthz" 200 "$(status "$BASE/api/healthz")"
 expect "GET /api/readyz (database, migrations, keyring)" 200 "$(status "$BASE/api/readyz")"
 
-headers="$(curl -s -D - -o /dev/null -H "$HOST_H" "$BASE/api/healthz" | tr -d '\r' | tr '[:upper:]' '[:lower:]')"
-for h in "content-security-policy: default-src 'self'" "frame-ancestors 'none'" \
-  "strict-transport-security: max-age=" "x-content-type-options: nosniff" \
-  "x-frame-options: deny" "referrer-policy: no-referrer" "cross-origin-opener-policy: same-origin"; do
-  if printf '%s' "$headers" | grep -qF "$h"; then pass "header: $h"; else fail "missing header: $h"; fi
-done
+check_headers "GET /api/healthz" "$BASE/api/healthz"
 
 # A non-exempt route: the right Host passes the Host check (401, no session),
 # a foreign Host is rejected before anything else (400).
@@ -197,9 +257,20 @@ for p in reset login; do
 done
 
 if has_pkg frontend; then
-  expect "GET / (SPA)" 200 "$(status -H "$HOST_H" -H 'Accept: text/html' "$BASE/")"
-  expect "GET /some/deep/link (index.html fallback)" 200 \
-    "$(status -H "$HOST_H" -H 'Accept: text/html' "$BASE/some/deep/link")"
+  # F-53: the documents are where the CSP matters most. Same header checks as
+  # healthz, plus the exact script-src and style-src, on the SPA entry, the
+  # index.html fallback and the service worker.
+  check_headers "GET / (SPA)" -H 'Accept: text/html' "$BASE/"
+  expect "GET / content type" text/html "$(content_type -H 'Accept: text/html' "$BASE/")"
+  check_headers "GET /some/deep/link (index.html fallback)" -H 'Accept: text/html' "$BASE/some/deep/link"
+  expect "GET /some/deep/link content type" text/html \
+    "$(content_type -H 'Accept: text/html' "$BASE/some/deep/link")"
+  check_headers "GET /sw.js" "$BASE/sw.js"
+  sw_type="$(content_type "$BASE/sw.js")"
+  case "$sw_type" in
+    application/javascript | text/javascript) pass "GET /sw.js content type: $sw_type" ;;
+    *) fail "GET /sw.js content type: got $sw_type, want JavaScript" ;;
+  esac
 else
   note "SKIP  SPA checks: frontend/ has no package.json yet (API-only image)"
 fi

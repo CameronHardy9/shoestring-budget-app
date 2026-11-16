@@ -13,7 +13,6 @@ next to the code in each area and belong to that area's owner.
 | `e2e/` | Playwright journeys J1–J6, sessions (C3.4–C3.6), axe on every journey screen; `e2e/csp-prod/` the CSP gate on the production build | Playwright (`playwright.config.ts`) |
 | `visual/` | Screenshot baselines (6 screens × light/dark × 2 phones), run only in the pinned Playwright container | Playwright (`playwright.visual.config.ts`) |
 | `support/` | Shared infrastructure (below) | |
-| `scripts/stack.sh` | A long-lived local copy of the e2e stack | bash |
 | `scripts/build-prod-frontend.mjs`, `scripts/prod-server.mjs` | The production frontend built into `.prod-build/`, served with the backend's real headers and `/api` proxied to the stack (CSP gate, visual) | node |
 | `ACCEPTANCE.md` | Every acceptance criterion, NFR and security item → its test (keep current) | |
 | `RELEASE-CHECKLIST.md` | The owner's manual phone, VoiceOver and TalkBack checklist | |
@@ -22,8 +21,8 @@ next to the code in each area and belong to that area's owner.
 - Projects: `iphone-webkit`, `pixel-chromium`, `desktop-chrome` (journeys, against the Vite dev server, ADR-0009); `csp-prod-webkit`, `csp-prod-chromium` (production build). `csp-prod-chromium` runs full Chromium (`channel: "chromium"`) with bfcache ON (Playwright's `--disable-back-forward-cache` removed), so `page.goBack()` there must use `waitUntil: "commit"`. Playwright's WebKit never uses bfcache; `e2e/sign-out-back.ts` states which project takes which path. `@playwright/test` is pinned to the version in `.github/tools/Dockerfile`; `make e2e` refuses a mismatch.
 - `e2e/fixtures.ts`: every test resets the stack first; every page fails on a `securitypolicyviolation` (collected in Node through `exposeBinding`, so violations on pages the test navigated away from still count; the `cspViolations` fixture holds them) and on uncaught page errors; every email is checked against auth.md §15. Helpers: `signInAs` (test login into the browser's cookie jar), `expectAccessible` (axe, fails on serious/critical; excludes only React Aria's live announcer, as frontend/src/test/axe.ts does), `taps` (tap counter for the 3-tap bar), `quickAddOpener`.
 - Journeys use the real UI for the journey itself; setup goes through the DAL and the hooks. Selectors: the frontend test IDs and role/label queries, never CSS paths.
-- The Playwright container has **no database packages** (its install leaves `db/node_modules` empty) and no backend port, so `visual/` sets data up over HTTP only (hooks + API through the Vite proxy) and must never import `support/dal.ts` or `support/factories.ts`. `support/hooks.ts`, `support/http.ts` and `e2e/fixtures.ts` stay DAL-free for that reason; the DAL lives in `support/dal.ts`.
-- Through the Vite proxy the oracle skips only the CORS-header check (`viaDevProxy`): those headers are Vite's.
+- The Playwright container (visual suite) gets the same stack variables as the host run, `API_URL` and `BACKEND_PORT` included, and its install populates `db/node_modules`. `visual/` still sets data up over HTTP only (hooks + API **straight to the backend** at `API_URL`, not through Vite), so it needs nothing but the stack's addresses. `support/hooks.ts`, `support/http.ts` and `e2e/fixtures.ts` stay DAL-free so every runner can load them; the DAL is opt-in through `support/dal.ts`.
+- Only with no backend address at all (neither `API_URL` nor `BACKEND_PORT`) do API calls go through the Vite proxy; the oracle then skips only the CORS-header check (`viaDevProxy`): those headers are Vite's.
 - Only the production build sends a CSP, so the gate means something only on the csp-prod projects and in the visual suite.
 - Visual: frozen server and browser clocks, fixed names and amounts, animations and caret off. WebKit's screenshot helper injects a `body {}` `<style>` the real CSP blocks; `snap()` checks the gate right before each screenshot and afterwards drops only violations at that helper's exact line and column (read from the installed playwright-core; a Playwright upgrade that moves it fails loudly). **Baselines come only from the container** (`make e2e`, or the `visual` step alone); a missing baseline fails on CI and is written locally. Never update baselines from a macOS browser.
 
@@ -38,6 +37,11 @@ next to the code in each area and belong to that area's owner.
 - `emails.ts`: auth.md §15 parsed at run time; `setup.ts` checks every captured email of every test against it.
 - `arbitraries.ts`: JSON Schema → fast-check. `db-locks.ts`: hold a table lock to make "in flight" deterministic (F-45), superuser queries for states the API refuses to build.
 
+## Client IPs: the e2e edge (F-08, F-21)
+- The stack trusts exactly one proxy hop (`TRUST_PROXY_HOPS=1`), the **edge** (`.github/scripts/e2e-edge.mjs`, ci-engineer) in front of both the backend (`API_URL`) and Vite (`BASE_URL`). It appends one `X-Forwarded-For` entry, which the backend takes as the client IP; anything a test forges in `X-Forwarded-For` stays to its left and is ignored.
+- That entry is the TCP peer (the Docker gateway: **never hard-code it**, it differs between OrbStack and Linux CI) unless the request sends `X-E2E-Client-IP: <one IPv4 or IPv6 address>`; the edge then uses that value and strips the header (anything else is a 400 from the edge, outside the contract). In tests: `new ApiClient(label, { clientIp })` or the per-request `clientIp` option (`support/http.ts`). Use the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`); IPv6 limits key on the /64.
+- Every test without `clientIp` shares one IP, so per-IP limits (global 300/min, login 20/15 min, reset request 5/h, sign-up 10/h) add up within a test; the reset clears them.
+
 ## Determinism and isolation
 - One backend holds global state (database, frozen clock, in-memory limiter, outbox), so **files and tests run serially in one worker**. `support/setup.ts` resets everything before **every** test and freezes the clock at `DEFAULT_NOW` (2026-11-16T15:00Z). No test depends on another or on its order.
 - No fixed sleeps (ESLint bans `setTimeout`). Move the app clock, or wait on a condition (`db-locks.ts` polls `pg_stat_activity`). Rate-limit windows read the app clock, so `advanceClock` opens them; the reset clears them.
@@ -51,10 +55,10 @@ next to the code in each area and belong to that area's owner.
 
 ## Commands
 - Whole thing exactly as CI: `make e2e` (starts and tears down its own stack, then `pnpm --filter ./tests run e2e`).
-- While working: `bash tests/scripts/stack.sh up` once (writes `tests/.env.stack`, gitignored), then
+- While working: `make e2e-up` once (project `shoestring-e2e-local`, ports 56xxx; writes `tests/.env.stack`, gitignored, mode 600), then
   - one file: `pnpm --filter ./tests run api integration/paging.test.ts`
   - one test: `pnpm --filter ./tests run api integration/paging.test.ts -t "tampered"`
   - Playwright: `node tests/scripts/build-prod-frontend.mjs` once, then `pnpm --filter ./tests run ui e2e/j2-quick-add.spec.ts --project=iphone-webkit` (add `--headed` or `--ui` to watch)
-  - stop: `bash tests/scripts/stack.sh down`
+  - stop: `make e2e-down` (stops it and deletes `tests/.env.stack`). `make e2e` uses its own project and ports, so both can run at once.
 - `make check` runs this package's `lint`, `typecheck` and `test`. `test` (`vitest.unit.config.ts`) runs only the stack-free unit tests of the infrastructure (`support/*.test.ts`); everything else needs the stack.
 - `e2e` script order: build the production frontend, Vitest API suites, Playwright. `make e2e` then runs `visual` in the container.

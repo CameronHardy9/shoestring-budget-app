@@ -20,7 +20,7 @@ export function localDatabaseUrl(
 ): string {
   if (!value)
     throw new StackEnvError(
-      `${name} is not set. Run the suites through \`make e2e\`, or start a local stack first: bash tests/scripts/stack.sh up`,
+      `${name} is not set. Run the suites through \`make e2e\`, or start a local stack first: make e2e-up`,
     );
   let local: boolean;
   try {

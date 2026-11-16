@@ -5,6 +5,39 @@ import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
+const NO_DEVICE_DATA =
+  "Nothing financial, no tokens and no drafts on the device (ADR-0002, auth.md §4).";
+
+/** Device storage APIs the app code may not touch (F-52). */
+const STORAGE_APIS = [
+  {
+    name: "localStorage",
+    message:
+      "Only src/lib/preferences.ts may use localStorage (ADR-0002: theme and last budget ID only).",
+  },
+  { name: "sessionStorage", message: `No sessionStorage. ${NO_DEVICE_DATA}` },
+  { name: "indexedDB", message: `No IndexedDB. ${NO_DEVICE_DATA}` },
+  {
+    name: "caches",
+    message: `No Cache Storage from the page: only sw/service-worker.js caches the app shell. ${NO_DEVICE_DATA}`,
+  },
+  {
+    name: "cookieStore",
+    message: `No script cookies: the session cookie is httpOnly (auth.md §2). ${NO_DEVICE_DATA}`,
+  },
+];
+
+export const STORAGE_BAN = {
+  globals: STORAGE_APIS,
+  properties: [
+    ...STORAGE_APIS.map(({ name, message }) => ({ property: name, message })),
+    {
+      property: "cookie",
+      message: `No document.cookie: the session cookie is httpOnly (auth.md §2). ${NO_DEVICE_DATA}`,
+    },
+  ],
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -53,24 +86,16 @@ export default tseslint.config(
           message: "Never write HTML strings into the DOM.",
         },
       ],
-      "no-restricted-globals": [
-        "error",
-        {
-          name: "localStorage",
-          message:
-            "Only src/lib/preferences.ts may use localStorage (ADR-0002: theme and last budget ID only).",
-        },
-        {
-          name: "sessionStorage",
-          message:
-            "No sessionStorage: financial data and tokens stay in memory (ADR-0002, auth.md §4).",
-        },
-        {
-          name: "indexedDB",
-          message:
-            "No IndexedDB: nothing financial is stored on the device (ADR-0002).",
-        },
-      ],
+      // Device storage ban (ADR-0002, C3.4, F-52). Two rules, because
+      // no-restricted-globals only sees bare identifiers (`localStorage`) and
+      // no-restricted-properties only sees member access and destructuring.
+      // The properties are banned on ANY object (no `object:`), so
+      // `window.x`, `globalThis.x`, `self.x`, `window["x"]`, an alias of
+      // window and `const { x } = window` are all caught. The one allowed use
+      // is the wrapper in src/lib/preferences.ts (a single commented
+      // eslint-disable line); scripts/eslint-storage-ban.test.ts proves it.
+      "no-restricted-globals": ["error", ...STORAGE_BAN.globals],
+      "no-restricted-properties": ["error", ...STORAGE_BAN.properties],
       "no-restricted-imports": [
         "error",
         {
@@ -110,7 +135,9 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-non-null-assertion": "off",
       "@typescript-eslint/require-await": "off",
+      // Tests reset jsdom's storage between cases; they never ship.
       "no-restricted-globals": "off",
+      "no-restricted-properties": "off",
     },
   },
   {

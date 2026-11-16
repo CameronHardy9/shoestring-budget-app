@@ -120,6 +120,15 @@ function ChooseNewPassword({ token }: { token: string }) {
       if (status.kind !== "signedOut") forget();
       setDone(true);
     } catch (e) {
+      if (!mfa && e instanceof ApiError && e.code === "MFA_REQUIRED") {
+        // MFA was turned on after the link was checked (errors.md: show the
+        // MFA step). Re-check the link for the methods, then ask for one.
+        const fresh = await check.refetch();
+        if (fresh.data?.mfaRequired && fresh.data.mfaMethods.length > 0) {
+          setStep("mfa");
+          return;
+        }
+      }
       setError(e);
       if (e instanceof ApiError && e.code === "VALIDATION_FAILED")
         setStep("password");

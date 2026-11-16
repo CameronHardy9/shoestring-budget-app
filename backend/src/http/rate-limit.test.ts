@@ -86,3 +86,39 @@ describe("Throttles reservations (F-45)", () => {
     expect([...t.rows.values()].every((n) => n >= 0)).toBe(true);
   });
 });
+
+describe("Throttles.refundOnError", () => {
+  function setup() {
+    const clock = createAppClock();
+    clock.freeze(T0);
+    const t = fakeThrottles();
+    const th = new Throttles(
+      strictDal({ throttles: t.dal }),
+      parseKeyring(testKeyring()),
+      clock,
+    );
+    return { t, th, key: th.key("invite:user", "u1") };
+  }
+
+  it("keeps the slots when fn succeeds and refunds them when it throws", async () => {
+    const { th, key } = setup();
+    const kept = await th.reserve(key, HOUR);
+    expect(await th.refundOnError([kept], () => Promise.resolve("ok"))).toBe("ok");
+    expect(await th.count(key, HOUR)).toBe(1);
+    const lost = await th.reserve(key, HOUR);
+    await expect(
+      th.refundOnError([lost], () => Promise.reject(new Error("refused"))),
+    ).rejects.toThrow("refused");
+    expect(await th.count(key, HOUR)).toBe(1);
+  });
+
+  it("a failing refund never masks the original error (it only over-counts)", async () => {
+    const { t, th, key } = setup();
+    const slot = await th.reserve(key, HOUR);
+    t.dal.hitThrottle = () => Promise.reject(new Error("db down"));
+    await expect(
+      th.refundOnError([slot], () => Promise.reject(new Error("refused"))),
+    ).rejects.toThrow("refused");
+    expect([...t.rows.values()]).toEqual([1]);
+  });
+});

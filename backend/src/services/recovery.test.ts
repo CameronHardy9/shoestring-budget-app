@@ -8,7 +8,8 @@ import {
   totpCode,
 } from "../auth/totp.ts";
 import { sha256 } from "../crypto/keyring.ts";
-import { T0, makeHarness } from "../test-support/harness.ts";
+import { DAY, HOUR } from "../http/rate-limit.ts";
+import { T0, makeHarness, slowThrottles } from "../test-support/harness.ts";
 import type { DalOverrides, Harness } from "../test-support/harness.ts";
 
 const U = "01a1d7ab-0000-7000-8000-000000000001";
@@ -128,6 +129,79 @@ describe("password reset request", () => {
         }),
       ).code,
     ).toBe("RATE_LIMITED");
+  });
+});
+
+const resetRequest = (i: number) =>
+  h.req("POST", "/api/auth/password-reset/request", {
+    body: { email: EMAIL },
+    remoteAddress: `198.51.100.${String(i + 1)}`, // one IP each: no 429
+  });
+
+describe("password reset request: per-email limits are race-safe", () => {
+  it("12 concurrent requests for one address from 12 IPs send at most 3 mails, all byte-identical 202s", async () => {
+    const calls: string[] = [];
+    const slow = slowThrottles();
+    h = await harness({ throttles: slow.dal }, calls);
+    const rs = await Promise.all(
+      Array.from({ length: 12 }, (_, i) => resetRequest(i)),
+    );
+    // Sent or refused, every answer is the same bytes (F-22); only the
+    // per-request id differs.
+    const shape = (r: (typeof rs)[number]) => {
+      const { "x-request-id": id, ...headers } = r.headers;
+      expect(id).toEqual(expect.any(String));
+      return { status: r.statusCode, body: r.body, headers };
+    };
+    for (const r of rs) expect(shape(r)).toEqual(shape(rs[0]!));
+    expect([rs[0]!.statusCode, rs[0]!.body]).toEqual([202, ""]);
+    expect(calls).toEqual(["issue", "issue", "issue"]);
+    expect(h.outbox.list(EMAIL)).toHaveLength(3);
+    // Refused requests refund their slots: the counters hold only the 3 sent.
+    expect([...slow.rows.values()].every((n) => n >= 0)).toBe(true);
+    const t = h.deps.throttles;
+    expect(await t.count(t.key("reset-request:email_hour", EMAIL), HOUR)).toBe(3);
+    expect(
+      await t.rollingCount(t.key("reset-request:email_day", EMAIL), DAY),
+    ).toBe(3);
+  });
+
+  it("the 24 h limit holds across hours: at most 5 mails, refused requests do not burn the day budget", async () => {
+    const calls: string[] = [];
+    const slow = slowThrottles();
+    h = await harness({ throttles: slow.dal }, calls);
+    // Hour 1: 3 sent, 7 refused by the hourly limit (refunded from the day count).
+    await Promise.all(Array.from({ length: 10 }, (_, i) => resetRequest(i)));
+    expect(calls).toHaveLength(3);
+    const t = h.deps.throttles;
+    const dayKey = t.key("reset-request:email_day", EMAIL);
+    expect(await t.rollingCount(dayKey, DAY)).toBe(3);
+    // Hour 2: only 2 of the day's 5 remain; a burst never exceeds them.
+    h.clock.freeze(new Date(T0.getTime() + HOUR));
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) => resetRequest(i + 20)),
+    );
+    expect(calls.length).toBeLessThanOrEqual(5);
+    // Hour 3: one at a time, the rest of the day budget and no more.
+    h.clock.freeze(new Date(T0.getTime() + 2 * HOUR));
+    for (let i = 0; i < 3; i++)
+      expect(
+        [await resetRequest(i + 40)].map((r) => [r.statusCode, r.body]),
+      ).toEqual([[202, ""]]);
+    expect(calls).toHaveLength(5);
+    expect(await t.rollingCount(dayKey, DAY)).toBe(5);
+    expect([...slow.rows.values()].every((n) => n >= 0)).toBe(true);
+    // Once hour 1 leaves the rolling window, its 3 slots free up (hour limit: 3).
+    h.clock.freeze(new Date(T0.getTime() + DAY));
+    for (let i = 0; i < 4; i++) await resetRequest(i + 60);
+    expect(calls).toHaveLength(8);
+  });
+
+  it("a refused request is still padded to 1 s", async () => {
+    h = await harness();
+    for (let i = 0; i < 4; i++) await resetRequest(i);
+    expect(h.outbox.list(EMAIL)).toHaveLength(3);
+    expect(h.sleeps).toEqual([1000, 1000, 1000, 1000]);
   });
 });
 
@@ -371,6 +445,52 @@ describe("email change (F-01, F-33, R-11)", () => {
         }),
       ).code,
     ).toBe("VALIDATION_FAILED");
+  });
+
+  it("10 concurrent requests to taken addresses mail at most 5 (5 per user per day, reserve-first)", async () => {
+    const slow = slowThrottles();
+    h = await makeHarness({
+      dal: {
+        throttles: slow.dal,
+        users: {
+          getUserContact: () =>
+            Promise.resolve({ userId: U, email: EMAIL, displayName: "Pat" }),
+        },
+        tokens: {
+          requestEmailChange: async () => {
+            await new Promise<void>((r) => setImmediate(r));
+            return { outcome: "email_taken" as const };
+          },
+        },
+      },
+    });
+    const s = h.sessions.add({ userId: U });
+    const rs = await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        h.req("POST", "/api/me/email-change", {
+          auth: s,
+          body: { newEmail: `taken${i}@example.test` },
+        }),
+      ),
+    );
+    expect(h.outbox.list()).toHaveLength(5);
+    expect(rs.filter((r) => r.statusCode === 202)).toHaveLength(5);
+    expect(rs.filter((r) => r.statusCode === 429)).toHaveLength(5);
+    const t = h.deps.throttles;
+    expect(await t.count(t.key("email-change:user", U), DAY)).toBe(5);
+  });
+
+  it("a request refused after the reserve (own address, DAL 429) holds no slot", async () => {
+    h = await emailHarness("limited");
+    const s = h.sessions.add({ userId: U });
+    for (const newEmail of ["c@example.test", EMAIL])
+      for (let i = 0; i < 6; i++)
+        await h.req("POST", "/api/me/email-change", {
+          auth: s,
+          body: { newEmail },
+        });
+    const t = h.deps.throttles;
+    expect(await t.count(t.key("email-change:user", U), DAY)).toBe(0);
   });
 
   it("confirm needs this user's active session; both addresses are told, the old one with a fresh cancel link", async () => {

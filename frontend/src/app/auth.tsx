@@ -7,7 +7,13 @@
 //   (see quick-add drafts) and survives the re-login in this tab.
 // - bfcache restore: clear everything and re-check the session before
 //   rendering (F-32).
-// - Sign-out: POST /auth/logout, clear memory, full location.replace('/signin').
+// - Sign-out (F-51): POST /auth/logout. Only a 2xx or a 401 means the server
+//   session is gone; then clear memory and do a full location.replace('/signin').
+//   Anything else (offline, 5xx, CSRF) throws SignOutError and keeps the person
+//   signed in here, so they can see it failed and retry: on a shared phone a
+//   sign-out that only looked done would leave the session live for 30 days.
+// - The return path and a stashed quick-add draft belong to the user who left
+//   them (F-54): a different user signing in in this tab discards both.
 import {
   createContext,
   useCallback,
@@ -22,7 +28,11 @@ import { api, onUnauthenticated, unwrap } from "../api/client.ts";
 import { ApiError, isClientError, type ClientError } from "../api/errors.ts";
 import { clearSessionMemory, setCsrfToken } from "../api/session.ts";
 import type { AuthState, Me, Schemas } from "../api/types.ts";
-import { rememberReturnPath } from "../lib/return-path.ts";
+import {
+  forgetReturnPathUnlessFor,
+  rememberReturnPath,
+} from "../lib/return-path.ts";
+import { discardStashedDraftUnlessFor } from "./draft-stash.ts";
 import { queryClient } from "./query.ts";
 
 export type AuthStatus =
@@ -42,7 +52,26 @@ export interface Auth {
   setMe: (me: Me) => void;
   /** Forget the session locally (after the server revoked it). */
   forget: () => void;
-  signOut: () => Promise<void>;
+  /**
+   * Revokes the session, then loads /signin as a new document. Rejects with
+   * SignOutError (still signed in) unless the server confirmed it. Pass
+   * `revoked` when this session was already revoked server-side, so a failed
+   * logout request no longer matters.
+   */
+  signOut: (options?: { revoked?: boolean }) => Promise<void>;
+  /**
+   * The last user signed in in this tab (kept through a 401), so state left
+   * for after sign-in can be bound to them; null before anyone signed in.
+   */
+  lastUserId: () => string | null;
+}
+
+/** Sign-out didn't reach the server: the session is still live. */
+export class SignOutError extends Error {
+  constructor(options: { cause: unknown }) {
+    super("Sign-out failed", options);
+    this.name = "SignOutError";
+  }
 }
 
 const AuthContext = createContext<Auth | null>(null);
@@ -60,6 +89,13 @@ export function useMe(): Me {
     throw new Error("useMe needs a signed-in user");
   return status.me;
 }
+
+/** Full-document navigation (tests replace it; jsdom can't navigate). */
+export const hardNavigation = {
+  replace: (url: string): void => {
+    window.location.replace(url);
+  },
+};
 
 function clearAll(): void {
   queryClient.clear();
@@ -81,19 +117,37 @@ export function AuthProvider({
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+  const lastUserIdRef = useRef<string | null>(
+    initial?.kind === "signedIn" ? initial.me.id : null,
+  );
 
-  const applyAuthState = useCallback((state: AuthState) => {
-    setCsrfToken(state.csrfToken);
-    setStatus(
-      state.state === "authenticated"
-        ? { kind: "signedIn", me: state.user, session: state.session }
-        : {
-            kind: "mfa",
-            methods: state.mfaMethods,
-            expiresAt: state.expiresAt,
-          },
-    );
+  /** Every status change; a sign-in drops what another user left behind. */
+  const enter = useCallback((next: AuthStatus) => {
+    if (next.kind === "signedIn") {
+      forgetReturnPathUnlessFor(next.me.id);
+      discardStashedDraftUnlessFor(next.me.id);
+      lastUserIdRef.current = next.me.id;
+    }
+    setStatus(next);
   }, []);
+
+  const lastUserId = useCallback(() => lastUserIdRef.current, []);
+
+  const applyAuthState = useCallback(
+    (state: AuthState) => {
+      setCsrfToken(state.csrfToken);
+      enter(
+        state.state === "authenticated"
+          ? { kind: "signedIn", me: state.user, session: state.session }
+          : {
+              kind: "mfa",
+              methods: state.mfaMethods,
+              expiresAt: state.expiresAt,
+            },
+      );
+    },
+    [enter],
+  );
 
   /** GET /auth/session → the status it implies (applies the CSRF token). */
   const readSession = useCallback(async (): Promise<AuthStatus> => {
@@ -118,22 +172,25 @@ export function AuthProvider({
   }, []);
 
   const refresh = useCallback(async () => {
-    setStatus(await readSession());
-  }, [readSession]);
+    enter(await readSession());
+  }, [enter, readSession]);
 
   const forget = useCallback(() => {
     clearAll();
     setStatus({ kind: "signedOut" });
   }, []);
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async ({ revoked = false } = {}) => {
     try {
       await unwrap(api.POST("/auth/logout"));
-    } catch {
-      // Signed out locally either way; the cookie expires on its own.
+    } catch (error) {
+      // 401: there is no session any more, which is the goal.
+      const gone =
+        error instanceof ApiError && error.code === "UNAUTHENTICATED";
+      if (!gone && !revoked) throw new SignOutError({ cause: error });
     }
     clearAll();
-    window.location.replace("/signin");
+    hardNavigation.replace("/signin");
   }, []);
 
   const setMe = useCallback((me: Me) => {
@@ -144,12 +201,12 @@ export function AuthProvider({
     if (initial) return;
     let active = true;
     void readSession().then((next) => {
-      if (active) setStatus(next);
+      if (active) enter(next);
     });
     return () => {
       active = false;
     };
-  }, [initial, readSession]);
+  }, [initial, enter, readSession]);
 
   // Any 401 UNAUTHENTICATED while signed in: back to sign-in, then return.
   useEffect(
@@ -157,7 +214,10 @@ export function AuthProvider({
       onUnauthenticated(() => {
         const current = statusRef.current.kind;
         if (current !== "signedIn" && current !== "mfa") return;
-        rememberReturnPath(window.location.pathname + window.location.search);
+        rememberReturnPath(
+          window.location.pathname + window.location.search,
+          lastUserIdRef.current,
+        );
         clearAll();
         setStatus({ kind: "signedOut" });
       }),
@@ -179,8 +239,16 @@ export function AuthProvider({
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ status, applyAuthState, refresh, setMe, forget, signOut }),
-    [status, applyAuthState, refresh, setMe, forget, signOut],
+    () => ({
+      status,
+      applyAuthState,
+      refresh,
+      setMe,
+      forget,
+      signOut,
+      lastUserId,
+    }),
+    [status, applyAuthState, refresh, setMe, forget, signOut, lastUserId],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

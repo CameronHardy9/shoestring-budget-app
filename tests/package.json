@@ -13,8 +13,6 @@
     "api": "vitest run",
     "ui": "playwright test",
     "test": "vitest run -c vitest.unit.config.ts",
-    "stack:up": "bash scripts/stack.sh up",
-    "stack:down": "bash scripts/stack.sh down",
     "lint": "eslint --max-warnings=0 .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

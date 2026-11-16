@@ -33,6 +33,18 @@ declare global {
   }
 }
 
+/**
+ * Opens /more and waits until its budget list has loaded. Until then a
+ * one-row skeleton stands in for the list, and the swap pushes Sign out down:
+ * a tap aimed at the button during the swap lands elsewhere (seen once on
+ * iphone-webkit, 2026-11-16). Waits on "New budget", which the list shows for
+ * fewer than 10 budgets, as every test here has.
+ */
+export async function openMoreSettled(page: Page): Promise<void> {
+  await page.goto("/more");
+  await expect(page.getByRole("link", { name: "New budget" })).toBeVisible();
+}
+
 export async function signOutThenBack(
   page: Page,
   expectBfcache: boolean,
@@ -66,7 +78,7 @@ export async function signOutThenBack(
   await page.goto(budgetPath);
   await expect(page.getByText("Secret shop")).toBeVisible();
 
-  await page.goto("/more");
+  await openMoreSettled(page);
   await page.getByTestId("sign-out").click();
   await expect(page).toHaveURL(/\/signin$/);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
