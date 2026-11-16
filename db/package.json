@@ -38,7 +38,7 @@
     "new-migration": "dbmate --migrations-dir ./migrations new"
   },
   "dependencies": {
-    "dbmate": "2.38.0",
+    "dbmate": "2.38.1",
     "kysely": "0.29.8",
     "pg": "8.23.1"
   },
@@ -48,7 +48,7 @@
     "@types/pg": "8.23.1",
     "eslint": "10.14.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.72.1",
+    "typescript-eslint": "8.72.2",
     "vitest": "5.1.0"
   }
 }
