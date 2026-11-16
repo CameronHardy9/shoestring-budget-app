@@ -69,6 +69,7 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - Ruled the F-22 slow-mailer test hook **not needed**: it would widen the hook surface.
   - The e2e `edge` proxy and its `X-E2E-Client-IP` header are test-only and cannot reach the image (`.github` is dockerignored, and the backend has no code for the header). Re-check this if a Dockerfile COPY or the deploy config changes.
   - `reserveRolling` (upsert, then sum) fails closed under concurrency. Accepted.
+  - Follow-up (same day): the F-58 notice was fixed in #14 (one-shot per UTC day; no repeat for a same-day re-lockout or after a reset, accepted), and the counter conversion is owner-deferred. CodeQL #6 (remote-property-injection in e2e-edge.mjs) was ruled Info, not an F-number: test-only, and assigning a string to `__proto__` is a no-op. It was fixed anyway with raw header arrays and token/value validation.
   - I did not run `make audit` because the tech lead was running it at the same time (both write `.audit/`). Check `.audit/` timestamps against the edit times.
 
 Related: [[project-review-hotspots]]

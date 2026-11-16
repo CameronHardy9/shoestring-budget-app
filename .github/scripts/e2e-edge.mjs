@@ -66,18 +66,64 @@ function clientIp(req) {
     : peer;
 }
 
-function forwardedHeaders(req, ip, keepUpgrade) {
-  const out = {};
-  for (const [k, v] of Object.entries(req.headers)) {
-    if (k === OVERRIDE) continue;
-    if (HOP.has(k) && !(keepUpgrade && (k === "connection" || k === "upgrade")))
-      continue;
-    out[k] = v;
+// Header names are copied only when they are an RFC 9110 token (5.1, 5.6.2)
+// and not one of the prototype property names, and values only when they hold
+// no control characters other than tab (5.5). Headers travel as flat
+// [name, value, ...] arrays, never as object keys, so a name such as
+// `__proto__` can never reach an object's prototype.
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const FIELD_VALUE = /^[\t\x20-\x7e\x80-\xff]*$/;
+const PROTO_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+/** The name, lowercased, if it may be forwarded; otherwise null. */
+function safeName(name) {
+  if (typeof name !== "string" || !TOKEN.test(name)) return null;
+  const lower = name.toLowerCase();
+  return PROTO_NAMES.has(lower) ? null : lower;
+}
+
+/**
+ * Copies raw [name, value, ...] pairs that pass safeName and FIELD_VALUE,
+ * except those whose lowercased name `skip` returns true for. Original name
+ * casing, order and repeats (Set-Cookie) are kept.
+ */
+function copyRaw(raw, skip) {
+  const out = [];
+  for (let i = 0; i + 1 < raw.length; i += 2) {
+    const lower = safeName(raw[i]);
+    const value = raw[i + 1];
+    if (lower === null || skip(lower)) continue;
+    if (typeof value !== "string" || !FIELD_VALUE.test(value)) continue;
+    out.push(raw[i], value);
   }
-  // Node joins repeated X-Forwarded-For headers into one comma list.
-  const prior = req.headers["x-forwarded-for"];
-  out["x-forwarded-for"] = prior ? `${prior}, ${ip}` : ip;
   return out;
+}
+
+/** The request headers to send upstream, as a flat raw array. */
+function forwardedHeaders(req, ip, keepUpgrade) {
+  const out = copyRaw(
+    req.rawHeaders,
+    (k) =>
+      k === OVERRIDE ||
+      k === "x-forwarded-for" ||
+      (HOP.has(k) && !(keepUpgrade && (k === "connection" || k === "upgrade"))),
+  );
+  // Exactly one entry appended: the client's own X-Forwarded-For lines, joined
+  // with ", " in order as Node does for req.headers, then this edge's entry.
+  const prior = [];
+  for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+    if (String(req.rawHeaders[i]).toLowerCase() === "x-forwarded-for")
+      prior.push(req.rawHeaders[i + 1]);
+  }
+  const joined = prior.join(", ");
+  const xff = joined ? `${joined}, ${ip}` : ip;
+  if (FIELD_VALUE.test(xff)) out.push("X-Forwarded-For", xff);
+  return out;
+}
+
+/** A valid HTTP status code from upstream, or 502. */
+function safeStatus(code) {
+  return Number.isInteger(code) && code >= 100 && code <= 599 ? code : 502;
 }
 
 function plain(res, status, text) {
@@ -117,12 +163,14 @@ function serve(route) {
       agent: false,
     });
     up.on("response", (ures) => {
-      const raw = [];
-      for (let i = 0; i < ures.rawHeaders.length; i += 2) {
-        if (!HOP.has(ures.rawHeaders[i].toLowerCase()))
-          raw.push(ures.rawHeaders[i], ures.rawHeaders[i + 1]);
-      }
-      res.writeHead(ures.statusCode ?? 502, ures.statusMessage, raw);
+      // Response headers pass the same name and value checks; hop-by-hop ones
+      // are dropped (this connection sets its own). Set-Cookie and the
+      // security headers pass unchanged, repeats included. Status and headers
+      // are sent with the first body chunk (or at the end of an empty body).
+      const raw = copyRaw(ures.rawHeaders, (k) => HOP.has(k));
+      res.statusCode = safeStatus(ures.statusCode);
+      for (let i = 0; i + 1 < raw.length; i += 2)
+        res.appendHeader(raw[i], raw[i + 1]);
       ures.pipe(res);
     });
     up.on("error", (err) => {
@@ -150,8 +198,9 @@ function serve(route) {
       );
     const up = net.connect(route.port, route.host, () => {
       let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
-      for (const [k, v] of Object.entries(forwardedHeaders(req, ip, true)))
-        for (const one of Array.isArray(v) ? v : [v]) raw += `${k}: ${one}\r\n`;
+      const fwd = forwardedHeaders(req, ip, true);
+      for (let i = 0; i + 1 < fwd.length; i += 2)
+        raw += `${fwd[i]}: ${fwd[i + 1]}\r\n`;
       up.write(`${raw}\r\n`);
       if (head.length) up.write(head);
       socket.pipe(up).pipe(socket);

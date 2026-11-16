@@ -105,3 +105,13 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | BUG-1 (GET ignores a request body) | **Exempt GET and HEAD** from the body rules in the contract; no backend change. |
 | GitGuardian on PR #13 (incident 40152085, generated test passwords) | **False positive**, marked by the owner in the GitGuardian dashboard. No code change; tests/ stays scanned. |
 | Dependabot #11 (TypeScript 7) | **Closed.** typescript-eslint doesn't support TS 7 yet; stay on TS 6. ci-engineer makes Dependabot skip TypeScript majors until it does (hardening PR). |
+
+## Build round 6: pre-launch hardening, PR #14 (2026-11-16)
+| Topic | Decision |
+|---|---|
+| F-57 (read-then-increment races in reset, email-budget, invite and email-change limits) | **Fixed in PR #14** (reserve-first). Found during hardening; tech lead added it to scope as a gap in F-09 and in the $0 email quota. |
+| F-58 (`login_throttled` notice can be skipped under concurrency) | **Notice fix in PR #14.** Converting the login failure counters to reserve-first is **deferred**: the overshoot is bounded (about 2×) and security accepts it for launch. |
+| "Reload" after an update reloads every tab | **Keep as is** (all tabs reload). |
+| /more loading layout shift; quick-add + ignored while the budget loads | **Follow-up frontend PR** after #14. |
+| 300 ms API p95 guard | **The EXPLAIN row-count check is enough** at beta scale; no API-level timing test. ARCHITECTURE updated to match. |
+| F-22 slow-mailer test hook | **Not added** (security: the 1 s pad floor test plus the mailer timeout test cover it, and a hook would widen the test-hook surface). |

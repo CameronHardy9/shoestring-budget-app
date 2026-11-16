@@ -23,7 +23,7 @@ Learned building Phase A (2026-11-14/16):
 - The Bash auto-mode classifier sometimes fails repeatedly; after 10 misses in a row the turn stops. Switch to Read/Write work and retry later.
 
 **Why:** each of these cost a debugging round or would mislead the next person.
-- **Recurring backend pattern: count-then-hit limits** (reset-request per-email row reads the count, then adds) are not race-safe; test them sequentially, and a deterministic race proof is hard because the per-IP upsert runs first. A DB lock on auth_throttles blocks the IP hit before the count.
+- **Recurring backend pattern: count-then-hit limits** are not race-safe. The reset-request per-address rows had it; fixed 2026-11-16 as F-57 (reserve first: add, compare, refund). Look for the pattern in new limits. A deterministic race test is hard because the per-IP upsert runs before the count; the owner has not asked for an API burst test.
 - Timing (F-22) tests: run known/unknown samples concurrently and compare medians; observed gap ~1 ms on OrbStack, all ~1020-1060 ms.
 - **Flaky area: taps right after navigation (seen on iphone-webkit 2026-11-16, twice).** (a) /more swaps a 1-row skeleton for the budget list and pushes Sign out down, so the tap misses; wait for the "New budget" link (sign-out-back.ts openMoreSettled). (b) The quick-add + is inert until the budget loads (BudgetLayout `if (budget.data)`); wait for `total-remaining` first. Diagnose with the trace timeline (click time vs API responses).
 

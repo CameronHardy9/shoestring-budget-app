@@ -2,8 +2,14 @@ import { DalError } from "@shoestring/db";
 import type { LoginCredentials, MfaSummaryRecord } from "@shoestring/db";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256 } from "../crypto/keyring.ts";
-import { fakePasswords, makeHarness, me } from "../test-support/harness.ts";
-import type { Harness } from "../test-support/harness.ts";
+import { DAY } from "../http/rate-limit.ts";
+import {
+  fakePasswords,
+  makeHarness,
+  me,
+  slowThrottles,
+} from "../test-support/harness.ts";
+import type { DalOverrides, Harness } from "../test-support/harness.ts";
 
 const USER = "01a1d7ab-0000-7000-8000-000000000001";
 const EMAIL = "pat@example.test";
@@ -28,11 +34,17 @@ function creds(password = "right password 1"): LoginCredentials {
 }
 
 function loginHarness(
-  o: { mfa?: MfaSummaryRecord; known?: boolean; hash?: string } = {},
+  o: {
+    mfa?: MfaSummaryRecord;
+    known?: boolean;
+    hash?: string;
+    throttles?: DalOverrides["throttles"];
+  } = {},
 ) {
   const rehashed: string[] = [];
   return makeHarness({
     dal: {
+      ...(o.throttles ? { throttles: o.throttles } : {}),
       users: {
         getLoginCredentials: (email: string) =>
           Promise.resolve(
@@ -186,6 +198,77 @@ describe("POST /auth/login", () => {
       headers: { "x-forwarded-for": "1.2.3.4, 203.0.113.9" },
     });
     expect(json(r).code).toBe("RATE_LIMITED");
+  });
+
+  describe("F-58: the login_throttled notice is one-shot per UTC day", () => {
+    const notices = () =>
+      h.outbox.list(EMAIL).filter((m) => m.kind === "login_throttled");
+    /** Puts `n` failures for EMAIL in the hourly bucket at `at` (n < 0 removes some, as aging would). */
+    const addFailures = async (
+      slow: ReturnType<typeof slowThrottles>,
+      n: number,
+      at = h.clock.now(),
+    ) => {
+      const t = h.deps.throttles;
+      const hour = 3_600_000;
+      const start = new Date(Math.floor(at.getTime() / hour) * hour);
+      await slow.dal.hitThrottle(t.key("login:email_day", EMAIL), start, n);
+    };
+    const failConcurrently = (n: number, from = 0) =>
+      Promise.all(
+        Array.from({ length: n }, (_, i) =>
+          h.req("POST", "/api/auth/login", {
+            body: { email: EMAIL, password: "bad" },
+            remoteAddress: `198.51.100.${String(from + i + 1)}`,
+          }),
+        ),
+      );
+    const failureCount = () => {
+      const t = h.deps.throttles;
+      return t.rollingCount(t.key("login:email_day", EMAIL), DAY);
+    };
+
+    it("two concurrent failures at 99 give exactly one notice", async () => {
+      const slow = slowThrottles();
+      h = await loginHarness({ throttles: slow.dal });
+      await addFailures(slow, 99);
+      const rs = await failConcurrently(2);
+      expect(rs.map((r) => json(r).code)).toEqual([
+        "INVALID_CREDENTIALS",
+        "INVALID_CREDENTIALS",
+      ]);
+      expect(await failureCount()).toBe(101); // both crossed together
+      expect(notices()).toHaveLength(1);
+    });
+
+    it("further failures past the threshold, and a re-lockout the same UTC day, send no repeat; the next UTC day notifies again", async () => {
+      const slow = slowThrottles();
+      h = await loginHarness({ throttles: slow.dal });
+      await addFailures(slow, 99);
+      await failConcurrently(5);
+      expect(notices()).toHaveLength(1);
+      // Locked: step 7 refuses before the password check, so nothing is added.
+      const locked = await failConcurrently(3, 10);
+      expect(locked.map((r) => json(r).code)).toEqual(
+        Array.from({ length: 3 }, () => "RATE_LIMITED"),
+      );
+      expect(notices()).toHaveLength(1);
+      // Old buckets age out (simulated), failures resume and cross 100 again.
+      const firstHour = h.clock.now();
+      h.clock.freeze(new Date(firstHour.getTime() + 3_600_000));
+      await addFailures(slow, -10, firstHour); // 94 left in the rolling window
+      expect(await failureCount()).toBe(94);
+      for (let i = 0; i < 6; i++) await failConcurrently(1, 20 + i);
+      expect(await failureCount()).toBe(100);
+      expect(notices()).toHaveLength(1); // same UTC day: one notice only
+      // A later lockout in a later UTC day (after the old failures aged out of
+      // the rolling 24 h) is announced again.
+      h.clock.freeze(new Date(h.clock.now().getTime() + DAY + 2 * 3_600_000));
+      expect(await failureCount()).toBe(0);
+      await addFailures(slow, 99);
+      await failConcurrently(1, 40);
+      expect(notices()).toHaveLength(2);
+    });
   });
 
   it("after 100 failures in 24 h: 429 for that email and one notice to the account", async () => {

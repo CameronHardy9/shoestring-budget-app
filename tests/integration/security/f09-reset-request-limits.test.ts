@@ -3,10 +3,11 @@
 // stays 202, so nothing is revealed), whichever IP asks; and each IP may ask 5
 // times an hour (429). Together they keep an attacker who rotates IPs from
 // draining the email quota through one victim's address.
-// Every request here answers at a fixed 1 s (F-22), so the calls are few and
-// sequential where the per-address counter is involved (the backend reads the
-// count, then adds to it, so concurrent calls would test a race instead of the
-// limit). Owner of a failure: backend-engineer.
+// Every request here answers at a fixed 1 s (F-22), so the calls are few. The
+// per-address rows reserve first (count, compare, refund a refused attempt;
+// F-57), so they hold under concurrency too; the per-address test still runs
+// sequentially because it checks the limits, not that race. Owner of a
+// failure: backend-engineer.
 import { describe, expect, it } from "vitest";
 import { createUser } from "../../support/factories.ts";
 import { ApiClient, codeOf } from "../../support/http.ts";

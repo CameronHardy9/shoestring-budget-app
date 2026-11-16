@@ -168,7 +168,7 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T25 | J7 | Offline cracking of recovery codes from a DB or backup leak | S/I | SHA-256, ~50 bits | **F-04** |
 | T26 | J7 password reset | Reset used to bypass MFA | E | MFA required at `complete`; passkey challenge bound to the token; 5 failures invalidate it; all sessions revoked | designed (F-05) |
 | T27 | J7 email change | Attacker with the password requests an email change; the victim resets the password; the attacker then confirms with the still-valid token and takes over | S/E | Re-auth; notice to the old address | **F-01 (High)** |
-| T28 | J7 | Account lockout by sending 10 bad passwords per 15 min for a victim's email | D | (email, IP) key, per-email ceiling of 100 per day with notice, reset clears counters | **F-21** verified 2026-11-16; concurrency residual and skippable notice: **F-58** (Low) |
+| T28 | J7 | Account lockout by sending 10 bad passwords per 15 min for a victim's email | D | (email, IP) key, per-email ceiling of 100 per day with notice, reset clears counters | **F-21** verified 2026-11-16; concurrency residual: **F-58** (notice fixed; counters deferred) |
 | T29 | J7 | Evicting a victim's sessions by creating many `mfa_pending` sessions | D | 20-session cap | **F-20** (Low) |
 | T30 | J7 device list | Spoofed device label; attacker revokes the victim's sessions | S/D | Coarse label; password change revokes the others | designed; label from a fixed vocabulary (F-20) |
 | T31 | J7 | Stolen cookie valid indefinitely if used every 30 days | S | Sliding expiry, device list, revoke | **R-3** / **F-19** (owner decision) |
@@ -323,7 +323,7 @@ No new production endpoint, role, integration or data flow.
 | ID | Area | Threat | STRIDE | Mitigation | Status |
 |---|---|---|---|---|---|
 | T125 | e2e edge | The client-IP override (a spoofing primitive by design) or `TRUST_PROXY_HOPS=1` reaches the production image or a deployed config | S | `.github` is dockerignored, and the Dockerfile copies only `/out` and `/public`; the edge exists only in docker-compose.test.yml; the backend has no code for the header; ports bound to 127.0.0.1 | Holds (reviewed 2026-11-16) |
-| T126 | Rate limits | A concurrent burst passes read-then-increment limits (reset per address, daily email budget, invite caps, email change, login failure counters) | D/S | Reserve-first atomic upsert with refund on refusal; one-shot notices | **F-57** fixed and verified; login counters and the `login_throttled` notice: **F-58** (Low, open) |
+| T126 | Rate limits | A concurrent burst passes read-then-increment limits (reset per address, daily email budget, invite caps, email change, login failure counters) | D/S | Reserve-first atomic upsert with refund on refusal; one-shot notices | **F-57** fixed and verified; **F-58** notice fixed and verified (one-shot per UTC day); login counter overshoot owner-deferred |
 
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
@@ -410,7 +410,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-14 | v2.5 | Final pass before the PR: F-45 to F-48 fixed and verified; F-10 verified at image level; new T113 / F-49 (Low, deferred by the owner). |
 | 2026-11-14 | v2.6 | Frontend code review (`feat/frontend`, 371b77c): §5.8 T114–T120; TB-DEV expanded (Cache Storage shell, localStorage, clipboard, blob downloads); CSP two-hash `style-src` signed off; F-32 implemented; new F-50 to F-54 (Low); PR #6 throttle refunds checked against F-45 (no weakening). |
 | 2026-11-16 | v2.7 | Test-suite review (`feat/test-suite`, 52a556a plus the Phase B tree): §5.9 T121–T124. F-01, F-18, F-23, F-33, F-34 and F-36 verified by tests. §6 plan and cursor rows resolved. T41/F-32 e2e present but the bfcache path is unproven. New F-55 and F-56 (Low). BUG-1 (GET bodies ignored) ruled not a security issue. |
-| 2026-11-16 | v2.8 | Pre-launch hardening review (`fix/pre-launch-hardening`): §5.10 T125–T126. F-51, F-52, F-53 and F-54 closed; F-08 (V26 still open), F-09 (app), F-21 and F-22 verified by integration tests; F-32, F-55 and F-56 verified from #13. New F-57 (Medium, fixed in the PR) and F-58 (Low, open). TB-DEV, T20, T28, T39, T40, T41, T117–T119, T122 and T124 updated. |
+| 2026-11-16 | v2.8 | Pre-launch hardening review (`fix/pre-launch-hardening`, PR #14; follow-up: F-58 notice fixed, CodeQL #6 ruled Info): §5.10 T125–T126. F-51, F-52, F-53 and F-54 closed; F-08 (V26 still open), F-09 (app), F-21 and F-22 verified by integration tests; F-32, F-55 and F-56 verified from #13. New F-57 (Medium, fixed in the PR) and F-58 (Low; notice fixed in the PR, counters owner-deferred). TB-DEV, T20, T28, T39, T40, T41, T117–T119, T122 and T124 updated. |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.
