@@ -12,6 +12,7 @@ import {
   uniqueEmail,
 } from "../support/factories.ts";
 import type { TestBudget } from "../support/factories.ts";
+import { endsWithRegex } from "../support/regex.ts";
 import {
   advanceClock,
   emails,
@@ -104,7 +105,7 @@ test.describe("J6 share a budget", () => {
     await partner
       .getByRole("button", { name: "Accept invitation to Our flat" })
       .click();
-    await expect(partner).toHaveURL(new RegExp(`/budgets/${budget.id}$`));
+    await expect(partner).toHaveURL(endsWithRegex(`/budgets/${budget.id}`));
     expect((await emails(owner.email)).map((e) => e.kind)).toContain(
       "invitation_accepted",
     );
@@ -174,7 +175,7 @@ test.describe("J6 share a budget", () => {
       "Our flat",
     );
     await newOwner.getByRole("button", { name: "Restore Our flat" }).click();
-    await expect(newOwner).toHaveURL(new RegExp(`/budgets/${budget.id}$`));
+    await expect(newOwner).toHaveURL(endsWithRegex(`/budgets/${budget.id}`));
     expect((await emails(owner.email)).map((e) => e.kind)).toContain(
       "budget_restored",
     );

@@ -13,6 +13,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { viaDevProxy } from "./env.ts";
+import { openApiPathRegex } from "./regex.ts";
 
 const docPath = (rel: string): string =>
   fileURLToPath(new URL(`../../docs/contracts/${rel}`, import.meta.url));
@@ -124,9 +125,7 @@ function buildOperations(): Operation[] {
       if (!raw) continue;
       const own = (raw.parameters ?? []).map(resolveParam);
       const pathParams = [...path.matchAll(/\{(\w+)\}/g)].map((x) => x[1]!);
-      const pathRegex = new RegExp(
-        `^${path.replace(/\{\w+\}/g, "([^/]+)").replace(/\//g, "\\/")}$`,
-      );
+      const pathRegex = openApiPathRegex(path);
       const successStatuses = new Map<
         number,
         { schema: JsonSchema | null; contentType: string | null }

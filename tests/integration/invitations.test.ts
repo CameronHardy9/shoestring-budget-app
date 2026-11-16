@@ -8,8 +8,15 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createUser } from "../support/factories.ts";
 import { ApiClient, codeOf, detailsOf } from "../support/http.ts";
-import { advanceClock, DAY, emails, signupInvite, testLogin } from "../support/hooks.ts";
+import {
+  advanceClock,
+  DAY,
+  emails,
+  signupInvite,
+  testLogin,
+} from "../support/hooks.ts";
 import { dal } from "../support/dal.ts";
+import { endsWithRegex } from "../support/regex.ts";
 import { persona, seedWorld } from "../support/world.ts";
 
 interface Invitation {
@@ -73,7 +80,7 @@ describe("invite → accept (J6)", () => {
     );
     expect(ownerMail).toHaveLength(1);
     expect(ownerMail[0]!.links[0]).toMatch(
-      new RegExp(`/budgets/${w.budget.id}/members$`),
+      endsWithRegex(`/budgets/${w.budget.id}/members`),
     );
 
     const tx = await partner.client.get<{ items: { id: string }[] }>(

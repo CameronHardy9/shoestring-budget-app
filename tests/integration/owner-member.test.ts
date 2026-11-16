@@ -7,6 +7,7 @@ import { addMember } from "../support/factories.ts";
 import { codeOf, detailsOf } from "../support/http.ts";
 import { emails } from "../support/hooks.ts";
 import { dal } from "../support/dal.ts";
+import { endsWithRegex } from "../support/regex.ts";
 import { persona, seedWorld } from "../support/world.ts";
 
 describe("members are equal for money", () => {
@@ -169,7 +170,7 @@ describe("leaving, removal and ownership transfer (ADR-0010)", () => {
       );
       expect(mail, u.email).toHaveLength(1);
       expect(mail[0]!.links[0]).toMatch(
-        new RegExp(`/budgets/${w.budget.id}/members$`),
+        endsWithRegex(`/budgets/${w.budget.id}/members`),
       );
     }
     expect(
@@ -226,7 +227,7 @@ describe("leaving, removal and ownership transfer (ADR-0010)", () => {
     const notice = (await emails(w.member.user.email)).find(
       (e) => e.kind === "budget_restored",
     );
-    expect(notice?.links[0]).toMatch(new RegExp(`/budgets/${w.budget.id}$`));
+    expect(notice?.links[0]).toMatch(endsWithRegex(`/budgets/${w.budget.id}`));
   });
 });
 

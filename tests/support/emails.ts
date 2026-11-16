@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { env } from "./env.ts";
 import type { CapturedEmail } from "./hooks.ts";
+import { templateRegex } from "./regex.ts";
 
 export interface NotificationRule {
   kind: string;
@@ -23,12 +24,10 @@ const authMd = readFileSync(
 );
 
 function pathPattern(p: string): RegExp {
-  const src = p
-    .replace(/[.*+?^$()|[\]\\]/g, "\\$&")
-    .replace(/\\?\{budgetId\\?\}|\{budgetId\}/g, "[0-9a-f-]{36}")
-    .replace(/#token=…/g, "#token=[A-Za-z0-9_-]{43,64}");
-  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- built from escaped auth.md §15 link paths, not user input
-  return new RegExp(`^${src}$`);
+  return templateRegex(p, {
+    "{budgetId}": "[0-9a-f-]{36}",
+    "#token=…": "#token=[A-Za-z0-9_-]{43,64}",
+  });
 }
 
 export const NOTIFICATIONS: ReadonlyMap<string, NotificationRule> = (() => {
