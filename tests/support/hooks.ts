@@ -1,9 +1,6 @@
 // The test hooks of docs/contracts/test-hooks.md, and nothing else: reset,
 // clock, signup-invites, login, emails. They are not contract operations, so
 // their responses skip the OpenAPI oracle (they still use ErrorBody).
-import { createDal, manualClock } from "@shoestring/db";
-import type { Dal } from "@shoestring/db";
-import { env } from "./env.ts";
 import { ApiClient, rawRequest } from "./http.ts";
 import type { ApiResponse } from "./http.ts";
 import { appHost } from "./env.ts";
@@ -50,34 +47,27 @@ async function expectHook(
   return r.json;
 }
 
-// ------------------------------------------------------------ the shared DAL
-// Factories write through the data-engineer's DAL (test-hooks.md), with a
-// manual clock that always equals the server's frozen clock.
-const localClock = manualClock(DEFAULT_NOW);
-let dalInstance: Dal | null = null;
+// ------------------------------------------------------------ teardown
+// Modules with open resources (support/dal.ts) register here, so runners that
+// never load them (the visual suite in the Playwright container, which has no
+// database packages) need not import them to clean up.
+const teardowns: (() => Promise<void>)[] = [];
 
-export function dal(): Dal {
-  dalInstance ??= createDal({
-    connectionString: env.databaseUrl,
-    clock: localClock.clock,
-    poolMax: 4,
-    applicationName: "shoestring-tests",
-  });
-  return dalInstance;
+export function onTeardown(fn: () => Promise<void>): void {
+  teardowns.push(fn);
 }
 
-export async function closeDal(): Promise<void> {
-  await dalInstance?.close();
-  dalInstance = null;
+export async function runTeardowns(): Promise<void> {
+  for (const fn of teardowns.splice(0)) await fn();
 }
 
+// ------------------------------------------------------------ the clock
 let currentNow = new Date(DEFAULT_NOW);
 
-/** Freezes the server clock (and the factories' clock) at `instant`. */
+/** Freezes the server clock at `instant`; the factories' DAL reads now() too. */
 export async function setClock(instant: string | Date): Promise<void> {
   const d = new Date(instant);
   await expectHook("POST", "/clock", 204, { now: d.toISOString() });
-  localClock.set(d);
   currentNow = d;
 }
 

@@ -158,12 +158,34 @@ describe("categories and limits", () => {
 });
 
 describe("members", () => {
-  it("lets the owner invite and transfer ownership (with re-auth)", async () => {
-    let calls = 0;
+  // Three tests rather than one long journey: each step (axe, typing, the
+  // re-auth dialog) is CPU-bound, and together they outgrew the 5 s test
+  // budget when make check runs every package's tests at once.
+  function renderOwnerMembers(routes: Parameters<typeof mockApi>[0] = {}) {
     const api = mockApi({
       ...budgetBase,
       [`GET ${B}/members`]: json(200, { items: members }),
       [`GET ${B}/invitations`]: json(200, { items: [] }),
+      ...routes,
+    });
+    const view = renderWithApp(
+      <BudgetLayout budgetId={BUDGET_ID} active="budgets">
+        <MembersScreen />
+      </BudgetLayout>,
+      { path: `${B}/members` },
+    );
+    return { api, view };
+  }
+
+  it("shows the owner the members, with no axe violations", async () => {
+    const { view } = renderOwnerMembers();
+    expect(await screen.findByText("Alex (you)")).toBeInTheDocument();
+    await expectNoAxeViolations(view.container);
+  });
+
+  it("lets the owner invite, re-authenticating first", async () => {
+    let calls = 0;
+    const { api } = renderOwnerMembers({
       [`POST ${B}/invitations`]: () =>
         ++calls === 1
           ? apiError(403, "REAUTH_REQUIRED")
@@ -180,21 +202,9 @@ describe("members", () => {
       "POST /auth/reauth": json(200, {
         reauthenticatedUntil: "2026-11-14T15:14:05.000Z",
       }),
-      [`POST ${B}/transfer-ownership`]: json(200, {
-        ...budget,
-        myRole: "member",
-      }),
     });
-    const view = renderWithApp(
-      <BudgetLayout budgetId={BUDGET_ID} active="budgets">
-        <MembersScreen />
-      </BudgetLayout>,
-      { path: `${B}/members` },
-    );
-    expect(await screen.findByText("Alex (you)")).toBeInTheDocument();
-    await expectNoAxeViolations(view.container);
     await userEvent.type(
-      screen.getByRole("textbox", { name: "Invite by email" }),
+      await screen.findByRole("textbox", { name: "Invite by email" }),
       "pat@example.com",
     );
     await userEvent.click(screen.getByTestId("send-invitation"));
@@ -204,8 +214,18 @@ describe("members", () => {
     expect(api.find("POST", `${B}/invitations`)[1]?.body).toEqual({
       email: "pat@example.com",
     });
+  });
 
-    await userEvent.click(screen.getByRole("button", { name: "Make owner" }));
+  it("lets the owner transfer ownership after confirming", async () => {
+    const { api } = renderOwnerMembers({
+      [`POST ${B}/transfer-ownership`]: json(200, {
+        ...budget,
+        myRole: "member",
+      }),
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Make owner" }),
+    );
     await userEvent.click(
       within(screen.getByTestId("confirm-dialog")).getByTestId(
         "confirm-action",

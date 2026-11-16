@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createCategory, createTransaction } from "../support/factories.ts";
 import { codeOf, detailsOf } from "../support/http.ts";
 import type { ApiClient, Query } from "../support/http.ts";
-import { dal } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import type { World } from "../support/world.ts";
 import { seedWorld } from "../support/world.ts";
 

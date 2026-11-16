@@ -6,6 +6,8 @@
 //   - an unknown body field → 400 (body, <name>, unknown_field)
 //   - a body on an operation that takes none → 400
 //   - a non-JSON Content-Type → 415, malformed JSON → 400, a body over 64 KiB → 413
+//   - all three body rules apply to POST, PUT, PATCH and DELETE only: on GET a
+//     body of any kind is ignored (errors.md "Request bodies")
 import { describe, expect, it } from "vitest";
 import { operations } from "../support/contract.ts";
 import type { Operation } from "../support/contract.ts";
@@ -39,6 +41,7 @@ async function send(
 
 const rows = operations.map((o) => [o.operationId, o] as const);
 const unsafe = rows.filter(([, o]) => o.method !== "GET");
+const reads = rows.filter(([, o]) => o.method === "GET");
 
 describe("unknown query parameters are rejected (no cache-busting or tracking params)", () => {
   it.each(rows)(
@@ -164,4 +167,23 @@ describe("body encoding (errors.md 415 / 413 / malformed JSON)", () => {
       ]);
     },
   );
+});
+
+describe("a body on GET is ignored, never an error (errors.md \"Request bodies\")", () => {
+  const bodies: [string, RequestOptions][] = [
+    ["a JSON body other than {}", { body: { injected: true } }],
+    ["malformed JSON", { rawBody: '{"broken": ', contentType: "application/json" }],
+    ["a text/plain body", { rawBody: "hello", contentType: "text/plain" }],
+    ["a form-encoded body", { rawBody: "a=1", contentType: "application/x-www-form-urlencoded" }],
+    ["a body over 64 KiB", { rawBody: JSON.stringify({ pad: "x".repeat(65 * 1024) }), contentType: "application/json" }],
+  ];
+  it.each(
+    reads.flatMap(([id, op]) =>
+      bodies.map(([label, extra]) => [`${id} with ${label}`, op, extra] as const),
+    ),
+  )("%s → its documented success status", async (_label, op, extra) => {
+    const { call, client } = await prepared(op);
+    const res = await send(op, call, client, extra);
+    expect(res.status, res.describe).toBe(RECIPES[op.operationId]!.status);
+  });
 });

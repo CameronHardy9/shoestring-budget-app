@@ -1,3 +1,3 @@
-- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP style hashes, Tailwind v4 class ordering, insecure-context crypto, Vite/jsdom/Playwright gotchas
+- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP style hashes, Tailwind v4 class ordering, React 19 lazy suspend + 300 ms throttle, Vite/jsdom/Playwright gotchas
 - [Build status](project-phase1-status.md) — owner decisions, all MVP tasks delivered, device-only checks outstanding, JS budget headroom
 - [No .env secrets](feedback-no-env-secrets.md) — don't read seed passwords from .env for checks; use test hooks or ask

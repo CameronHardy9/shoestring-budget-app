@@ -157,6 +157,25 @@ describe("contract oracle", () => {
     ).toBe(false);
   });
 
+  it("allows 413 and 415 only on POST, PUT, PATCH and DELETE (errors.md 'Request bodies')", () => {
+    for (const op of operations) {
+      const codes = allowedErrorCodes(op);
+      const takesBody = op.method !== "GET";
+      expect(codes.has("PAYLOAD_TOO_LARGE"), `${op.operationId} 413`).toBe(
+        takesBody,
+      );
+      expect(codes.has("UNSUPPORTED_MEDIA_TYPE"), `${op.operationId} 415`).toBe(
+        takesBody,
+      );
+    }
+    expect(
+      validateResponse(
+        req("GET", "/api/me"),
+        res(415, err("UNSUPPORTED_MEDIA_TYPE")),
+      ).join(),
+    ).toMatch(/getMe answered UNSUPPORTED_MEDIA_TYPE/);
+  });
+
   it("flags an email with an unknown kind, the wrong priority or a link outside §15", () => {
     const mail = {
       to: "a@example.test",

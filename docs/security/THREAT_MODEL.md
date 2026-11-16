@@ -1,7 +1,7 @@
 # Threat model
 Owner: security-reviewer. Updated whenever a new endpoint, data flow, integration, or role appears.
 
-- **Version:** v2.6 (2026-11-14), after the frontend code review (§5.8). Earlier code reviews: data layer (v2.3, §5.6) and backend (v2.4–v2.5, §5.7). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review.
+- **Version:** v2.7 (2026-11-16), after the test-suite review (§5.9). Earlier: v2.6 (2026-11-14), the frontend code review (§5.8). Earlier code reviews: data layer (v2.3, §5.6) and backend (v2.4–v2.5, §5.7). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review.
 - **Sources reviewed:** ARCHITECTURE.md; contracts auth.md (rev 2), data-model.md, errors.md, api.openapi.yaml, admin-commands.md, test-hooks.md; ADR-0001 to ADR-0010; mvp-planning/README.md and 01–10 (10 holds the owner's rulings OD-1 to OD-8 and the hosting decision).
 - **Statuses in §5:** each row's *mitigation* reflects revision 2. Where a row cites a finding, that finding's current status (`contract-fixed`, `partially-fixed`, `open`) is in the FINDINGS.md summary table, which is the source of truth. New threats from revision 2 are T80 to T92 (§5.4).
 - **Findings:** each `F-xx` below is described in [FINDINGS.md](FINDINGS.md). The implementation checklist is in [mvp-security-checklist.md](mvp-security-checklist.md).
@@ -181,7 +181,7 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T38 | All | argon2id memory exhaustion; autoscaling drives cost (denial of wallet) | D | Login rate limits | **F-15** |
 | T39 | All | Client IP spoofed via X-Forwarded-For, bypassing per-IP limits and forging audit IPs | S/R | "Trusted only as configured" | **F-08** |
 | T40 | Email | Email bombing via reset requests exhausts the free daily email quota, blocking recovery for everyone | D | 3 per email per hour (silent), 5 per IP per hour | **F-09** |
-| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low): implemented 2026-11-14, e2e pending (T117) |
+| T41 | Device | Back button after sign-out on a shared phone restores financial data from bfcache | I | In-memory cache cleared at sign-out; `no-store` on API | **F-32** (Low): implemented 2026-11-14. The e2e test exists (2026-11-16), but it does not prove a bfcache restore (`pageshow.persisted` not asserted), so the finding stays contract-fixed (T117) |
 
 ### 5.2 Admin CLI, test hooks, backups and CI
 | ID | Area | Threat | STRIDE | Mitigation in contract | Status |
@@ -285,13 +285,32 @@ No new endpoint, role or third-party integration. The CSP gains exactly two `sty
 
 | ID | Area | Threat | STRIDE | Mitigation in code | Status |
 |---|---|---|---|---|---|
-| T114 | CSP styles | The style exception lets injected markup add attacker CSS (exfiltration via selectors, UI redress) | I/T | `style-src 'self'` plus two sha256 hashes of React Aria's fixed `<style>` text; no `'unsafe-inline'`, nonce or `'unsafe-hashes'`; backend pin and guard tests, frontend recompute test, cross-package drift test | **Signed off 2026-11-14**; e2e violation gate pending (C3.1); smoke gap F-53 |
+| T114 | CSP styles | The style exception lets injected markup add attacker CSS (exfiltration via selectors, UI redress) | I/T | `style-src 'self'` plus two sha256 hashes of React Aria's fixed `<style>` text; no `'unsafe-inline'`, nonce or `'unsafe-hashes'`; backend pin and guard tests, frontend recompute test, cross-package drift test | **Signed off 2026-11-14.** The e2e violation gate on the production build (WebKit as iOS, plus Chromium) and the tests/ drift test were verified 2026-11-16 (F-23 verified). Gate hardening: F-55. Smoke gap: F-53 |
 | T115 | Service worker | A stale worker or cached `index.html` serves old code, or a cached response drops the CSP, or API data lands in Cache Storage | T/I | Shell-only precache fixed at build; `/api` and cross-origin never intercepted; network-first navigations; the cached shell keeps its original headers; `updateViaCache: none`; check-dist rejects `/api` and `.map` entries | Holds (reviewed 2026-11-14) |
 | T116 | Link tokens | The token leaks to error tracking before the fragment is stripped | I | Capture module imported first; `replaceState` before render; token held in memory | **F-50** (Low): shared chunks evaluate first in the bundle; no exposure until Sentry is added |
 | T117 | Sign-out on a shared phone | The UI shows sign-in while the server session is still live, so the next person is signed in | S/I | Memory cleared and `location.replace('/signin')` | **F-51** (Low): logout failure ignored |
 | T118 | Device storage | A future change persists financial data or tokens to web storage despite ADR-0002 | I | Only preferences.ts touches localStorage; ESLint bans | **F-52** (Low): the lint ban misses `window.*` and `caches` |
 | T119 | Same-tab user switch | The next user inherits the previous user's unsaved draft and return path | I | Draft scoped to a budget ID; non-members get 404 | **F-54** (Low) |
 | T120 | Open redirect and URL sinks | A return path or a server value navigates off-site or into `javascript:` | S | `safeReturnPath` on every `navigate()`; hrefs only from route constants and server UUIDs; `script-src 'self'` blocks `javascript:` | Holds (reviewed 2026-11-14) |
+
+### 5.9 Test infrastructure (review 2026-11-16, `feat/test-suite`)
+New surfaces, all local or CI-only, with no production component:
+- `tests/scripts/prod-server.mjs`, a loopback-only server for the production frontend build. It copies the backend's security headers and proxies `/api` to the e2e stack, rewriting `Origin` only when it equals its own origin.
+- `tests/.prod-build/` (gitignored).
+- `tests/.env.stack`, the throwaway credentials of a local stack (mode 600, gitignored).
+- Direct DB connections from the suites: `app` through the DAL, and a superuser for seeding and table locks.
+- Committed visual baselines.
+- Playwright traces uploaded as public CI artifacts on failure.
+- A pinned Playwright container with host networking for the visual suite.
+
+No new endpoint, role or integration.
+
+| ID | Area | Threat | STRIDE | Mitigation | Status |
+|---|---|---|---|---|---|
+| T121 | Test proxy | The Origin rewrite masks a CSRF gap, or the proxy is reachable from the LAN | S/T | Listens on 127.0.0.1; rewrites only its own origin, so a foreign Origin passes through and is refused; CSRF is proven directly against the API (`check-order.test.ts`) and in backend unit tests | Holds (reviewed 2026-11-16) |
+| T122 | Suites vs real databases | An exported shell `DATABASE_URL`/`DATABASE_ADMIN_URL` overrides the stack file; the factories write synthetic rows, or a superuser `LOCK TABLE` blocks sign-ins, on a non-local database | T/D | HTTP hooks fail closed (global setup needs `_test/reset` = 204); the direct DB URLs are not checked | **F-56** (Low) |
+| T123 | Real data in artifacts | Screenshots, fixtures or CI traces carry real financial data or secrets into a public repo | I | Fixed synthetic household; `@example.test` only; passwords and tokens generated at run time; throwaway CI stack; gitleaks over the working tree | Holds (24 baselines inspected 2026-11-16) |
+| T124 | CSP gate | A real CSP violation goes unreported because the gate reads only the last document, or the visual suite clears it | T | Gate on the production build in WebKit (as iOS) and Chromium, and proves itself live; both hashes still exercised on the last page | **F-55** (Low) |
 
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
@@ -305,10 +324,10 @@ Rule under test: a caller who is not a member of budget B can neither read nor m
 | `/budgets/{b}/invitations[/{i}]` | `i` | `i` must be looked up within `b`; revoking another budget's invitation gives 404 | OK (test) |
 | `/me/invitations`, `…/{i}/accept`, `…/{i}/decline` | `i` | Email match; returns `budgetName` and inviter only for invitations addressed to me | OK (see §7) |
 | `/budgets/{b}/categories[/{c}]` | `c` | `c` looked up within `b` | OK |
-| `PUT …/months/{m}/plan/{c}` | `c` | Composite FK backstop; must answer 404 before the FK fires (a raw FK error is a 500 whose detail contains values: F-07) | **F-18** |
+| `PUT …/months/{m}/plan/{c}` | `c` | Composite FK backstop; must answer 404 before the FK fires (a raw FK error is a 500 whose detail contains values: F-07) | OK (tests/ isolation suite 2026-11-16: A's `c` under B's path gives 404 and A is unchanged; F-18 verified) |
 | `POST …/plan/copy-previous` | — | Source and target are both within `b` | OK |
 | `GET …/summary` | — | Scoped aggregation | OK (test with two households) |
-| `GET /budgets/{b}/transactions` | `categoryId`, `cursor` | Filter by a foreign category returns nothing; a cursor is meaningless outside its budget. Bind it anyway (MAC over budget and filters) so the error is deterministic | **F-18** (Low part) |
+| `GET /budgets/{b}/transactions` | `categoryId`, `cursor` | Filter by a foreign category returns nothing; a cursor is meaningless outside its budget. Bind it anyway (MAC over budget and filters) so the error is deterministic | OK (tests/ 2026-11-16: a foreign `categoryId` returns an empty page; A's cursor on B gives 400 `query.cursor`) |
 | `POST/PUT /budgets/{b}/transactions[/{t}]` | `t`, `splits[].categoryId` | Foreign category in a split: the error is **unspecified** (404? 400? FK 500?) | OK in the DAL: 400 `VALIDATION_FAILED` before any write; foreign `t` is 404 (isolation suite, 2026-11-13) |
 | `POST /me/export` | — | Must iterate memberships through `requireMembership` (not a raw join that could include deleted budgets or ex-memberships) | OK in the DAL: `requireMembership` for each budget (isolation suite, 2026-11-13) |
 | `/me/sessions/{id}`, `/me/mfa/passkeys/{id}` | `id` | Other users' IDs give 404 | OK |
@@ -377,6 +396,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-14 | v2.4 | Backend code review (`feat/backend-api`): §5.7 T107–T112; new F-45 (Medium) and F-46 to F-48 (Low); the email-budget constant-key deviation is accepted; the `acceptInvitation` owner-status race is assessed as not exploitable (serialized by the budget row lock). |
 | 2026-11-14 | v2.5 | Final pass before the PR: F-45 to F-48 fixed and verified; F-10 verified at image level; new T113 / F-49 (Low, deferred by the owner). |
 | 2026-11-14 | v2.6 | Frontend code review (`feat/frontend`, 371b77c): §5.8 T114–T120; TB-DEV expanded (Cache Storage shell, localStorage, clipboard, blob downloads); CSP two-hash `style-src` signed off; F-32 implemented; new F-50 to F-54 (Low); PR #6 throttle refunds checked against F-45 (no weakening). |
+| 2026-11-16 | v2.7 | Test-suite review (`feat/test-suite`, 52a556a plus the Phase B tree): §5.9 T121–T124. F-01, F-18, F-23, F-33, F-34 and F-36 verified by tests. §6 plan and cursor rows resolved. T41/F-32 e2e present but the bfcache path is unproven. New F-55 and F-56 (Low). BUG-1 (GET bodies ignored) ruled not a security issue. |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.

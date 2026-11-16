@@ -1,2 +1,2 @@
 - [Environment pitfalls](environment-pitfalls.md): bash 3.2/make 3.81, corepack shim, .env read-deny, compose quirks, semgrep, pnpm filter/deploy traps
-- [Pipeline timings](pipeline-timings.md): make setup/check/e2e/audit timings, zero packages, db/ only, backend+db (2026-11-14) incl. image size
+- [Pipeline timings](pipeline-timings.md): make setup/check/e2e/audit timings, zero packages, db/ only, backend+db (2026-11-14), image size, make test worker budget (2026-11-16)

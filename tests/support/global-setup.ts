@@ -1,9 +1,14 @@
 // Once per run: fail fast, with a message that names the cause, when the
 // suites are started without a usable stack.
+import { databaseAdminUrl, databaseUrl } from "./db-env.ts";
 import { env } from "./env.ts";
 import { hooksAvailable } from "./hooks.ts";
 
 export default async function globalSetup(): Promise<void> {
+  // F-56: refuse a non-local database before any test runs (env.ts has
+  // already refused non-loopback origins on import).
+  databaseUrl();
+  databaseAdminUrl();
   let probe;
   try {
     probe = await hooksAvailable();

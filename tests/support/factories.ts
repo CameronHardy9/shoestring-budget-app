@@ -9,7 +9,7 @@ import type {
   TransactionRecord,
 } from "@shoestring/db";
 import { argon2Sync, randomBytes, randomUUID } from "node:crypto";
-import { dal } from "./hooks.ts";
+import { dal } from "./dal.ts";
 
 // One password for every factory user, random per run (never a literal in the
 // repo), hashed once with the backend's argon2id parameters (auth.md §7).

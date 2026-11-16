@@ -13,7 +13,8 @@ import { arbitraryFor } from "../support/arbitraries.ts";
 import { createUserWithTotp, startMfaSignIn } from "../support/auth.ts";
 import { operations, schemaErrors } from "../support/contract.ts";
 import type { JsonSchema, Operation } from "../support/contract.ts";
-import { dal, testLogin } from "../support/hooks.ts";
+import { testLogin } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import type { ApiClient, Query } from "../support/http.ts";
 import { ApiClient as Client } from "../support/http.ts";
 import type { World } from "../support/world.ts";
@@ -210,17 +211,13 @@ function requestArb(
           arbitrary: fc.constant({ body: undefined, hasBody: false }),
         },
         { weight: 1, arbitrary: fc.constant({ body: {}, hasBody: true }) },
-        // GET bodies are ignored by the backend today, against the contract's
-        // global rule: pinned as a known bug in contract/routes.test.ts (BUG-1),
-        // so they are not generated here.
-        ...(op.method === "GET"
-          ? []
-          : [
-              {
-                weight: 1,
-                arbitrary: fc.constant({ body: { stray: 1 }, hasBody: true }),
-              },
-            ]),
+        // On GET this body is ignored (errors.md "Request bodies"): the request
+        // must then be judged on its other parts alone (breaksSchema), and the
+        // oracle refuses 413/415 for a GET.
+        {
+          weight: 1,
+          arbitrary: fc.constant({ body: { stray: 1 }, hasBody: true }),
+        },
       );
   return fc
     .record({ params, query, headers, b: body })
@@ -258,6 +255,8 @@ function breaksSchema(op: Operation, g: Generated): boolean {
     if (!g.hasBody) return true;
     return schemaErrors(op.requestBody, g.body) !== null;
   }
+  // A GET body is ignored, never validated (errors.md "Request bodies").
+  if (op.method === "GET") return false;
   return g.hasBody && JSON.stringify(g.body) !== "{}";
 }
 

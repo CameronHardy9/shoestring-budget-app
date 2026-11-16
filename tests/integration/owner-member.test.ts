@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { addMember } from "../support/factories.ts";
 import { codeOf, detailsOf } from "../support/http.ts";
-import { dal, emails } from "../support/hooks.ts";
+import { emails } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import { persona, seedWorld } from "../support/world.ts";
 
 describe("members are equal for money", () => {

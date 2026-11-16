@@ -9,7 +9,8 @@ import type { Operation } from "../support/contract.ts";
 import { createUser } from "../support/factories.ts";
 import type { ApiClient } from "../support/http.ts";
 import { codeOf } from "../support/http.ts";
-import { dal, testLogin } from "../support/hooks.ts";
+import { testLogin } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import { invoke, pathFor, RECIPES } from "../support/recipes.ts";
 import { persona, sessionIdOf, seedWorld } from "../support/world.ts";
 

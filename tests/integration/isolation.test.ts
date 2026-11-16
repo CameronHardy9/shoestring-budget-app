@@ -13,7 +13,7 @@ import {
 } from "../support/factories.ts";
 import { codeOf, detailsOf } from "../support/http.ts";
 import type { ApiResponse } from "../support/http.ts";
-import { dal } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import type { Persona } from "../support/world.ts";
 import { persona } from "../support/world.ts";
 

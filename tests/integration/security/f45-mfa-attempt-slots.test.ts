@@ -18,7 +18,8 @@ import type { MfaUser } from "../../support/auth.ts";
 import { holdExclusiveLock } from "../../support/db-locks.ts";
 import { ApiClient, codeOf } from "../../support/http.ts";
 import type { ApiResponse } from "../../support/http.ts";
-import { dal, emails, now, testLogin } from "../../support/hooks.ts";
+import { emails, now, testLogin } from "../../support/hooks.ts";
+import { dal } from "../../support/dal.ts";
 import { totp, wrongTotp } from "../../support/totp.ts";
 import { oneTimeToken } from "../../support/world.ts";
 

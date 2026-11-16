@@ -8,8 +8,11 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "e2e": "vitest run",
+    "e2e": "node scripts/build-prod-frontend.mjs && vitest run && playwright test",
+    "visual": "playwright test -c playwright.visual.config.ts",
     "api": "vitest run",
+    "ui": "playwright test",
+    "test": "vitest run -c vitest.unit.config.ts",
     "stack:up": "bash scripts/stack.sh up",
     "stack:down": "bash scripts/stack.sh down",
     "lint": "eslint --max-warnings=0 .",
@@ -17,11 +20,13 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.65.0",
     "@shoestring/db": "workspace:*",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
+    "axe-core": "4.14.0",
     "eslint": "10.14.0",
     "fast-check": "4.10.2",
     "pg": "8.23.1",

@@ -15,3 +15,4 @@ Data-layer reconciliation (owner-approved 2026-11-13): split→category FK defer
 
 **Why:** the owner approves contracts; future rounds must know what is decided vs proposed.
 **How to apply:** in integration review treat Accepted items as contract; ask before changing Proposed ones. See [[integration-watchlist]].
+- 2026-11-16 (Build round 5, BUG-1): body rules (415/413/`{}`-only) apply to POST/PUT/PATCH/DELETE only; GET/HEAD bodies ignored (errors.md "Request bodies"). Backend codegen reads `x-error-codes` (frontend's doesn't), so any x-error-codes edit needs `pnpm --filter ./backend gen:contract`; info.description edits need no regen.

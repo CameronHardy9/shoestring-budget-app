@@ -8,14 +8,8 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createUser } from "../support/factories.ts";
 import { ApiClient, codeOf, detailsOf } from "../support/http.ts";
-import {
-  advanceClock,
-  DAY,
-  dal,
-  emails,
-  signupInvite,
-  testLogin,
-} from "../support/hooks.ts";
+import { advanceClock, DAY, emails, signupInvite, testLogin } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import { persona, seedWorld } from "../support/world.ts";
 
 interface Invitation {

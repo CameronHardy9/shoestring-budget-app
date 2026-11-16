@@ -4,7 +4,8 @@
 //   after:  every email the test caused is checked against auth.md §15.
 import { afterAll, afterEach, beforeEach, expect } from "vitest";
 import { emailProblems } from "./emails.ts";
-import { closeDal, emails, resetStack } from "./hooks.ts";
+import { emails, resetStack } from "./hooks.ts";
+import { closeDal } from "./dal.ts";
 
 beforeEach(async () => {
   await resetStack();

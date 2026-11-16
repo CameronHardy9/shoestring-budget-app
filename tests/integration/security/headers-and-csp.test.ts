@@ -147,8 +147,12 @@ describe("C3.2: security headers on every route class the backend serves", () =>
 
   it("a rate-limited (429) answer carries every header too", async () => {
     const anon = new ApiClient("anonymous");
+    // The global limit is 300 / minute; bounded so a broken limiter fails here
+    // with a message, not at the Vitest timeout.
     let res = await anon.get("/healthz");
-    while (res.status !== 429) res = await anon.get("/healthz");
+    for (let i = 0; i < 310 && res.status !== 429; i++)
+      res = await anon.get("/healthz");
+    expect(res.status, "the global limit never answered 429").toBe(429);
     expectSecurityHeaders(res);
   });
 });

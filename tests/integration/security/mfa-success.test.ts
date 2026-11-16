@@ -177,7 +177,9 @@ describe("passkey as second factor (real WebAuthn signatures)", () => {
     expect(reauth.status, reauth.describe).toBe(200);
   });
 
-  it("a challenge is single-use: replaying the same assertion is 401 MFA_FAILED", async () => {
+  // Proves session binding, not single use: the assertion is never used on its
+  // own session first (security review 2026-11-16).
+  it("a passkey assertion is bound to its session's challenge: another MFA-pending session cannot use it (401 MFA_FAILED)", async () => {
     const user = await createUser({ prefix: "passkey" });
     const { authenticator } = await enrollPasskey(await testLogin(user.email));
     const pending = await startMfaSignIn(user);

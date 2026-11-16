@@ -12,6 +12,7 @@ import addFormatsModule from "ajv-formats";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { viaDevProxy } from "./env.ts";
 
 const docPath = (rel: string): string =>
   fileURLToPath(new URL(`../../docs/contracts/${rel}`, import.meta.url));
@@ -210,6 +211,8 @@ export const errorStatus: ReadonlyMap<string, number> = (() => {
 })();
 
 const UNSAFE = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+/** Methods the body rules apply to (errors.md "Request bodies"). */
+const BODY_METHODS = UNSAFE;
 
 /**
  * Codes errors.md assigns to one operation in prose without the OpenAPI
@@ -223,16 +226,19 @@ const PROSE_CODES: Record<string, string[]> = {
 
 /** Every code an operation may answer (errors.md "Implicit codes" + x-error-codes). */
 export function allowedErrorCodes(op: Operation): Set<string> {
-  // Every operation: INTERNAL, RATE_LIMITED, UNAVAILABLE. VALIDATION_FAILED,
-  // 413 and 415 apply to every route too: a body other than {} on an operation
-  // without a body, an unknown query parameter, or a foreign Host.
+  // Every operation: INTERNAL, RATE_LIMITED, UNAVAILABLE, and
+  // VALIDATION_FAILED (an unknown query parameter, a foreign Host). The body
+  // rules (413, 415, a body other than {}) apply to POST, PUT, PATCH and DELETE
+  // only: a GET body is ignored (errors.md "Request bodies"), so a GET never
+  // answers 413 or 415.
   const codes = new Set([
     "INTERNAL",
     "RATE_LIMITED",
     "UNAVAILABLE",
     "VALIDATION_FAILED",
-    "PAYLOAD_TOO_LARGE",
-    "UNSUPPORTED_MEDIA_TYPE",
+    ...(BODY_METHODS.has(op.method)
+      ? ["PAYLOAD_TOO_LARGE", "UNSUPPORTED_MEDIA_TYPE"]
+      : []),
     ...op.errorCodes,
     ...(PROSE_CODES[op.operationId] ?? []),
   ]);
@@ -351,7 +357,9 @@ export function validateResponse(
     problems.push(
       `Cache-Control is ${String(header(res, "cache-control"))}, expected no-store`,
     );
-  for (const k of Object.keys(res.headers))
+  // Through the Vite dev proxy the CORS headers are Vite's, not the backend's
+  // (support/env.ts viaDevProxy); every other check still applies.
+  for (const k of viaDevProxy ? [] : Object.keys(res.headers))
     if (k.startsWith("access-control-"))
       problems.push(`CORS header ${k} present (contract: no CORS)`);
   if (res.status >= 500 && res.status !== 503)

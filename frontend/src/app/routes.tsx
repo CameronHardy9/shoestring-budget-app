@@ -2,56 +2,68 @@
 // (stable paths). Access: "public" (anyone), "guest" (signed-out pages that
 // send a signed-in person on), "auth" (sign-in required; the requested path is
 // remembered in memory and restored after sign-in).
-import { lazy, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { BudgetLayout } from "../screens/budget/BudgetLayout.tsx";
 import { NotFoundScreen } from "../screens/NotFoundScreen.tsx";
+import { lazyScreen } from "./lazy-screen.tsx";
 import { matchPath, Redirect } from "./router.tsx";
 
-const SignInScreen = lazy(() => import("../screens/auth/SignInScreen.tsx"));
-const SignupScreen = lazy(() => import("../screens/auth/SignupScreen.tsx"));
-const ResetPasswordScreen = lazy(
-  () => import("../screens/auth/ResetPasswordScreen.tsx"),
+const SignInScreen = lazyScreen(
+  async () => (await import("../screens/auth/SignInScreen.tsx")).default,
 );
-const ConfirmEmailScreen = lazy(() =>
-  import("../screens/auth/EmailLinkScreens.tsx").then((m) => ({
-    default: m.ConfirmEmailScreen,
-  })),
+const SignupScreen = lazyScreen(
+  async () => (await import("../screens/auth/SignupScreen.tsx")).default,
 );
-const CancelEmailChangeScreen = lazy(() =>
-  import("../screens/auth/EmailLinkScreens.tsx").then((m) => ({
-    default: m.CancelEmailChangeScreen,
-  })),
+const ResetPasswordScreen = lazyScreen(
+  async () => (await import("../screens/auth/ResetPasswordScreen.tsx")).default,
 );
-const HomeScreen = lazy(() => import("../screens/HomeScreen.tsx"));
-const CreateBudgetScreen = lazy(
-  () => import("../screens/CreateBudgetScreen.tsx"),
+const ConfirmEmailScreen = lazyScreen(
+  async () =>
+    (await import("../screens/auth/EmailLinkScreens.tsx")).ConfirmEmailScreen,
 );
-const OverviewScreen = lazy(
-  () => import("../screens/budget/OverviewScreen.tsx"),
+const CancelEmailChangeScreen = lazyScreen(
+  async () =>
+    (await import("../screens/auth/EmailLinkScreens.tsx"))
+      .CancelEmailChangeScreen,
 );
-const TransactionsScreen = lazy(
-  () => import("../screens/budget/TransactionsScreen.tsx"),
+const HomeScreen = lazyScreen(
+  async () => (await import("../screens/HomeScreen.tsx")).default,
 );
-const MoreScreen = lazy(() => import("../screens/MoreScreen.tsx"));
-const SecurityScreen = lazy(
-  () => import("../screens/settings/SecurityScreen.tsx"),
+const CreateBudgetScreen = lazyScreen(
+  async () => (await import("../screens/CreateBudgetScreen.tsx")).default,
 );
-const AccountScreen = lazy(
-  () => import("../screens/settings/AccountScreen.tsx"),
+const OverviewScreen = lazyScreen(
+  async () => (await import("../screens/budget/OverviewScreen.tsx")).default,
 );
-const SessionsScreen = lazy(
-  () => import("../screens/settings/SessionsScreen.tsx"),
+const TransactionsScreen = lazyScreen(
+  async () =>
+    (await import("../screens/budget/TransactionsScreen.tsx")).default,
 );
-const DeletedBudgetsScreen = lazy(
-  () => import("../screens/settings/DeletedBudgetsScreen.tsx"),
+const MoreScreen = lazyScreen(
+  async () => (await import("../screens/MoreScreen.tsx")).default,
 );
-const InvitationsScreen = lazy(
-  () => import("../screens/InvitationsScreen.tsx"),
+const SecurityScreen = lazyScreen(
+  async () => (await import("../screens/settings/SecurityScreen.tsx")).default,
 );
-const CategoriesScreen = lazy(
-  () => import("../screens/budget/CategoriesScreen.tsx"),
+const AccountScreen = lazyScreen(
+  async () => (await import("../screens/settings/AccountScreen.tsx")).default,
 );
-const MembersScreen = lazy(() => import("../screens/budget/MembersScreen.tsx"));
+const SessionsScreen = lazyScreen(
+  async () => (await import("../screens/settings/SessionsScreen.tsx")).default,
+);
+const DeletedBudgetsScreen = lazyScreen(
+  async () =>
+    (await import("../screens/settings/DeletedBudgetsScreen.tsx")).default,
+);
+const InvitationsScreen = lazyScreen(
+  async () => (await import("../screens/InvitationsScreen.tsx")).default,
+);
+const CategoriesScreen = lazyScreen(
+  async () => (await import("../screens/budget/CategoriesScreen.tsx")).default,
+);
+const MembersScreen = lazyScreen(
+  async () => (await import("../screens/budget/MembersScreen.tsx")).default,
+);
 
 export type Access = "public" | "guest" | "auth";
 

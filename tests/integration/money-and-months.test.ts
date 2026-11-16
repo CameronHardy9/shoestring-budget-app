@@ -14,7 +14,8 @@ import {
   setPlan,
 } from "../support/factories.ts";
 import { codeOf, detailsOf } from "../support/http.ts";
-import { dal, setClock } from "../support/hooks.ts";
+import { setClock } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import { persona, seedWorld } from "../support/world.ts";
 
 interface CategorySummary {

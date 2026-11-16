@@ -2,7 +2,7 @@
 // sign-up from an emailed link, through the real App with a mocked API.
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { getCsrfToken } from "./api/session.ts";
 import { App } from "./App.tsx";
 import { queryClient } from "./app/query.ts";
@@ -17,6 +17,7 @@ import {
   me,
   summary,
 } from "./test/fixtures.ts";
+import { preloadScreens } from "./test/preload-screens.ts";
 
 const budgetRoutes = {
   [`GET /budgets/${BUDGET_ID}`]: json(200, budget),
@@ -28,6 +29,8 @@ const budgetRoutes = {
   }),
   "GET /budgets": json(200, { items: [budget] }),
 };
+
+beforeAll(preloadScreens);
 
 afterEach(() => {
   queryClient.clear();

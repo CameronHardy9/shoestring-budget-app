@@ -1,9 +1,10 @@
 // App root: providers, then the auth guard in front of every route.
 import { QueryClientProvider } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useAuth, AuthProvider } from "./app/auth.tsx";
 import { queryClient } from "./app/query.ts";
 import { ReauthProvider } from "./app/reauth.tsx";
+import { lazyScreen } from "./app/lazy-screen.tsx";
 import { AppRouter, navigate, Redirect, useLocation } from "./app/router.tsx";
 import { findRoute } from "./app/routes.tsx";
 import { applyUpdate, useUpdateAvailable } from "./app/sw-register.ts";
@@ -13,8 +14,9 @@ import { ErrorState, LoadingState } from "./components/States.tsx";
 import { rememberReturnPath, takeReturnPath } from "./lib/return-path.ts";
 import { NotFoundScreen } from "./screens/NotFoundScreen.tsx";
 
-const PendingDeletionScreen = lazy(
-  () => import("./screens/auth/PendingDeletionScreen.tsx"),
+const PendingDeletionScreen = lazyScreen(
+  async () =>
+    (await import("./screens/auth/PendingDeletionScreen.tsx")).default,
 );
 
 function FullPage({ children }: { children: React.ReactNode }) {

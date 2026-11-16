@@ -10,7 +10,9 @@ info:
     Global rules (apply to every operation; not repeated per operation):
     - Served same-origin under `/api` on `https://shoestring.<domain>`. No CORS.
     - Request and response bodies are `application/json` (UTF-8) unless stated.
-      Unsafe requests with a body must send `Content-Type: application/json` (else 415).
+      Body rules (content type, size, `{}`-only) apply to POST, PUT, PATCH and
+      DELETE: a request with a body must send `Content-Type: application/json`
+      (else 415). A body on GET or HEAD is ignored, never parsed or validated.
     - Every request may send `X-Request-Id`; every response (success or error)
       returns `X-Request-Id`. See errors.md.
     - Every response sets `Cache-Control: no-store`.
@@ -19,8 +21,8 @@ info:
     - Unknown query parameters are rejected with 400 VALIDATION_FAILED
       (`in: query`, `unknown_field`), so clients never add cache-busting or
       tracking parameters.
-    - An operation without a `requestBody` accepts no body or exactly `{}`;
-      any other body is 400 VALIDATION_FAILED.
+    - A POST, PUT, PATCH or DELETE operation without a `requestBody` accepts no
+      body or exactly `{}`; any other body is 400 VALIDATION_FAILED.
     - A path or method not defined here is 404 NOT_FOUND (no 405, no 501), and
       every operation here is implemented (errors.md "Unknown routes").
     - Money is integer USD cents. Dates are `YYYY-MM-DD` calendar dates. Months

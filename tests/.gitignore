@@ -1,0 +1,4 @@
+# Build and test output of tests/ (never committed).
+.prod-build/
+playwright-report/
+test-results/

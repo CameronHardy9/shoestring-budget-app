@@ -5,7 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { codeOf, detailsOf } from "../support/http.ts";
-import { advanceClock, dal, HOUR } from "../support/hooks.ts";
+import { advanceClock, HOUR } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import type { World } from "../support/world.ts";
 import { seedWorld } from "../support/world.ts";
 

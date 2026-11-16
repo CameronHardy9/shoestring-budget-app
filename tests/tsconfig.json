@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2024",
-    "lib": ["ES2024"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
@@ -21,7 +21,12 @@
     "support",
     "contract",
     "integration",
+    "e2e",
+    "visual",
     "vitest.config.ts",
+    "vitest.unit.config.ts",
+    "playwright.config.ts",
+    "playwright.visual.config.ts",
     "eslint.config.js"
   ]
 }

@@ -36,7 +36,7 @@ One code always maps to one HTTP status.
 
 | HTTP | code | When | `details` |
 |---|---|---|---|
-| 400 | `VALIDATION_FAILED` | Path, query, header or body failed the schema (incl. unknown body fields, **unknown query parameters** (`in: query`, `unknown_field`), a body other than `{}` on an operation without a request body, bad UUIDs, missing Idempotency-Key, password policy, unknown timezone, date out of range); a cursor whose MAC fails or that was issued for another budget or other filters (`query.cursor`, `invalid_value`); a body `categoryId` that is not a category of this budget (`splits.N.categoryId`, `invalid_value`); ownership transfer to yourself (`userId`); an email change to the account's current address (`body.newEmail`, `invalid_value`); a `Host` header that is not exactly `URL(APP_ORIGIN).host`, port included (`header.Host`, `invalid_value`; health endpoints exempt) | always |
+| 400 | `VALIDATION_FAILED` | Path, query, header or body failed the schema (incl. unknown body fields, **unknown query parameters** (`in: query`, `unknown_field`), a body other than `{}` on a POST, PUT, PATCH or DELETE operation without a request body, bad UUIDs, missing Idempotency-Key, password policy, unknown timezone, date out of range); a cursor whose MAC fails or that was issued for another budget or other filters (`query.cursor`, `invalid_value`); a body `categoryId` that is not a category of this budget (`splits.N.categoryId`, `invalid_value`); ownership transfer to yourself (`userId`); an email change to the account's current address (`body.newEmail`, `invalid_value`); a `Host` header that is not exactly `URL(APP_ORIGIN).host`, port included (`header.Host`, `invalid_value`; health endpoints exempt) | always |
 | 400 | `INVITATION_INVALID` | Sign-up invite token unknown, expired, used or revoked; budget invitation no longer pending (accepted, declined, revoked or expired). One code for all of these, so token existence is not revealed. | no |
 | 400 | `TOKEN_INVALID` | Password-reset, email-change or email-change-cancel token unknown, expired, used, deleted by a revocation event (auth.md §2), or invalidated after 5 MFA failures; an email-change token presented by a different user's session or whose requesting session was revoked; a revert whose previous address is now used by another account | no |
 | 401 | `UNAUTHENTICATED` | No session, or session expired or revoked. **The only code that means "you are signed out".** | no |
@@ -54,8 +54,8 @@ One code always maps to one HTTP status.
 | 409 | `OWNER_CANNOT_LEAVE` | Owner tries to remove themself from their budget. Transfer ownership first. | no |
 | 409 | `OWNS_SHARED_BUDGET` | Account deletion while still owning a non-deleted budget with other members (transfer ownership, remove the members, or delete the budget first) | no |
 | 409 | `MFA_NOT_ENABLED` | Regenerating recovery codes or requesting a passkey challenge when the user has no such factor | no |
-| 413 | `PAYLOAD_TOO_LARGE` | Body over 64 KiB | no |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | Body present without `Content-Type: application/json` | no |
+| 413 | `PAYLOAD_TOO_LARGE` | Body over 64 KiB (POST, PUT, PATCH, DELETE) | no |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | Body present without `Content-Type: application/json` (POST, PUT, PATCH, DELETE) | no |
 | 422 | `SPLITS_DO_NOT_SUM` | Split amounts do not add up to `amountCents` | `{in: body, field: splits, issue: sum_mismatch}` |
 | 422 | `CATEGORY_ARCHIVED` | New use of an archived category: a new split, or a plan entry | `{field: splits.N.categoryId or "", issue: archived}` |
 | 422 | `IDEMPOTENCY_KEY_REUSED` | Same `Idempotency-Key` sent with a different method, path or body within 24 h | `{in: header, field: Idempotency-Key}` |
@@ -84,6 +84,10 @@ The generic `CONFLICT` code from the template is removed in favor of the specifi
 | `invitation_pending` | A pending invitation already exists for that email |
 | `limit` | A count limit was reached |
 
+## Request bodies
+- The body rules (415 content type, 413 size, 400 for a body other than `{}` on an operation without a `requestBody`) apply only to methods that take or may take a body: POST, PUT, PATCH and DELETE.
+- A body on GET or HEAD is **ignored**: never parsed, size-checked or validated, and never the cause of an error. GET changes no state and browsers cannot send a GET body (owner ruling 2026-11-16, Build round 5).
+
 ## Implicit codes (not repeated in each operation's `x-error-codes`)
 - Every operation: `INTERNAL`, `RATE_LIMITED` (global per-IP limit), `UNAVAILABLE`.
 - Operations with a body: `VALIDATION_FAILED`, `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`. Operations with path, query or header parameters: `VALIDATION_FAILED`.
@@ -102,7 +106,7 @@ The generic `CONFLICT` code from the template is removed in favor of the specifi
 3. Session: required and missing/expired → 401 `UNAUTHENTICATED`; wrong state (`mfa_pending` on a non-MFA endpoint) → 401 `MFA_REQUIRED`; `active` on an `mfa_pending`-only endpoint → 403 `FORBIDDEN`.
 4. CSRF (unsafe methods) → 403 `CSRF_FAILED`.
 5. Pending-deletion restriction → 403 `ACCOUNT_PENDING_DELETION`.
-6. Content type and size → 415 / 413; then schema validation of path, query, headers, body → 400 `VALIDATION_FAILED`.
+6. Content type and size (POST, PUT, PATCH, DELETE only) → 415 / 413; then schema validation of path, query, headers, body → 400 `VALIDATION_FAILED`. GET and HEAD bodies are ignored ("Request bodies").
 7. Endpoint rate limit (auth.md) → 429. This precedes re-authentication (step 10), so an exhausted quota answers 429 even when re-auth is stale. Rows that count attempts (e.g. `login` per IP, `signup`, `export`) count the request here even when a later step rejects it; rows that count failures or completed actions (e.g. `login` per email, `email-change-request`) are incremented only once that outcome is known.
 8. Budget membership (`x-budget-role`) → 404 `NOT_FOUND` for non-members and deleted budgets. For `deleted_budget_owner`: `requireDeletedBudgetOwnership` → 404 unless the caller holds the owner membership of a budget deleted ≤ 30 days ago.
 9. Role → 403 `FORBIDDEN`.

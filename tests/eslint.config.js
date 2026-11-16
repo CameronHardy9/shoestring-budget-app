@@ -3,7 +3,14 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["node_modules/**", "playwright-report/**", "test-results/**"] },
+  {
+    ignores: [
+      "node_modules/**",
+      "playwright-report/**",
+      "test-results/**",
+      ".prod-build/**",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -38,7 +45,13 @@ export default tseslint.config(
     },
   },
   {
-    files: ["eslint.config.js"],
+    files: ["eslint.config.js", "scripts/**/*.mjs"],
     ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    // Plain-JS helpers that run under bare Node (also in the Playwright
+    // container): Node globals, and they report through stdout.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { globals: { process: "readonly", URL: "readonly" } },
   },
 );

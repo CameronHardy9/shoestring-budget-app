@@ -107,38 +107,27 @@ describe("paths the contract does not define → 404 NOT_FOUND", () => {
   });
 });
 
-describe("request bodies on GET (contract global rules; known bug BUG-1)", () => {
-  // TODO(BUG-1, backend-engineer, or architect if the contract should exempt GET):
-  // api.openapi.yaml says "An operation without a requestBody accepts no body
-  // or exactly {}; any other body is 400", and errors.md says a body without
-  // Content-Type: application/json is 415. The backend ignores bodies on GET
-  // (Fastify does not parse them) and answers 200. Browsers cannot send a GET
-  // body, so the impact is low; it is a contract deviation all the same.
-  it.fails(
-    "GET with a JSON body other than {} → 400 VALIDATION_FAILED",
-    async () => {
-      const res = await new ApiClient("anonymous").get("/healthz", {
-        body: { stray: 1 },
-      });
-      expect([res.status, codeOf(res)]).toEqual([400, "VALIDATION_FAILED"]);
-    },
-  );
+describe("request bodies on GET are ignored (errors.md \"Request bodies\")", () => {
+  // Owner ruling 2026-11-16 (was BUG-1): the body rules (415, 413, `{}`-only)
+  // apply to POST, PUT, PATCH and DELETE. A GET body is never parsed, size-
+  // checked or validated, and never the cause of an error. Every GET operation
+  // is covered in contract/rejections.test.ts; these pin the plain cases.
+  it("GET with a JSON body other than {} is accepted (200)", async () => {
+    const res = await new ApiClient("anonymous").get("/healthz", {
+      body: { stray: 1 },
+    });
+    expect(res.status, res.describe).toBe(200);
+  });
 
-  it.fails(
-    "GET with a text/plain body → 415 UNSUPPORTED_MEDIA_TYPE",
-    async () => {
-      const res = await new ApiClient("anonymous").get("/healthz", {
-        rawBody: "hello",
-        contentType: "text/plain",
-      });
-      expect([res.status, codeOf(res)]).toEqual([
-        415,
-        "UNSUPPORTED_MEDIA_TYPE",
-      ]);
-    },
-  );
+  it("GET with a text/plain body is accepted (200), not 415", async () => {
+    const res = await new ApiClient("anonymous").get("/healthz", {
+      rawBody: "hello",
+      contentType: "text/plain",
+    });
+    expect(res.status, res.describe).toBe(200);
+  });
 
-  it("GET with an empty {} body is accepted (allowed by the contract)", async () => {
+  it("GET with an empty {} body is accepted (200)", async () => {
     expect(
       (await new ApiClient("anonymous").get("/healthz", { body: {} })).status,
     ).toBe(200);

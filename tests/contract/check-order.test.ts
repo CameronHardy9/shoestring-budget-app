@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createTransaction, createUser } from "../support/factories.ts";
 import { ApiClient, codeOf, detailsOf } from "../support/http.ts";
-import { advanceClock, dal, MINUTE, testLogin } from "../support/hooks.ts";
+import { advanceClock, MINUTE, testLogin } from "../support/hooks.ts";
+import { dal } from "../support/dal.ts";
 import { seedWorld } from "../support/world.ts";
 
 describe("step 0: Host must be exactly APP_ORIGIN's host", () => {

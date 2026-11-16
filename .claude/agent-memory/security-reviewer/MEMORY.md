@@ -1,3 +1,3 @@
-- [Security rulings](project_security_rulings.md): rulings and accepted deviations (2026-11-12 to 11-14): MFA risk, backups, RLS, CSP hash sign-off, data-layer, backend and frontend reviews
-- [Review hotspots](project_review_hotspots.md): recurring weakness patterns (token chains, de-noise rules, public logs, bundle order, swallowed catches) to check first in every diff
+- [Security rulings](project_security_rulings.md): rulings and accepted deviations (2026-11-12 to 11-16): MFA risk, backups, RLS, CSP hashes, code reviews, test suite
+- [Review hotspots](project_review_hotspots.md): recurring weak spots (token chains, de-noise rules, bundle order, per-document test collectors) to check first in every diff
 - [Findings delivery](feedback_findings_delivery.md): use Edit on FINDINGS.md; if a write is refused, return the content as text and don't work around it

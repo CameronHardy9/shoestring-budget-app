@@ -98,3 +98,9 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | F-50 (link-token capture not first in the production bundle) | **Hard requirement of the Sentry integration PR** (no exposure until Sentry exists). |
 | F-52, F-53, F-54 | **One hardening PR before launch**, together with F-51. |
 
+## Build round 5: test suite (2026-11-16)
+| Topic | Decision |
+|---|---|
+| F-55 (CSP gate loses violations on navigation), F-56 (test DB URLs not forced local), F-32 bfcache assertion | **Fix in the test-suite PR** before merge. |
+| BUG-1 (GET ignores a request body) | **Exempt GET and HEAD** from the body rules in the contract; no backend change. |
+

@@ -16,7 +16,8 @@ import {
 } from "./factories.ts";
 import { ApiClient } from "./http.ts";
 import type { ApiResponse, Query } from "./http.ts";
-import { dal, now, signupInvite, testLogin } from "./hooks.ts";
+import { now, signupInvite, testLogin } from "./hooks.ts";
+import { dal } from "./dal.ts";
 import { totp } from "./totp.ts";
 import { enrollPasskey, SoftAuthenticator } from "./webauthn.ts";
 import type { Persona, World } from "./world.ts";
