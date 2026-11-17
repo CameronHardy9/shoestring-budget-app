@@ -5,9 +5,10 @@
 //
 //   kept: error type names and stack frames (own hashed chunk URL without
 //         ?/# or "<external>", identifier-only function name, line, column;
-//         frames whose text came from the message are dropped: F-59; no
-//         frames at all when a V8 stack's header isn't the error's current
-//         one: F-62),
+//         frames whose text came from the message or the V8 header are
+//         dropped: F-59, F-63; no frames at all when a V8 stack's header
+//         isn't the error's current one, or the linked-error walk hits its
+//         cap: F-62, F-63),
 //         mechanism, level, release, environment, timestamp, event ID, SDK
 //         name, the route TEMPLATE (/budgets/:budgetId), the opaque user ID,
 //         the failing API response's requestId, the browser (User-Agent), and
@@ -122,10 +123,11 @@ export function safeFrameFunction(name: unknown): string {
 
 /**
  * Whether a parsed frame came from a message line rather than the real
- * stack (F-59). V8's error.stack starts with the whole message and Sentry
- * skips only its first line, so a frame-shaped later line ("    at x (y:1:2)")
- * becomes a frame. Such a frame's file or "at fn " / "fn@" text is in the
- * message after its first line. Over-matching only drops a frame.
+ * stack (F-59). V8's error.stack starts with the whole header and Sentry
+ * skips only lines containing "Error: ", so a frame-shaped later message line
+ * ("    at x (y:1:2)"), and on V8 also a header line without "Error: " (F-63),
+ * becomes a frame. Such a frame's file or "at fn " / "fn@" text is in one of
+ * `tails`. Over-matching only drops a frame.
  */
 export function fromMessage(
   frame: { filename?: unknown; function?: unknown },
@@ -184,6 +186,18 @@ export function v8StackHeader(name: string, message: string): string {
   return `${name}: ${message}`;
 }
 
+/**
+ * The lines of a V8 stack header that the SDK's stack parser does NOT skip
+ * (F-63), as it sees them: it skips only lines containing "Error: ", so the
+ * first line of a header whose name doesn't end in "Error" (ReauthCancelled)
+ * and every line of a multi-line name are parsed like any stack line.
+ */
+export function parsedHeaderLines(header: string): string[] {
+  return asStackParserSees(header)
+    .split("\n")
+    .filter((line) => !line.includes("Error: "));
+}
+
 let engineHeader: boolean | undefined;
 /** Whether this engine starts error.stack with the header (V8: yes; Firefox, Safari: no). */
 function engineStackHeader(): boolean {
@@ -206,38 +220,48 @@ function stackText(error: object): unknown {
 }
 
 /**
- * Whether an error's stack starts with exactly its CURRENT header (F-62 b).
- * V8 fixes the header when `.stack` is first read; a message (or name)
- * changed afterwards leaves the old one, whose later lines the SDK would parse
- * as frames, while the message tails come from the new one. An error with no
- * stack text passes (the SDK parsed no frames from it).
+ * Checks that an error's stack starts with exactly its CURRENT header
+ * (F-62 b) and returns the header lines the SDK parses from it (F-63), or
+ * null if the header is not current. V8 fixes the header when `.stack` is
+ * first read; a message (or name) changed afterwards leaves the old one, whose
+ * later lines the SDK would parse as frames, while the message tails come from
+ * the new one. An error with no stack text passes with no lines (the SDK
+ * parsed no frames from it). Name and message are read once, so the lines
+ * are those of the header that was checked.
  */
-function headerIsCurrent(error: object): boolean {
+function currentHeaderLines(error: object): string[] | null {
   const text = stackText(error);
-  if (text === "") return true;
+  if (text === "") return [];
   const { name, message } = error as { name?: unknown; message?: unknown };
   if (
     typeof text !== "string" ||
     typeof name !== "string" ||
     typeof message !== "string"
   )
-    return false;
+    return null;
   const header = v8StackHeader(name, message);
-  return text === header || text.startsWith(`${header}\n`);
+  return text === header || text.startsWith(`${header}\n`)
+    ? parsedHeaderLines(header)
+    : null;
 }
 
 const MAX_LINKED = 32;
 /**
  * The thrown value and every error the SDK's linkedErrors integration can
  * reach from it (cause, AggregateError.errors, SuppressedError.error and
- * .suppressed), depth-first, cycles and size bounded. A superset of what the
- * SDK follows: checking extra objects can only drop frames.
+ * .suppressed), depth-first, cycles bounded. A superset of what the SDK
+ * follows (it follows only values passing its isError, which functions can):
+ * checking extra objects can only drop frames. Null when the walk reaches
+ * MAX_LINKED values (F-63): stopping there could leave unchecked an error the
+ * SDK still reports, e.g. an errors[] child after a long non-Error cause chain.
  */
-function reachableErrors(original: object): object[] {
+function reachableErrors(original: object): object[] | null {
   const seen = new Set<object>();
-  const visit = (value: unknown) => {
-    if (typeof value !== "object" || value === null) return;
-    if (seen.has(value) || seen.size >= MAX_LINKED) return;
+  /** False once the walk reaches the cap. */
+  const visit = (value: unknown): boolean => {
+    if (typeof value !== "object" && typeof value !== "function") return true;
+    if (value === null || seen.has(value)) return true;
+    if (seen.size >= MAX_LINKED) return false;
     seen.add(value);
     const e = value as {
       cause?: unknown;
@@ -245,14 +269,22 @@ function reachableErrors(original: object): object[] {
       error?: unknown;
       suppressed?: unknown;
     };
-    visit(e.cause);
-    if (Array.isArray(e.errors)) for (const child of e.errors) visit(child);
-    visit(e.error);
-    visit(e.suppressed);
+    if (!visit(e.cause)) return false;
+    if (Array.isArray(e.errors))
+      for (const child of e.errors) if (!visit(child)) return false;
+    return visit(e.error) && visit(e.suppressed);
   };
-  visit(original);
-  return [...seen];
+  return visit(original) ? [...seen] : null;
 }
+
+/** The outcome of checking where an event's frames came from. */
+interface StackCheck {
+  /** Whether frames may be sent at all (F-62 b). */
+  trusted: boolean;
+  /** Header lines the SDK parsed as stack lines, for fromMessage (F-63). */
+  headerLines: string[];
+}
+const UNTRUSTED: StackCheck = { trusted: false, headerLines: [] };
 
 /**
  * Whether the event's stack frames may be sent at all (F-62 b, fail closed).
@@ -260,24 +292,44 @@ function reachableErrors(original: object): object[] {
  * a stack whose header is the error's current one: the thrown value must be an
  * object with its own stack text (else the frames came from something we
  * can't check, such as an ErrorEvent's .error), every linked error must pass
- * too, and there may be no more exception values than errors we checked.
- * Firefox and Safari stacks never hold the message, so there is nothing to
- * check. Any getter that throws drops the frames.
+ * too, the walk over linked errors may not hit its cap (F-63), and there may
+ * be no more exception values than errors we checked. Firefox and Safari
+ * stacks never hold the message, so there is nothing to check. Any getter
+ * that throws drops the frames.
  */
 export function framesTrusted(
   original: unknown,
   valueCount: number,
   headerEngine: boolean,
 ): boolean {
-  if (!headerEngine) return true;
-  if (typeof original !== "object" || original === null) return false;
+  return checkStacks(original, valueCount, headerEngine).trusted;
+}
+
+/**
+ * framesTrusted, plus every checked error's parsed header lines (F-63). On
+ * V8 those lines are frame text the message tails don't hold: the header's
+ * first line and the lines of a multi-line name.
+ */
+function checkStacks(
+  original: unknown,
+  valueCount: number,
+  headerEngine: boolean,
+): StackCheck {
+  if (!headerEngine) return { trusted: true, headerLines: [] };
+  if (typeof original !== "object" || original === null) return UNTRUSTED;
   try {
     const errors = reachableErrors(original);
-    if (valueCount > errors.length) return false;
-    if (stackText(original) === "") return false;
-    return errors.every(headerIsCurrent);
+    if (errors === null || valueCount > errors.length) return UNTRUSTED;
+    if (stackText(original) === "") return UNTRUSTED;
+    const headerLines: string[] = [];
+    for (const error of errors) {
+      const lines = currentHeaderLines(error);
+      if (lines === null) return UNTRUSTED;
+      headerLines.push(...lines);
+    }
+    return { trusted: true, headerLines };
   } catch {
-    return false;
+    return UNTRUSTED;
   }
 }
 
@@ -476,19 +528,23 @@ export function scrubEvent(
   const requestId = requestIdOf(hint.originalException);
   const original = hint.originalException;
   // No frames unless every stack they came from has its current header (F-62).
-  const keepFrames = framesTrusted(
+  const { trusted: keepFrames, headerLines } = checkStacks(
     original,
     event.exception?.values?.length ?? 0,
     ctx.stackHeader ?? engineStackHeader(),
   );
   // Every message frames may have been parsed from: the values (possibly
-  // truncated by the SDK) and the thrown error's own (F-59).
-  const tails = messageTails([
-    ...(event.exception?.values ?? []).map((v) => v.value),
-    typeof original === "object" && original !== null
-      ? (original as { message?: unknown }).message
-      : undefined,
-  ]);
+  // truncated by the SDK) and the thrown error's own (F-59), plus on V8 each
+  // checked header's lines the parser doesn't skip (F-63).
+  const tails = [
+    ...messageTails([
+      ...(event.exception?.values ?? []).map((v) => v.value),
+      typeof original === "object" && original !== null
+        ? (original as { message?: unknown }).message
+        : undefined,
+    ]),
+    ...headerLines,
+  ];
   const values = (event.exception?.values ?? []).map((v) => ({
     type: safeType(v.type),
     value: safeMessage(v.value, ctx),
