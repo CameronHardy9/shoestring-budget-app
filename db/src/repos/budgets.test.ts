@@ -243,6 +243,82 @@ describe("owner actions, deletion and restore", () => {
     );
   });
 
+  // F-49: a shared, soft-deleted budget whose owner restores it while also
+  // requesting account deletion. The deletion's shared-budget check ignores
+  // deleted budgets, so only the lock order decides the outcome.
+  async function deletedSharedBudget() {
+    const owner = await newUser(t.dal);
+    const member = await newUser(t.dal);
+    const f = await newBudget(t.dal, owner.userId);
+    await addMember(t.dal, f.scope, member);
+    await t.dal.budgets.deleteBudget(f.scope, 1);
+    const ds = await t.dal.requireDeletedBudgetOwnership(
+      owner.userId,
+      f.budget.id,
+    );
+    return { owner, member, f, ds };
+  }
+
+  it("a restore waiting on the owner's deletion request gets NOT_FOUND (F-49)", async () => {
+    const { owner, member, f, ds } = await deletedSharedBudget();
+    const deleted = gate();
+    const hold = gate();
+    const deletion = t.dal.transaction(async (tx) => {
+      await tx.users.requestAccountDeletion(owner.userId);
+      deleted.open();
+      await hold.promise;
+    });
+    await deleted.promise;
+    const restore = Promise.allSettled([
+      t.dal.budgets.restoreDeletedBudget(ds),
+    ]);
+    await waitForLockWaiters(t.admin); // blocked on the budget row
+    hold.open();
+    await deletion;
+    const [result] = await restore;
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: { name: "DalError", code: "NOT_FOUND" },
+    });
+    // Still deleted: the member has no access, the purge can proceed.
+    await expectDalError(
+      t.dal.requireMembership(member.userId, f.budget.id),
+      "NOT_FOUND",
+    );
+    expect(await t.dal.users.getMe(owner.userId)).toMatchObject({
+      status: "pending_deletion",
+    });
+  });
+
+  it("the owner's deletion request waiting on a restore gets OWNS_SHARED_BUDGET (F-49)", async () => {
+    const { owner, member, f, ds } = await deletedSharedBudget();
+    const restored = gate();
+    const hold = gate();
+    const restore = t.dal.transaction(async (tx) => {
+      await tx.budgets.restoreDeletedBudget(ds);
+      restored.open();
+      await hold.promise;
+    });
+    await restored.promise;
+    const deletion = Promise.allSettled([
+      t.dal.users.requestAccountDeletion(owner.userId),
+    ]);
+    await waitForLockWaiters(t.admin); // blocked on the budget row
+    hold.open();
+    await restore;
+    const [result] = await deletion;
+    expect(result).toMatchObject({
+      status: "rejected",
+      reason: { name: "DalError", code: "OWNS_SHARED_BUDGET" },
+    });
+    expect(await t.dal.users.getMe(owner.userId)).toMatchObject({
+      status: "active",
+      deletion: null,
+    });
+    const scope = await t.dal.requireMembership(member.userId, f.budget.id);
+    expect(scope.role).toBe("member");
+  });
+
   it("enforces exactly one owner per non-deleted budget at commit", async () => {
     const owner = await newUser(t.dal);
     const f = await newBudget(t.dal, owner.userId);

@@ -72,4 +72,6 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - Follow-up (same day): the F-58 notice was fixed in #14 (one-shot per UTC day; no repeat for a same-day re-lockout or after a reset, accepted), and the counter conversion is owner-deferred. CodeQL #6 (remote-property-injection in e2e-edge.mjs) was ruled Info, not an F-number: test-only, and assigning a string to `__proto__` is a no-op. It was fixed anyway with raw header arrays and token/value validation.
   - I did not run `make audit` because the tech lead was running it at the same time (both write `.audit/`). Check `.audit/` timestamps against the edit times.
 
+- **F-49 fixed and verified 2026-11-16 (`fix/f49-restore-race`).** The owner's status is now re-checked after `lockUser`, and all member locks are taken before the limit checks. `lockOwnedBudgetsAndCheckShared` locks *deleted* owned budgets too, which is what makes restore-first safe. Ruled Info, not a finding: `lockBudget` reads `m.role` in its locking statement, so the role can be stale after a wait. The deferred one-owner trigger blocks the only integrity break, and otherwise the actor gains only an action they could have taken an instant earlier.
+
 Related: [[project-review-hotspots]]
