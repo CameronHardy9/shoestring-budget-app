@@ -345,8 +345,20 @@ export async function restoreDeletedBudget(
         .orderBy("user_id")
         .execute()
     ).map((r) => r.user_id);
+    // Lock every member's user row (sorted order: no deadlock with other
+    // restores), after the budget lock (ADR-0010).
+    const statuses = new Map<string, string | undefined>();
+    for (const id of memberIds)
+      statuses.set(id, (await lockUser(tx, id))?.status);
+    // F-49: the owner's status checked by requireDeletedBudgetOwnership can be
+    // stale. That statement joined users while locking only the budget row,
+    // so after waiting on the owner's deletion request (which locks the
+    // budget, then the user) READ COMMITTED re-checks the budget row only and
+    // still sees `active`. lockUser's FOR UPDATE returns the user row as of
+    // its own lock, so this sees any committed deletion request, and none can
+    // commit until we do (it needs the budget lock we hold).
+    if (statuses.get(scope.userId) !== "active") throw notFound();
     for (const id of memberIds) {
-      await lockUser(tx, id); // sorted order: no deadlock with other restores
       const live = await countLiveBudgets(tx, id);
       const bound =
         id === scope.userId ? LIMITS.budgetsPerUser : LIMITS.budgetsPerUserHard;
