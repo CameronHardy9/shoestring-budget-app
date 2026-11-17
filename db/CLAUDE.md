@@ -16,7 +16,7 @@ ADR-0004/0005/0006/0010.
 | `src/scope.ts` | `BudgetScope` / `DeletedBudgetScope` and their only constructors (`issueBudgetScope` is module-private, F-41; never export it) |
 | `src/conn.ts` | Database URL checks (F-42): driver-parsed host, no `host`/`hostaddr` params, local-only or `sslmode=verify-full`. Public: `parseDatabaseUrl`, `assertSecureDatabaseUrl`, `DatabaseUrlError`, type `ParsedDatabaseUrl`; `assertLocalDatabaseUrl` stays internal (CLIs/testing only) |
 | `src/queries.ts` | The hot read queries as builders (EXPLAIN-tested) |
-| `src/testing/` | `@shoestring/db/testing`: `resetDatabase`, `createDatabaseClone` (local/test only) |
+| `src/testing/` | `@shoestring/db/testing`: `resetDatabase`, `createDatabaseClone` (local/test only). `resetDatabase` must stay deadlock-safe against live readers (readyz healthcheck): one LOCK TABLE of every table, capped below `deadlock_timeout`, then TRUNCATE, with bounded retry; proven by `src/reset-concurrency.test.ts` |
 | `src/test-support/` | Harness and fixtures for db's own tests |
 | `src/cli/` | `migrate` and `seed` entry points (run by Node 24 type stripping, no build) |
 | `src/seed/demo.ts` | The demo data |

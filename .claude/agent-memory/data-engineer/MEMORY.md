@@ -1,2 +1,2 @@
-- [Migration pitfalls](migration-pitfalls.md) — PL/pgSQL field resolution, cascade vs RESTRICT, down order, dbmate sslmode, RI as owner, check-before-lock races, reserve-before-check counters, CHECK fn changes, pool.end race, no wall-clock perf asserts (EXPLAIN ANALYZE work + full-sample ANALYZE)
+- [Migration pitfalls](migration-pitfalls.md) — PL/pgSQL field resolution, cascade vs RESTRICT, down order, dbmate sslmode, RI as owner, check-before-lock races, reserve-before-check counters, CHECK fn changes, pool.end race, TRUNCATE vs readers deadlock, no wall-clock perf asserts (EXPLAIN ANALYZE work + full-sample ANALYZE)
 - [Schema conventions](schema-conventions.md) — roles.sql dual-run, runtime scope check, isolation coverage, type-stripped CLIs, per-file DB clones

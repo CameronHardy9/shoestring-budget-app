@@ -13,7 +13,14 @@ import { appHost, env } from "./env.ts";
 
 export const COOKIE_NAME = "ss_sid"; // COOKIE_SECURE=false in the e2e stack (auth.md §2)
 
-const agent = new http.Agent({ keepAlive: true, maxSockets: 128 });
+// Drop idle pooled sockets after 4 s, before any server in the path closes
+// them (Node's default server keep-alive is 5 s; the agent ignores the
+// server's Keep-Alive hint unless `timeout` is set).
+const agent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 128,
+  timeout: 4_000,
+});
 const target = new URL(env.apiUrl);
 
 export type Query = Record<string, string | number | boolean | undefined>;
@@ -316,7 +323,10 @@ export class ApiClient {
 
   /** A second browser holding the same cookie (to replay a stolen or stale session). */
   clone(label = `${this.label}-copy`): ApiClient {
-    const c = new ApiClient(label, this.clientIp === null ? {} : { clientIp: this.clientIp });
+    const c = new ApiClient(
+      label,
+      this.clientIp === null ? {} : { clientIp: this.clientIp },
+    );
     c.sessionToken = this.sessionToken;
     c.csrfToken = this.csrfToken;
     c.userId = this.userId;

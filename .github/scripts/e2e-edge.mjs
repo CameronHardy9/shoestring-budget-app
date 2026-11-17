@@ -209,6 +209,17 @@ function serve(route) {
     socket.on("error", () => up.destroy());
   });
 
+  // Client side keep-alive: far above any idle gap in a test. Node's default
+  // (5 s, plus its 1 s keepAliveTimeoutBuffer, so the socket really closes at
+  // about 6 s) let a test client that sat idle ~6 s (Playwright J4 while the
+  // browser works) reuse a pooled socket just as the edge closed it: `socket
+  // hang up` (ECONNRESET on a reused socket), reproduced deterministically at
+  // 6.0 s idle on 2026-11-16. Node's http.Agent does not honour the
+  // `Keep-Alive: timeout=` hint unless the agent sets `timeout`, so the server
+  // must not be the one to close first. headersTimeout stays above
+  // keepAliveTimeout (Node's guidance), requestTimeout (300 s) above both.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
   server.listen(route.listen, "0.0.0.0", () => {
     process.stdout.write(
       `edge: :${route.listen} -> ${route.host}:${route.port}\n`,
