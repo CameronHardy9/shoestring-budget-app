@@ -11,6 +11,12 @@
 #   osv-scanner  CVSS >= 7.0 fails, and so does a vulnerability with no score
 #                (for example a malicious-package MAL- advisory)
 #   zizmor       high fails; lower findings are reported
+#
+# Triage (F-61): osv-scanner gates dev and prod dependencies alike. When
+# triaging an advisory, anything bundled into a runtime artifact (backend
+# dist/ or the frontend bundle) is a runtime dependency even if it is listed
+# in devDependencies; for example @sentry/node is bundled into backend
+# dist/chunks/esm-*.js.
 source "$(dirname "$0")/lib.sh"
 require_docker
 command -v jq >/dev/null || die "jq is required (brew install jq)"
@@ -128,6 +134,8 @@ else
     record osv-scanner PASS "${pkgs:-lockfile scanned}, $total vulnerabilities, none high"
   fi
 fi
+F61_NOTE="Triage (F-61): a devDependency bundled into backend dist/ or the frontend bundle (e.g. @sentry/node) is a runtime dependency, not dev-only"
+note "$F61_NOTE"
 
 # --- zizmor: GitHub Actions workflows and Dependabot config --------------------
 log "zizmor: workflow security"
@@ -152,6 +160,7 @@ fi
 
 log "make audit summary ($(elapsed))"
 for line in "${SUMMARY[@]}"; do note "$line"; done
+note "$F61_NOTE"
 note "Reports: .audit/ (gitignored)"
 if [ "$failed" -ne 0 ]; then die "make audit failed: fix the findings above (never dismiss them to get green)."; fi
 log "make audit: passed"

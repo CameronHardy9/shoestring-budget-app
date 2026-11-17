@@ -133,3 +133,7 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Browser error messages sent to Sentry | **Allowlist known-safe message patterns** (owner overrode the "strip all" recommendation). Everything not matching a reviewed safe pattern is still dropped; the patterns need security-reviewer sign-off because a wrong pattern could leak data quoted from the API. |
 | F-60 (no owner alert at the 60% cutoff where password-reset and invitation mail stops) | **Move the Sentry email-quota warning to 60%** (error stays at 100%). Follow-up PR before launch. |
 | F-59, F-60, F-61 (Lows from the Sentry review) | **Small follow-up PR** right after the Sentry PR, before launch. |
+| Sentry org name and IDs in the public runbook | **Keep as written** (org name/slug, project IDs, ingest host; none secret). |
+| Old CodeQL alerts on main (#1–#4) | #1, #2, #4 **dismissed as false positives** by the tech lead (owner-authorized) with the security-reviewer's justification; **#3 fixed** in code (`readdirSync` withFileTypes) rather than dismissed. |
+| F-62 (Low, residual of F-59) | **Later Low follow-up** before launch (with the offline PR or its own small PR). |
+| Sentry CLI login on the owner's Mac | **Keep until bootstrap step 13 is done, then log out** and revoke under Authorized Applications. |

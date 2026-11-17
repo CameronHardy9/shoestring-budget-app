@@ -10,10 +10,11 @@ import type {
 } from "@shoestring/db";
 import { argon2Sync, randomBytes, randomUUID } from "node:crypto";
 import { dal } from "./dal.ts";
+import { randomPassword } from "./passwords.ts";
 
 // One password for every factory user, random per run (never a literal in the
 // repo), hashed once with the backend's argon2id parameters (auth.md §7).
-export const PASSWORD = `pw-${randomBytes(12).toString("hex")}`;
+export const PASSWORD = randomPassword();
 const PASSWORD_HASH = (() => {
   const salt = randomBytes(16);
   const tag = argon2Sync("argon2id", {

@@ -3,6 +3,7 @@
 // silently overrides tests/.env.stack (F-56).
 import { describe, expect, it } from "vitest";
 import { localDatabaseUrl } from "./db-env.ts";
+import { randomPassword } from "./passwords.ts";
 import {
   fakeSentryDsn,
   loopbackOrigin,
@@ -11,7 +12,7 @@ import {
 } from "./env-guards.ts";
 
 // Synthetic credentials, built at run time (never a real secret).
-const PW = `pw-${String(Math.random()).slice(2)}`;
+const PW = randomPassword();
 const db = (host: string, extra = "") =>
   `postgres://app:${PW}@${host}/shoestring_test${extra}`;
 

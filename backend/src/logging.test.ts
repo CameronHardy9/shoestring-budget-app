@@ -71,6 +71,57 @@ describe("serializeError (F-07 allowlist)", () => {
     expect(JSON.stringify(serializeError(e))).not.toContain("Joe");
   });
 
+  // F-59: V8's stack repeats the whole message before the frames.
+  it("a multi-line message with fake frames never yields a frame", () => {
+    const email = "pat@example.test";
+    const e = new Error(
+      `failed for ${email}\n    at Pharmacy (${email}:1:2)\n    at therapy copay (x.js:3:4)\n    at x.js:5:6`,
+    );
+    const s = serializeError(e);
+    expect(s.frames!.length).toBeGreaterThan(0);
+    expect(s.frames![0]).toMatch(/logging\.test\.ts:\d+:\d+\)?$/);
+    const text = JSON.stringify(s);
+    for (const leak of [email, "Pharmacy", "therapy", "copay", "x.js"])
+      expect(text).not.toContain(leak);
+    // The header is name + message even when the name spans lines too.
+    const named = Object.assign(new Error("m"), {
+      name: "Bad\n    at Pharmacy (y.js:1:2)",
+    });
+    named.stack = `Bad\n    at Pharmacy (y.js:1:2): m\n    at real (z.js:7:8)`;
+    expect(serializeError(named).frames).toEqual(["at real (z.js:7:8)"]);
+    const empty = Object.assign(new Error(""), {
+      stack: "Error\n    at real (z.js:7:8)",
+    });
+    expect(serializeError(empty).frames).toEqual(["at real (z.js:7:8)"]);
+  });
+
+  it("no frames when the header length is unknown (non-string message)", () => {
+    const e = { message: { toString: () => "a\nb" }, stack: "a\nb\n    at f (z.js:1:2)" };
+    expect(serializeError(e).frames).toEqual([]);
+  });
+
+  it("keeps V8 frame shapes, drops function names that are not identifiers", () => {
+    const e = new Error("m");
+    e.stack = [
+      "Error: m",
+      "    at Foo.bar [as baz] (/app/dist/server.js:1:2)",
+      "    at new Foo (/app/dist/server.js:3:4)",
+      "    at async Object.<anonymous> (file:///app/dist/server.js:5:6)",
+      "    at Foo.#priv (node:internal/x:7:8)",
+      "    at /app/dist/server.js:9:10",
+      "    at Pharmacy copay (/app/dist/server.js:11:12)",
+      "    at Object.get payee [as payee] (/app/dist/server.js:13:14)",
+      "    at Array.map (<anonymous>)",
+    ].join("\n");
+    expect(serializeError(e).frames).toEqual([
+      "at Foo.bar [as baz] (/app/dist/server.js:1:2)",
+      "at new Foo (/app/dist/server.js:3:4)",
+      "at async Object.<anonymous> (file:///app/dist/server.js:5:6)",
+      "at Foo.#priv (node:internal/x:7:8)",
+      "at /app/dist/server.js:9:10",
+    ]);
+  });
+
   it("the logger uses it for `err` and redacts credentials and personal data", () => {
     const lines: string[] = [];
     const stream = new Writable({

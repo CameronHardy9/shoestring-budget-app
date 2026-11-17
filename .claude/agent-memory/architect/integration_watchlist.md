@@ -24,5 +24,7 @@ Recurring drift: sre docs lag on env var names (rev 2 renamed DATABASE_MIGRATOR_
 
 Validation recipe: no global validator and no PyYAML. A scratch-venv `pip install openapi-spec-validator` was denied by the auto-mode classifier (2026-11-13); fallback is `pnpm exec prettier --check <file>` (syntax error → `[error]`, style only → `[warn]`). `make check`'s Prettier does NOT cover docs/; contract files were already unformatted at HEAD, so don't reformat them (diff churn). Re-create the lint (x-error-codes→status map from errors.md; explicit role/reauth; list-valued `x-rate-limit` rows must exist in auth.md §14). Prettier (format hook) rewrites YAML after Edit — use scripted edits (python3 via Bash) for the OpenAPI file. Shell default Node is 20 (nvm); run backend vitest with `PATH=$HOME/.nvm/versions/node/v24.22.3/bin:$PATH` from backend/. `src/contract/contract.test.ts` checks contract.gen freshness; info.description is not part of the codegen.
 
+Email-quota A6 thresholds (F-60, 2026-11-17: warning 60%, error 100%) are copied in 4 places outside contracts: backend/src/email/mailer.ts (share + fixed `email_quota_threshold: N%` message), observability/README.md A6, docs/runbooks/email-quota.md, runbooks/README.md. A threshold change in auth.md §14 must be routed to all of them.
+
 **Why:** these are where areas meet and drift silently.
 **How to apply:** start every integration review with this list, then `git diff`. Related: [[project-mvp-contracts-v1]].

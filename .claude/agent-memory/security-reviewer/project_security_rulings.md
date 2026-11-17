@@ -1,6 +1,6 @@
 ---
 name: project-security-rulings
-description: Security-reviewer rulings on Shoestring's MVP design and code reviews (2026-11-12 to 2026-11-16) and the reasons for each, so later reviews do not reopen or contradict them
+description: Security-reviewer rulings on Shoestring's MVP design and code reviews (2026-11-12 to 2026-11-17) and the reasons for each, so later reviews do not reopen or contradict them
 metadata:
   type: project
 ---
@@ -79,5 +79,11 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - Owner rulings I work under (round 8, 2026-11-16): spike protection only, no per-key DSN limit, and quota exhaustion = blind until the 1st is accepted. Don't re-raise the public-DSN flood. Load-shedding 503s going to Sentry is Info under that ruling.
   - Ruled Info: glob@13.0.7 (via @sentry/bundler-plugins, never bundled or run), the `sentry` npm CLI package, and the two Semgrep WARNINGs in dist-checks.test.ts (test fixtures).
   - The SW first-visit no-reload fix holds; the `hadController` staleness is only a UX issue.
+
+- **Sentry follow-ups 2026-11-17 (`fix/sentry-followups`): approve.** F-59, F-60 and F-61 verified. New F-62 (Low, F-59 residuals: SDK `(error: …)` rewrite and stale V8 header; not blocking).
+  - CodeQL triage on main (not F-numbers): #1 HIBP SHA-1, #2 HMAC of recovery codes and throttle keys, and #4 the SW `message` origin check are **false positives**. #3, the tripwire stat/read race, is **won't fix**; `withFileTypes` is the optional cleanup. The owner dismisses them; I never do.
+  - sw-register `updateRequested` and the `randomPassword()` test helper add no risk.
+  - The owner keeps the Sentry org slug and project IDs in the public repo (they are already public through the DSN). The auto-created GitHub `sentry` environment had no exposure (the secret was created after the only deploy, which was from main).
+  - Info (T133): the Sentry CLI OAuth login on the owner's Mac has `project:write` and `alerts:write`. Recommend logging out after step 13.
 
 Related: [[project-review-hotspots]]

@@ -15,16 +15,54 @@ export interface SafeError {
   constraint?: string;
   table?: string;
   column?: string;
-  /** Stack frames only ("at ..." lines): the first line carries the message and is dropped. */
+  /** Stack frames only ("at ..." lines after the header): the header carries the message and is dropped. */
   frames?: string[];
   cause?: SafeError;
 }
 
-const FRAME = /^at [^\n]{1,300}:\d+:\d+\)?$/;
+/**
+ * A V8 function name (F-59): identifier characters (plus `.`, `#` and
+ * `<anonymous>`), an optional `new `/`async ` prefix and `[as alias]` suffix.
+ * No free spaces, so a frame holds at most identifier-shaped tokens, never a
+ * phrase. Shared with the Sentry event builder.
+ */
+const IDENT = "[A-Za-z0-9_$#.<>]";
+const FN = `(?:new |async )?${IDENT}{1,200}(?: \\[as ${IDENT}{1,100}\\])?`;
+export const FUNCTION_NAME = new RegExp(`^${FN}$`);
+const LOCATION = "[^()\\n]{1,300}:\\d+:\\d+";
+/** `at fn (file:line:col)` or `at file:line:col`, with fn as above. */
+const FRAME = new RegExp(`^at (?:${FN} \\(${LOCATION}\\)|${LOCATION})$`);
 const SAFE_TOKEN = /^[A-Za-z0-9_.$:-]{1,100}$/;
 
 function safeString(v: unknown): string | undefined {
   return typeof v === "string" && SAFE_TOKEN.test(v) ? v : undefined;
+}
+
+const lineCount = (s: string) => s.split("\n").length;
+
+/**
+ * F-59: V8's stack starts with a header, `${name}: ${message}` (only one of
+ * them when the other is empty), and the message may span several lines. Only
+ * lines after the header are frames, so a message line shaped like a frame
+ * (`    at Pharmacy (x.js:1:2)`) never becomes one. When name or message is
+ * not a string, the header length is unknown and no frame is kept.
+ */
+function frameLines(e: Record<string, unknown>, stack: string): string[] {
+  const name = e.name === undefined ? "Error" : e.name;
+  const message = e.message === undefined ? "" : e.message;
+  if (typeof name !== "string" || typeof message !== "string") return [];
+  const header =
+    name === ""
+      ? lineCount(message)
+      : message === ""
+        ? lineCount(name)
+        : lineCount(name) + lineCount(message) - 1;
+  return stack
+    .split("\n")
+    .slice(header)
+    .map((l) => l.trim())
+    .filter((l) => FRAME.test(l))
+    .slice(0, 20);
 }
 
 /** F-07: serializes any thrown value through an allowlist. Unit-tested with a DB-error fixture. */
@@ -40,14 +78,7 @@ export function serializeError(err: unknown, depth = 0): SafeError {
     const v = safeString(e[key]);
     if (v) out[key] = v;
   }
-  if (typeof e.stack === "string") {
-    out.frames = e.stack
-      .split("\n")
-      .map((l) => l.trim())
-      // Only real frames ("at fn (file:line:col)"); the message lines are dropped.
-      .filter((l) => FRAME.test(l))
-      .slice(0, 20);
-  }
+  if (typeof e.stack === "string") out.frames = frameLines(e, e.stack);
   if (depth < 2 && e.cause !== undefined)
     out.cause = serializeError(e.cause, depth + 1);
   return out;

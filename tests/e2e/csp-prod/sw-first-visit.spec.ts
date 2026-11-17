@@ -14,9 +14,9 @@
 // context, so the visit is the first one. They prove the takeover happened
 // (`controllerchange` fired, the page is controlled) and that the same
 // document, never reloaded, then completes the link's flow.
-import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { createUser, uniqueEmail } from "../../support/factories.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import { lastEmail, signupInvite } from "../../support/hooks.ts";
 import { ApiClient } from "../../support/http.ts";
 import { expect, test } from "../fixtures.ts";
@@ -103,7 +103,7 @@ test("a password-reset link opened on a first visit still works after the servic
   const visit = await openLinkFirstVisit(page, link);
   await expectSameDocument(page, visit);
   // The token survived in memory: the form, not "request a new link".
-  const newPassword = `pw-${randomUUID()}`;
+  const newPassword = randomPassword();
   await page.getByLabel(/New password/).fill(newPassword);
   await page.getByRole("button", { name: "Change password" }).click();
   await expect(
@@ -132,7 +132,7 @@ test("a sign-up invite link opened on a first visit still works after the servic
   ).toBeVisible();
   await expect(page.getByText(address)).toBeVisible();
   await page.getByLabel("Your name").fill("Robin Firstvisit");
-  await page.getByLabel("Password", { exact: true }).fill(`pw-${randomUUID()}`);
+  await page.getByLabel("Password", { exact: true }).fill(randomPassword());
   await page.getByTestId("sign-up-submit").click();
   await expect(
     page.getByRole("heading", { name: "Set up your budget" }),

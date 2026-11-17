@@ -1,7 +1,14 @@
 // The production bundle never contains the test hooks (ADR-0009, F-10): build
 // both entries into a temp dir and apply the Dockerfile's tripwire.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -57,6 +64,32 @@ describe("production build", () => {
     expect(all).toMatch(/import\("\.\/[^"]*esm-[^"]*\.js"\)|import\("\.\/chunks\/[^"]*"\)/);
     expect(all).toMatch(/from "@node-rs\/argon2"/); // native: external
     expect(all).not.toMatch(/from "@sentry\/|oxc-parser|minimatch/);
+  }, 60_000);
+
+  // F-61: anything bundled into dist/ is a runtime dependency for advisory
+  // triage, even when package.json lists it under devDependencies (the Sentry
+  // SDK is one). Dependabot and `pnpm audit --prod` label those "development",
+  // so this pins the exact set: a newly bundled package fails here until it is
+  // reviewed and added to scripts/bundled-runtime-packages.json, which is the
+  // list triage relies on.
+  it("bundles exactly the reviewed npm packages (bundled-runtime-packages.json)", async () => {
+    const out = temp();
+    const res = await build({ ...productionBuildOptions(root, `${out}/`), write: false });
+    const bundled = new Set<string>();
+    for (const chunk of res.output) {
+      if (chunk.type !== "chunk") continue;
+      for (const source of chunk.map?.sources ?? []) {
+        const at = source.lastIndexOf("node_modules/");
+        if (at === -1) continue; // own source or a workspace package (db/)
+        const [scope, name] = source.slice(at + "node_modules/".length).split("/");
+        bundled.add(scope!.startsWith("@") ? `${scope}/${name}` : scope!);
+      }
+    }
+    const reviewed = JSON.parse(
+      readFileSync(join(root, "scripts", "bundled-runtime-packages.json"), "utf8"),
+    ) as { packages: string[] };
+    expect(res.output.some((o) => o.type === "chunk" && o.isEntry && o.map)).toBe(true);
+    expect([...bundled].sort()).toEqual([...reviewed.packages].sort());
   }, 60_000);
 
   it("the bundled SDK sends clean envelopes and source-mapped stacks (node --enable-source-maps)", async () => {
@@ -129,5 +162,12 @@ process.stdout.write(JSON.stringify({ raw, stack: err.stack }));
         .map((p) => p.slice(d.length + 1))
         .sort(),
     ).toEqual(["b.mjs", join("chunks", "a.js")]);
+  });
+
+  it("the tripwire fails closed on an entry it cannot read without following (a symlink)", () => {
+    const d = temp();
+    writeFileSync(join(d, "ok.js"), "const fine = 1;");
+    symlinkSync(join(d, "ok.js"), join(d, "link.js"));
+    expect(scanDist(d).map((p) => p.slice(d.length + 1))).toEqual(["link.js"]);
   });
 });

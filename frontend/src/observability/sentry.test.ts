@@ -99,6 +99,13 @@ describe("what the SDK actually sends", () => {
         { requestId: "4f1c2d3e-aaaa-bbbb-cccc-000000000001" },
       ),
     );
+    // F-59: a frame-shaped line in a multi-line message becomes a "frame"
+    // in V8; none of its text may be sent.
+    captureException(
+      new Error(
+        "Unexpected token\n    at alice@example.test Pharmacy (https://evil.example/x.js?token=abc:1:2)",
+      ),
+    );
     // An allowed message: kept, minus React's decoder args (values).
     captureException(
       new Error(
@@ -119,6 +126,7 @@ describe("what the SDK actually sends", () => {
       "alice%40example.test",
       "alice@example.test",
       "Alice Example",
+      "evil.example",
     ])
       expect(all).not.toContain(secret);
     expect(all).toContain('"requestId":"4f1c2d3e-aaaa-bbbb-cccc-000000000001"');

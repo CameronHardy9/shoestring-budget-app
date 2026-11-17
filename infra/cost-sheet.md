@@ -50,7 +50,7 @@ Free tiers are per **billing account** (V1).
 | GHCR (public package) | Free for public packages | 1 image per main build | — | — | Package visibility stays public; no secrets in images |
 | Sentry (Developer) | 5,000 errors / month, 1 cron monitor, 1 user, no pay-as-you-go (checked 2026-11-16, V18) | < 200 errors; 1 monitor (`purge`); 1 user | ~95%; monitors 0 spare | Events dropped until next period. **Can't bill**: the plan has no PAYG and no card is on file. | Usage > 70% (billing-protection.md §11 row 12); spike-protection emails |
 | Better Stack Uptime | ~10 monitors, ~10 heartbeats (V19) | 1 monitor, 1 heartbeat | — | Cannot add more | — |
-| Resend | 100 / day, 3,000 / month, 1 domain (V20) | < 100 / month | ~97% | Sends rejected: invites, resets and security notices fail, and recovery is blocked (F-09) | **Alert A6** at 80 sends in a day (Sentry, observability/README.md); dashboard > 2,000 / month |
+| Resend | 100 / day, 3,000 / month, 1 domain (V20) | < 100 / month | ~97% | Sends rejected: invites, resets and security notices fail, and recovery is blocked (F-09) | **Alert A6** at 60 sends in a day (the non-priority cutoff, F-60) and at 100 (Sentry, observability/README.md); dashboard > 2,000 / month |
 | HIBP Pwned Passwords range API | Free, no key | ~1 call per signup/password change | — | — | — |
 | Cloudflare (DNS) | Free plan | 1 CNAME (DNS only), 4 email records, 1 verification TXT; proxy and Workers only under the §3a fallback (Workers 100,000 requests/day, V28) | — | Fallback Worker over its quota fails requests (no bill on Free) | Any paid add-on |
 | Domain | Owner's existing domain | — | — | — | Renewal is the owner's existing cost, not this app's |

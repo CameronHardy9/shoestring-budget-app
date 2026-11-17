@@ -90,7 +90,7 @@ Encryption at rest: Neon's disk encryption (provider), Cloud Storage's default e
 | [purge-failed.md](purge-failed.md) | Alert A3: purge cron monitor missed or failed | Draft |
 | [backup-missed.md](backup-missed.md) | Alert A4: `shoestring-backup` job heartbeat missing or failed | Draft |
 | [billing-alert.md](billing-alert.md) | Alert A5: budget threshold crossed or spend cap reached | Draft |
-| [email-quota.md](email-quota.md) | Alert A6: daily email sends at 80% / 100% of quota (F-09) | Draft, needs backend quota events |
+| [email-quota.md](email-quota.md) | Alert A6: daily email sends at 60% / 100% of quota (F-09, F-60) | Draft, needs backend quota events |
 | [sentry-data-check.md](sentry-data-check.md) | Check that nothing sensitive reached Sentry, prove the scrubber with a synthetic canary (deploy/scripts/sentry-canary.sh), and purge leaked data | Draft, run at bootstrap step 11b |
 | breach-response.md | Outline for suspected data exposure (with security-reviewer) | Planned |
 | phone-debugging.md | Safari Web Inspector / chrome://inspect against `make dev` (test hooks off on the LAN, F-30) | Planned, after ci-engineer's LAN binding |

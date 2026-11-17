@@ -2,7 +2,7 @@
 // any built .js/.mjs/.cjs under dist/ contains `_test` as a whole word (grep -w
 // semantics: letters, digits and underscore are word characters) or the
 // hooks' sentinel string. Exit 1 lists the offending files.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,10 +12,15 @@ const SENTINEL = "__SHOESTRING_TEST_HOOKS__";
 export function scanDist(dir: string): string[] {
   const hits: string[] = [];
   const walk = (d: string): void => {
-    for (const name of readdirSync(d)) {
-      const p = join(d, name);
-      if (statSync(p).isDirectory()) walk(p);
-      else if (/\.(m|c)?js$/.test(name)) {
+    // Entry types come from readdir itself (no separate stat before the read:
+    // CodeQL js/file-system-race). Anything that is neither a directory nor a
+    // regular file (a symlink, ...) can't be checked without following it, so
+    // it fails closed; rolldown never writes one.
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (!entry.isFile()) hits.push(p);
+      else if (/\.(m|c)?js$/.test(entry.name)) {
         const text = readFileSync(p, "utf8");
         if (WORD.test(text) || text.includes(SENTINEL)) hits.push(p);
       }

@@ -3,7 +3,7 @@
 // captured email of every test against the table; this file proves the
 // vocabulary is actually exercised end to end, kind by kind, and pins the
 // sending rules that are easy to regress (F-12, F-34, F-09 priority).
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createUserWithTotp,
@@ -11,6 +11,7 @@ import {
   signIn,
   startMfaSignIn,
 } from "../../support/auth.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import { NOTIFICATIONS } from "../../support/emails.ts";
 import { createUser, uniqueEmail } from "../../support/factories.ts";
 import { ApiClient, codeOf } from "../../support/http.ts";
@@ -38,7 +39,7 @@ describe("auth.md §15 vocabulary, exercised through HTTP", () => {
         await anon.post("/auth/signup", {
           token,
           displayName: "Invitee",
-          password: `pw-${randomUUID()}`,
+          password: randomPassword(),
         })
       ).status,
     ).toBe(201);
@@ -64,7 +65,7 @@ describe("auth.md §15 vocabulary, exercised through HTTP", () => {
       ).status,
     ).toBe(200);
     expect(
-      (await c.post("/me/password", { newPassword: `pw-${randomUUID()}` }))
+      (await c.post("/me/password", { newPassword: randomPassword() }))
         .status,
     ).toBe(204);
 
@@ -180,7 +181,7 @@ describe("sending rules", () => {
     await new ApiClient("x").post("/auth/signup", {
       token,
       displayName: "Fresh",
-      password: `pw-${randomUUID()}`,
+      password: randomPassword(),
     });
     expect((await emails(address)).map((e) => e.kind)).toEqual([
       "signup_invite",

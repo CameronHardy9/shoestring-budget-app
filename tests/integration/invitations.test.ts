@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createUser } from "../support/factories.ts";
+import { randomPassword } from "../support/passwords.ts";
 import { ApiClient, codeOf, detailsOf } from "../support/http.ts";
 import {
   advanceClock,
@@ -124,7 +125,7 @@ describe("invite → accept (J6)", () => {
     const signup = await anon.post("/auth/signup", {
       token,
       displayName: "Future Tester",
-      password: `pw-${randomBytes(10).toString("hex")}`,
+      password: randomPassword(),
     });
     expect(signup.status).toBe(201);
     const mine = await anon.get<{ items: { id: string }[] }>("/me/invitations");

@@ -1,4 +1,4 @@
-import type { ErrorEvent } from "@sentry/browser";
+import { defaultStackParser, type ErrorEvent } from "@sentry/browser";
 import { describe, expect, it } from "vitest";
 import { NetworkError, UnexpectedResponseError } from "../api/errors.ts";
 import { ERROR_COPY } from "../api/messages.ts";
@@ -6,6 +6,9 @@ import { SignOutError } from "../app/auth.tsx";
 import { ReauthCancelled } from "../app/reauth.tsx";
 import { sumCents } from "../lib/splits.ts";
 import {
+  ANONYMOUS,
+  EXTERNAL,
+  fromMessage,
   pathOf,
   patternProblems,
   REDACTED,
@@ -14,6 +17,8 @@ import {
   safeMessage,
   scrubBreadcrumb,
   scrubEvent,
+  safeFrameFile,
+  safeFrameFunction,
   stripReactArgs,
   stripUrl,
   type SafeMessage,
@@ -217,7 +222,7 @@ describe("event allowlist (F-06, F-07)", () => {
             colno: 4321,
             in_app: true,
           },
-          { filename: "https://shoestring.example/assets/x.js", lineno: 2 },
+          { filename: EXTERNAL, function: ANONYMOUS, lineno: 2 },
         ],
       },
     });
@@ -267,6 +272,239 @@ describe("event allowlist (F-06, F-07)", () => {
       },
     );
     expect(out.tags?.route).toBe("(none)");
+  });
+});
+
+describe("stack frames (F-59)", () => {
+  const ctx = {
+    routeOf,
+    pathname: "/",
+    userId: USER,
+    userAgent: "Mozilla/5.0 (iPhone)",
+    origin: ORIGIN,
+  };
+  const INDEX = `${ORIGIN}/assets/index-1a2b3c4d.js`;
+  const SHEET = `${ORIGIN}/assets/TransactionSheet-0a1b2c3d.js`;
+  // Real V8 frames as a production build prints them.
+  const REAL_V8 = [
+    `    at Object.save (${INDEX}:1:4321)`,
+    `    at async HTMLButtonElement.onclick (${SHEET}:2:99)`,
+    `    at Array.map (<anonymous>)`,
+    `    at new Foo (${INDEX}:1:10)`,
+    `    at ${INDEX}:1:5`,
+  ].join("\n");
+  // Sentry's frames are oldest first.
+  const REAL_FRAMES = [
+    { filename: INDEX, function: ANONYMOUS, lineno: 1, colno: 5, in_app: true },
+    {
+      filename: INDEX,
+      function: "new Foo",
+      lineno: 1,
+      colno: 10,
+      in_app: true,
+    },
+    { filename: "<anonymous>", function: "Array.map", in_app: true },
+    {
+      filename: SHEET,
+      function: "async HTMLButtonElement.onclick",
+      lineno: 2,
+      colno: 99,
+      in_app: true,
+    },
+    {
+      filename: INDEX,
+      function: "Object.save",
+      lineno: 1,
+      colno: 4321,
+      in_app: true,
+    },
+  ];
+  const HOSTILE =
+    "    at alice@example.test Pharmacy (https://evil.example/x.js?token=abc:1:2)";
+  const HOSTILE_TEXT = [
+    "alice",
+    "example.test",
+    "Pharmacy",
+    "evil.example",
+    "x.js",
+    "token",
+    "abc",
+  ];
+
+  /** The event Sentry builds for an error whose V8 stack is `stack`. */
+  function eventFor(type: string, message: string, stack: string): ErrorEvent {
+    return {
+      type: undefined,
+      exception: {
+        values: [
+          {
+            type,
+            value: message,
+            stacktrace: { frames: defaultStackParser(stack) },
+          },
+        ],
+      },
+    };
+  }
+  const framesOf = (event: ErrorEvent, error: unknown) =>
+    scrubEvent(event, { originalException: error }, ctx).exception?.values?.[0]
+      ?.stacktrace?.frames;
+
+  it("keeps real frames from every part of a production stack intact", () => {
+    const stack = `TypeError: x is undefined\n${REAL_V8}`;
+    expect(
+      framesOf(eventFor("TypeError", "x is undefined", stack), undefined),
+    ).toEqual(REAL_FRAMES);
+  });
+
+  it("sends nothing from a frame-shaped line inside a multi-line message", () => {
+    const message = `Unexpected token\n${HOSTILE}`;
+    const stack = `SyntaxError: ${message}\n${REAL_V8}`;
+    const event = eventFor("SyntaxError", message, stack);
+    // The SDK's own parser really does turn that message line into a frame.
+    expect(JSON.stringify(event)).toContain("evil.example");
+    const frames = framesOf(event, new SyntaxError(message));
+    const out = JSON.stringify(frames);
+    for (const text of HOSTILE_TEXT) expect(out).not.toContain(text);
+    expect(frames).toEqual(REAL_FRAMES);
+  });
+
+  it("does the same for a real V8 error and the SDK's parser", () => {
+    const error = new Error(`Unexpected token\n${HOSTILE}`);
+    const event = eventFor("Error", error.message, error.stack ?? "");
+    const frames = framesOf(event, error) ?? [];
+    expect(frames.length).toBeGreaterThan(0);
+    const out = JSON.stringify(frames);
+    for (const text of HOSTILE_TEXT) expect(out).not.toContain(text);
+  });
+
+  it("bounds the frame even if the message were truncated or lost", () => {
+    // The SDK may truncate `value`; without any message to compare, the
+    // file and function bounds alone still let none of it through.
+    const event = eventFor("SyntaxError", "Unexpected", `x: y\n${HOSTILE}`);
+    expect(framesOf(event, undefined)).toEqual([
+      {
+        filename: EXTERNAL,
+        function: ANONYMOUS,
+        lineno: 1,
+        colno: 2,
+        in_app: true,
+      },
+    ]);
+  });
+
+  it("drops a one-word line that spoofs this app's own chunk (Chrome and Firefox shapes)", () => {
+    for (const line of [
+      `    at Pharmacy (${ORIGIN}/assets/Pharmacy-deadbeef.js:1:2)`,
+      `Pharmacy@${ORIGIN}/assets/index-1a2b3c4d.js:1:2`,
+      `    at Pharmacy (${INDEX}:1:2)`,
+      `    at ${ORIGIN}/assets/Pharmacy-deadbeef.js:1:2`,
+    ]) {
+      const message = `Unexpected token\n${line}`;
+      const stack = `SyntaxError: ${message}\n${REAL_V8}`;
+      const frames = framesOf(
+        eventFor("SyntaxError", message, stack),
+        new SyntaxError(message),
+      );
+      expect(JSON.stringify(frames), line).not.toContain("Pharmacy");
+      // A message quoting a real chunk's URL also drops that chunk's real
+      // frames: over-matching loses frames, never sends message text.
+      for (const f of frames ?? []) expect(REAL_FRAMES, line).toContainEqual(f);
+      expect(frames, line).toContainEqual(REAL_FRAMES[3]);
+    }
+  });
+
+  it("keeps Firefox and Safari frames, whose stacks never hold the message", () => {
+    const message = `Unexpected token\n${HOSTILE}`;
+    const stack = `save@${INDEX}:1:4321\n@${SHEET}:2:99`;
+    expect(
+      framesOf(
+        eventFor("SyntaxError", message, stack),
+        new SyntaxError(message),
+      ),
+    ).toEqual([
+      {
+        filename: SHEET,
+        function: ANONYMOUS,
+        lineno: 2,
+        colno: 99,
+        in_app: true,
+      },
+      {
+        filename: INDEX,
+        function: "save",
+        lineno: 1,
+        colno: 4321,
+        in_app: true,
+      },
+    ]);
+  });
+
+  it("keeps only this origin's own hashed chunks as file names", () => {
+    expect(safeFrameFile(INDEX, ctx)).toBe(INDEX);
+    expect(safeFrameFile(`${INDEX}?token=${TOKEN}#token=${TOKEN}`, ctx)).toBe(
+      INDEX,
+    );
+    for (const pseudo of ["<anonymous>", "native", "[native code]"])
+      expect(safeFrameFile(pseudo, ctx)).toBe(pseudo);
+    for (const other of [
+      "https://evil.example/assets/index-1a2b3c4d.js",
+      `${ORIGIN}/assets/x.js`,
+      `${ORIGIN}/assets/index-1A2B3C4D.js`,
+      `${ORIGIN}/assets/a.b-1a2b3c4d.js`,
+      `${ORIGIN}/assets/index-1a2b3c4d.js.map`,
+      `${ORIGIN}/src/main.tsx`,
+      `${ORIGIN}/sw.js`,
+      `${ORIGIN}.evil.example/assets/index-1a2b3c4d.js`,
+      `${ORIGIN}/assets/index-1a2b3c4d.js Pharmacy`,
+      "chrome-extension://abc/content.js",
+      "<data:application/javascript,alice@example.test>",
+      "alice@example.test Pharmacy",
+      "",
+      undefined,
+      42,
+    ])
+      expect(safeFrameFile(other, ctx), String(other)).toBe(EXTERNAL);
+  });
+
+  it("keeps function names browsers print, and nothing with free text", () => {
+    for (const name of [
+      "Object.save",
+      "HTMLButtonElement.onclick",
+      "new Foo",
+      "async Promise.all",
+      "async HTMLButtonElement.onclick",
+      "Object.<anonymous>",
+      "<anonymous>",
+      "Ue/n</<",
+      "$e",
+      "_.Xy$1",
+      "Object.foo [as bar]",
+    ])
+      expect(safeFrameFunction(name), name).toBe(name);
+    for (const name of [
+      "?",
+      "",
+      "alice@example.test",
+      "Pharmacy copay",
+      "alice example",
+      "new  Foo",
+      "Foo [as Pharmacy copay]",
+      "Object.save\nPharmacy",
+      "x".repeat(129),
+      undefined,
+      7,
+    ])
+      expect(safeFrameFunction(name), String(name)).toBe(ANONYMOUS);
+  });
+
+  it("only drops frames when there is a multi-line message", () => {
+    const frame = { filename: INDEX, function: "Object.save" };
+    expect(fromMessage(frame, [])).toBe(false);
+    expect(fromMessage(frame, ["nothing frame-like"])).toBe(false);
+    expect(fromMessage(frame, [`at Object.save (x:1:2)`])).toBe(true);
+    expect(fromMessage(frame, [`see ${INDEX}`])).toBe(true);
+    expect(fromMessage({ function: "?" }, ["at ? (x:1:2)"])).toBe(false);
   });
 });
 

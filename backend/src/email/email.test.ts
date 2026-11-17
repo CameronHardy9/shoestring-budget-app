@@ -167,7 +167,7 @@ describe("A6 email quota alerts (one-shot per UTC day)", () => {
     return { seen, alerts: { enabled: true, alert: (a: Alert) => seen.push(a) } };
   };
 
-  it("a concurrent burst raises exactly one warning at 80% and one error at 100%", async () => {
+  it("a concurrent burst raises exactly one warning at 60% and one error at 100%", async () => {
     const out = new Outbox(() => new Date());
     const r = recorder();
     const m = mailer(out, 10, slowThrottles(), { alerts: r.alerts });
@@ -176,14 +176,33 @@ describe("A6 email quota alerts (one-shot per UTC day)", () => {
     expect(r.seen).toEqual([ALERTS.emailQuotaWarning, ALERTS.emailQuotaReached]);
   });
 
+  // F-60: bulk mail stops at the cutoff, so a bulk-only flood (invitations,
+  // resets) must still warn the owner that resets are now being dropped. The
+  // quotas where ceil and floor of 60% differ are the ones a share-based line
+  // would miss.
+  for (const quota of [10, 7, 4]) {
+    it(`a bulk-only flood warns at the cutoff (quota ${quota}) and never errors`, async () => {
+      const out = new Outbox(() => new Date());
+      const r = recorder();
+      const m = mailer(out, quota, slowThrottles(), { alerts: r.alerts });
+      const rs = await Promise.all(
+        Array.from({ length: 3 * quota }, () => m.send(msg(false))),
+      );
+      expect(rs.filter((x) => x === "sent")).toHaveLength(Math.floor(quota * 0.6));
+      expect(r.seen).toEqual([ALERTS.emailQuotaWarning]);
+      expect(await m.send(msg(false))).toBe("dropped");
+      expect(r.seen).toHaveLength(1);
+    });
+  }
+
   it("fires on the send that reaches the line, never before, and never twice the same day", async () => {
     const r = recorder();
     const m = mailer(new Outbox(() => new Date()), 10, fakeThrottles(), { alerts: r.alerts });
-    for (let i = 0; i < 7; i++) await m.send(msg(true));
+    for (let i = 0; i < 5; i++) await m.send(msg(true));
     expect(r.seen).toEqual([]);
-    await m.send(msg(true)); // 8th of 10 = 80%
+    await m.send(msg(true)); // 6th of 10 = 60%, the bulk cutoff
     expect(r.seen).toEqual([ALERTS.emailQuotaWarning]);
-    await m.send(msg(true));
+    for (let i = 0; i < 3; i++) await m.send(msg(true));
     expect(r.seen).toHaveLength(1);
     await m.send(msg(true)); // 10th = 100%
     expect(r.seen).toEqual([ALERTS.emailQuotaWarning, ALERTS.emailQuotaReached]);
@@ -195,8 +214,10 @@ describe("A6 email quota alerts (one-shot per UTC day)", () => {
     const r = recorder();
     const failing: EmailTransport = { name: "provider", send: () => Promise.reject(new Error("boom")) };
     const m = mailer(failing, 5, fakeThrottles(), { alerts: r.alerts });
-    for (let i = 0; i < 4; i++) expect(await m.send(msg(true))).toBe("failed");
-    expect(r.seen).toEqual([ALERTS.emailQuotaWarning]); // ceil(0.8 * 5) = 4
+    for (let i = 0; i < 2; i++) expect(await m.send(msg(true))).toBe("failed");
+    expect(r.seen).toEqual([]);
+    expect(await m.send(msg(true))).toBe("failed");
+    expect(r.seen).toEqual([ALERTS.emailQuotaWarning]); // floor(0.6 * 5) = 3
   });
 
   it("the next UTC day alerts again", async () => {

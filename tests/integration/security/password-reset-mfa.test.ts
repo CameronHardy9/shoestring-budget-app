@@ -1,9 +1,9 @@
 // Password reset never bypasses MFA (auth.md §8, OpenAPI completePasswordReset,
 // checklist "reset without factor" against real tokens). The policy check runs
 // first, so a rejected password spends no factor and no MFA failure.
-import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createUserWithTotp, enrollTotp, passwordLogin } from "../../support/auth.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import { createUser } from "../../support/factories.ts";
 import { ApiClient, codeOf, detailsOf } from "../../support/http.ts";
 import {
@@ -19,7 +19,6 @@ import { totp, wrongTotp } from "../../support/totp.ts";
 import { enrollPasskey } from "../../support/webauthn.ts";
 
 const anon = () => new ApiClient("anonymous");
-const newPassword = () => `pw-${randomUUID()}`;
 
 /** POST /auth/password-reset/request, then the token from the emailed link. */
 async function resetToken(email: string): Promise<string> {
@@ -44,7 +43,7 @@ describe("password reset with MFA enabled", () => {
     );
     const missing = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
     });
     expect([missing.status, codeOf(missing)]).toEqual([401, "MFA_REQUIRED"]);
     expect(
@@ -68,14 +67,14 @@ describe("password reset with MFA enabled", () => {
     for (let i = 0; i < 4; i++) {
       const r = await anon().post("/auth/password-reset/complete", {
         token,
-        newPassword: newPassword(),
+        newPassword: randomPassword(),
         mfa: { method: "totp", code: wrongTotp(u.secret, now()) },
       });
       expect([r.status, codeOf(r)]).toEqual([401, "MFA_FAILED"]);
     }
     const ok = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
       mfa: { method: "totp", code: totp(u.secret, now()) },
     });
     expect(ok.status, ok.describe).toBe(204);
@@ -87,12 +86,12 @@ describe("password reset with MFA enabled", () => {
     for (let i = 0; i < 5; i++)
       await anon().post("/auth/password-reset/complete", {
         token,
-        newPassword: newPassword(),
+        newPassword: randomPassword(),
         mfa: { method: "totp", code: wrongTotp(u.secret, now()) },
       });
     const res = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
       mfa: { method: "totp", code: totp(u.secret, now()) },
     });
     expect([res.status, codeOf(res)]).toEqual([400, "TOKEN_INVALID"]);
@@ -102,7 +101,7 @@ describe("password reset with MFA enabled", () => {
     const u = await createUserWithTotp();
     const before = await testLogin(u.email);
     const token = await resetToken(u.email);
-    const pw = newPassword();
+    const pw = randomPassword();
     const res = await anon().post("/auth/password-reset/complete", {
       token,
       newPassword: pw,
@@ -119,7 +118,7 @@ describe("password reset with MFA enabled", () => {
       codeOf(
         await anon().post("/auth/password-reset/complete", {
           token,
-          newPassword: newPassword(),
+          newPassword: randomPassword(),
         }),
       ),
     ).toBe("TOKEN_INVALID");
@@ -130,7 +129,7 @@ describe("password reset with MFA enabled", () => {
     const token = await resetToken(u.email);
     const res = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
       mfa: { method: "recovery_code", code: u.recoveryCodes[3]! },
     });
     expect(res.status).toBe(204);
@@ -150,7 +149,7 @@ describe("password reset with MFA enabled", () => {
     expect(challenge.status).toBe(200);
     const res = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
       mfa: {
         method: "passkey",
         assertion: authenticator.assert(challenge.body),
@@ -167,7 +166,7 @@ describe("password reset with MFA enabled", () => {
       codeOf(
         await anon().post("/auth/password-reset/complete", {
           token,
-          newPassword: newPassword(),
+          newPassword: randomPassword(),
         }),
       ),
     ).toBe("TOKEN_INVALID");
@@ -185,7 +184,7 @@ describe("password reset without MFA", () => {
     expect(status.body).toEqual({ mfaRequired: false, mfaMethods: [] });
     const ok = await anon().post("/auth/password-reset/complete", {
       token,
-      newPassword: newPassword(),
+      newPassword: randomPassword(),
     });
     expect(ok.status).toBe(204);
 

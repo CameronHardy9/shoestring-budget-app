@@ -110,7 +110,7 @@ Non-secret runtime config (plain env vars on the service): `NODE_ENV=production`
 | Purge missed or failed | Sentry cron monitor `purge` + alert `purge-cron` | email (Gmail push) | purge-failed.md |
 | Backup missed or failed (`shoestring-backup` job) | Better Stack heartbeat, 24 h + 2 h grace | email + Better Stack app push | backup-missed.md |
 | Any spend, or cap reached | GCP budget at $0.01 / $0.50 / $1 | email (Gmail push) | billing-alert.md |
-| Email quota at 80% / 100% of the daily limit (F-09) | Sentry `warning` / `error` events, fingerprint `email-quota-threshold`; alerts `email-quota-warning`, `email-quota-exhausted` | email (Gmail push) | email-quota.md |
+| Email quota at 60% / 100% of the daily limit (F-09, F-60) | Sentry `warning` / `error` events, fingerprint `email-quota-threshold`; alerts `email-quota-warning`, `email-quota-exhausted` | email (Gmail push) | email-quota.md |
 - **Sentry free (Developer) plan** (checked 2026-11-16, V18): 1 user, 5,000 errors/month, exactly 1 cron monitor, email-only alerts, no pay-as-you-go (can't bill). There is no per-key rate limit (Business only). The Sentry mobile app is unmaintained, so push goes through Gmail. Setup: bootstrap-production.md step 11b and step 13. Leak check and canary: docs/runbooks/sentry-data-check.md.
 
 - **Logs:** Cloud Logging `_Default` with 30-day retention, JSON from pino. Cloud Run platform request logs are **excluded** (they contain IPs and user agents).

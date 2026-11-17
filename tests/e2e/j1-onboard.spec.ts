@@ -4,9 +4,9 @@
 // Acceptance: one POST /budgets creates budget, categories and this month's
 // plan; works at 320 px; the budget timezone defaults to the device's; the
 // invite token is removed from the URL before anything else runs (C3.6).
-import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { uniqueEmail } from "../support/factories.ts";
+import { randomPassword } from "../support/passwords.ts";
 import { lastEmail, signupInvite } from "../support/hooks.ts";
 import { expect, expectAccessible, test } from "./fixtures.ts";
 
@@ -26,7 +26,7 @@ async function onboard(
   await expectAccessible(page, "sign-up");
 
   await page.getByLabel("Your name").fill("Robin Newcomer");
-  await page.getByLabel("Password", { exact: true }).fill(`pw-${randomUUID()}`);
+  await page.getByLabel("Password", { exact: true }).fill(randomPassword());
   await page.getByTestId("sign-up-submit").click();
 
   await expect(
