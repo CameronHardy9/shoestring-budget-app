@@ -32,6 +32,7 @@ import {
   forgetReturnPathUnlessFor,
   rememberReturnPath,
 } from "../lib/return-path.ts";
+import { setReportUser } from "../observability/report.ts";
 import { discardStashedDraftUnlessFor } from "./draft-stash.ts";
 import { queryClient } from "./query.ts";
 
@@ -116,6 +117,8 @@ export function AuthProvider({
   const statusRef = useRef(status);
   useEffect(() => {
     statusRef.current = status;
+    // Error events carry only the opaque user ID (ARCHITECTURE "Error tracking").
+    setReportUser(status.kind === "signedIn" ? status.me.id : null);
   }, [status]);
   const lastUserIdRef = useRef<string | null>(
     initial?.kind === "signedIn" ? initial.me.id : null,

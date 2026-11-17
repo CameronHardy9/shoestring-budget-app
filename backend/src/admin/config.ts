@@ -3,12 +3,15 @@
 // as the server for the variables it does read.
 import { z } from "zod";
 import { ConfigError, checkDatabaseUrl } from "../config.ts";
+import { sentryEndpoints } from "../http/security-headers.ts";
 import { parseKeyring } from "../crypto/keyring.ts";
 import type { Keyring } from "../crypto/keyring.ts";
 
 export interface AdminNeeds {
   email?: boolean;
   keyring?: boolean;
+  /** Optional, non-secret SENTRY_DSN and APP_RELEASE (A3 check-ins, A6 alerts). */
+  sentry?: boolean;
 }
 
 export interface AdminConfig {
@@ -22,6 +25,8 @@ export interface AdminConfig {
     dailyQuota: number;
   } | null;
   keyring: Keyring | null;
+  /** Null when not needed; dsn null when SENTRY_DSN is unset (tracking off). */
+  sentry: { dsn: string | null; release: string } | null;
 }
 
 const empty = (v: string | undefined): string | undefined =>
@@ -90,5 +95,23 @@ export function loadAdminConfig(
       throw new ConfigError("APP_KEYRING is invalid");
     }
   }
-  return { nodeEnv: nodeEnv.data, databaseUrl, appOrigin, email, keyring };
+  let sentry: AdminConfig["sentry"] = null;
+  if (needs.sentry) {
+    const dsn = empty(env.SENTRY_DSN) ?? null;
+    if (dsn && !sentryEndpoints(dsn))
+      throw new ConfigError(
+        "SENTRY_DSN is invalid (expected https://<key>@<host>/<project id>)",
+      );
+    const release = empty(env.APP_RELEASE) ?? "dev";
+    if (release.length > 64) throw new ConfigError("APP_RELEASE is invalid");
+    sentry = { dsn, release };
+  }
+  return {
+    nodeEnv: nodeEnv.data,
+    databaseUrl,
+    appOrigin,
+    email,
+    keyring,
+    sentry,
+  };
 }

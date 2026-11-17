@@ -126,11 +126,13 @@ services:
       APP_KEYRING: ${APP_KEYRING:?APP_KEYRING is not set, run make setup to generate .env}
       # Optional overrides from .env (see .env.example). Unset ones arrive blank,
       # which the backend treats as unset (its defaults apply: console email,
-      # no HIBP calls, 0 proxy hops). No email API key or Sentry DSN locally.
+      # no HIBP calls, 0 proxy hops). No email API key locally.
       EMAIL_TRANSPORT: ${EMAIL_TRANSPORT:-}
       HIBP_ENABLED: ${HIBP_ENABLED:-}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-}
       WEBAUTHN_RP_NAME: ${WEBAUTHN_RP_NAME:-}
+      # The API project's DSN (public). Blank by default: nothing is sent.
+      SENTRY_DSN: ${SENTRY_DSN:-}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-3000}:${BACKEND_PORT:-3000}"
     healthcheck:
@@ -165,6 +167,8 @@ services:
       PORT: ${FRONTEND_PORT:-5173}
       API_PROXY_TARGET: http://backend:${BACKEND_PORT:-3000}
       VITE_APP_RELEASE: ${APP_RELEASE:-dev}
+      # The browser project's DSN (public). Blank by default: nothing is sent.
+      VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
     ports:
       - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-5173}:${FRONTEND_PORT:-5173}"
     healthcheck:

@@ -11,6 +11,8 @@ import {
   testKeyring,
 } from "../test-support/harness.ts";
 import type { DalOverrides } from "../test-support/harness.ts";
+import { PURGE_MONITOR } from "../observability/error-tracker.ts";
+import type { Alert, ErrorTracker, Monitor } from "../observability/error-tracker.ts";
 import { EXIT, parseArgs, run } from "./cli.ts";
 
 const U = "01a1d7ab-0000-7000-8000-000000000001";
@@ -28,6 +30,7 @@ async function cli(
   argv: string[],
   dal: DalOverrides,
   env: Record<string, string> = mailEnv,
+  tracker?: ErrorTracker,
 ) {
   const lines: string[] = [];
   const outbox = new Outbox(() => new Date());
@@ -37,6 +40,7 @@ async function cli(
     env,
     out: (l) => lines.push(l),
     transport: outbox,
+    ...(tracker ? { initTracker: () => Promise.resolve(tracker) } : {}),
     createDal: () =>
       strictDal({
         ...dal,
@@ -513,6 +517,92 @@ describe("purge", () => {
     const r = await cli(["purge", "--yes"], dal, baseEnv);
     expect(r.code).toBe(EXIT.unexpected);
     expect(r.raw).not.toContain("Joe");
+  });
+});
+
+describe("purge: A3 cron check-ins", () => {
+  const sentryEnv = {
+    ...baseEnv,
+    SENTRY_DSN: "https://abc@o1.ingest.us.sentry.io/456",
+    APP_RELEASE: "sha1",
+  };
+  const counts = { usersPurged: 0, usersSkipped: 0, failed: false };
+
+  function recorder() {
+    const log: string[] = [];
+    const monitors: Monitor[] = [];
+    const t: ErrorTracker = {
+      enabled: true,
+      captureError: () => log.push("captureError"),
+      alert: (a: Alert) => log.push(`alert:${a.level}`),
+      startCheckIn: (m) => {
+        monitors.push(m);
+        log.push(`${m.slug}:in_progress`);
+        return { finish: (status) => log.push(`${m.slug}:${status}`) };
+      },
+      flush: () => {
+        log.push("flush");
+        return Promise.resolve();
+      },
+      close: () => {
+        log.push("close");
+        return Promise.resolve();
+      },
+    };
+    return { t, log, monitors };
+  }
+  const purgeDal = (runPurge: () => Promise<unknown>): DalOverrides => ({
+    purge: { runPurge },
+  });
+
+  it("a clean run: in_progress, then ok, then the client is flushed and closed; output unchanged", async () => {
+    const r = recorder();
+    const out = await cli(["purge", "--yes"], purgeDal(() => Promise.resolve(counts)), sentryEnv, r.t);
+    expect(out.code).toBe(EXIT.ok);
+    expect(r.log).toEqual(["purge:in_progress", "purge:ok", "close"]);
+    expect(r.monitors).toEqual([PURGE_MONITOR]);
+    expect(out.last).toMatchObject({ command: "purge", outcome: "ok", usersPurged: 0 });
+    expect(out.raw).not.toContain("sentry");
+  });
+
+  it("skipped users, an unexpected error, or a missing --yes all report error", async () => {
+    for (const [argv, dal] of [
+      [["purge", "--yes"], purgeDal(() => Promise.resolve({ ...counts, usersSkipped: 1, failed: true }))],
+      [["purge", "--yes"], purgeDal(() => Promise.reject(new Error("boom")))],
+      [["purge"], purgeDal(() => Promise.resolve(counts))],
+    ] as const) {
+      const r = recorder();
+      const out = await cli([...argv], dal, sentryEnv, r.t);
+      expect(out.code).not.toBe(EXIT.ok);
+      expect(r.log).toEqual(["purge:in_progress", "purge:error", "close"]);
+    }
+  });
+
+  it("a manual dry run sends no check-in", async () => {
+    const r = recorder();
+    await cli(["purge", "--dry-run"], purgeDal(() => Promise.resolve(counts)), sentryEnv, r.t);
+    expect(r.log).toEqual(["close"]);
+  });
+
+  it("without SENTRY_DSN no tracker is started; a malformed DSN is a config error", async () => {
+    const r = recorder();
+    expect((await cli(["purge", "--yes"], purgeDal(() => Promise.resolve(counts)), baseEnv, r.t)).code).toBe(EXIT.ok);
+    expect(r.log).toEqual([]);
+    const bad = await cli(["purge", "--yes"], purgeDal(() => Promise.resolve(counts)), { ...sentryEnv, SENTRY_DSN: "http://nope" }, r.t);
+    expect([bad.code, bad.last.outcome]).toEqual([EXIT.usage, "config_error"]);
+    expect(bad.raw).not.toContain("nope");
+  });
+
+  it("commands that do not mail or purge never read SENTRY_DSN (least config)", async () => {
+    const r = recorder();
+    const out = await cli(
+      ["security-events", "--user-id", U],
+      { securityEvents: { listSecurityEvents: () => Promise.resolve([]) } as never },
+      { ...baseEnv, SENTRY_DSN: "http://would-be-refused" },
+      r.t,
+    );
+    expect(out.last.outcome).not.toBe("config_error");
+    expect(r.log).toEqual([]);
   });
 });
 

@@ -13,7 +13,7 @@ const TOKEN = "R".repeat(43);
 function openLink() {
   window.history.replaceState(null, "", `/reset-password#token=${TOKEN}`);
   captureLinkToken(window.location, window.history);
-  renderWithApp(<ResetPasswordScreen />, {
+  return renderWithApp(<ResetPasswordScreen />, {
     auth: { kind: "signedOut" },
     path: "/reset-password",
   });
@@ -60,6 +60,30 @@ describe("reset password", () => {
         mfa: { method: "totp", code: "123456" },
       },
     ]);
+  });
+
+  it("never copies the link token into the query cache (F-50)", async () => {
+    mockApi({
+      "POST /auth/password-reset/verify": json(200, {
+        mfaRequired: false,
+        mfaMethods: [],
+      }),
+    });
+    const { client } = openLink();
+    await screen.findByLabelText("New password", { selector: "input" });
+    const keys = client
+      .getQueryCache()
+      .getAll()
+      .map((q) => q.queryKey);
+    expect(keys).toEqual([["reset-verify"]]);
+    expect(
+      JSON.stringify(
+        client
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.state.data),
+      ),
+    ).not.toContain(TOKEN);
   });
 
   it("shows the error when the fresh check still lists no second factor", async () => {

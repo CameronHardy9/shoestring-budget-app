@@ -70,8 +70,39 @@ Steps 4 and 6 use `gcloud run deploy` flags until deploy/cloudrun/service.yaml e
 - `curl -fsS https://shoestring.<domain>/api/healthz` returns 200 with the new release.
 - `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shoestring.<domain>/api/_test/reset` prints **404** (F-10). Anything else: roll back at once and tell the tech lead (security incident).
 - On your phone: open the app, sign in, add a transaction, see it in the month view (J2/J3).
-- Sentry → Releases shows `$SHA`; no new issues within 15 minutes.
+- **Sentry smoke check** (below): it passes, and Sentry shows no new `production` issues within 15 minutes.
 - Better Stack monitor is green.
+
+### Sentry smoke check (read-only; sends no user data)
+It proves the release is wired to Sentry without creating a fake error from user traffic. Run it from your Mac with `~/shoestring-prod.env` sourced (it provides `DOMAIN` and `SENTRY_DSN_WEB`) and `SHA` set.
+```sh
+SITE="https://shoestring.$DOMAIN"
+WEB_HOST=$(printf '%s' "$SENTRY_DSN_WEB" | sed -E 's#^https://[^@]+@([^/]+)/.*#\1#')
+# JS files referenced by the page and one level of imports (the Sentry SDK is a lazy chunk)
+assets() { curl -fsS "$SITE/" | grep -Eo '/assets/[A-Za-z0-9_.-]+\.js' | sort -u | while read -r a; do
+  echo "$a"; curl -fsS "$SITE$a" | grep -Eo 'assets/[A-Za-z0-9_.-]+\.js' | sed 's#^#/#'; done | sort -u; }
+assets | while read -r a; do curl -fsS "$SITE$a"; echo; done | grep -c "$WEB_HOST"   # 1. >= 1: the SPA build has the web DSN
+assets | while read -r a; do curl -fsS "$SITE$a"; echo; done | grep -c "$SHA"        # 2. >= 1: the SPA reports this release
+assets | while read -r a; do printf '%s ' "$(curl -s -o /dev/null -w '%{http_code}' "$SITE$a.map")"; done; echo   # 3. all 404: maps are not public
+curl -sSI "$SITE/" | grep -i '^content-security-policy' | grep -c "connect-src 'self' https://$WEB_HOST"   # 4. 1: CSP allows exactly that host
+curl -sSI "$SITE/" | grep -i '^reporting-endpoints'                                                   # 5. csp="https://<same host>/api/<api project id>/security/?sentry_key=…"
+```
+6. In Sentry: **Releases** lists `$SHA`. `shoestring-web` → Settings → **Source Maps → Artifact Bundles** shows a bundle uploaded for this build (ci-engineer's private upload). A missing bundle means unreadable stack traces, not a broken site. Tell the tech lead, but don't roll back for it.
+7. **Backend path**, without a test error:
+   - Monitors → Crons → `purge` shows the last check-in as OK, with the release it ran. The next scheduled run (08:00 UTC) uses this release's image.
+   - For an immediate check, `gcloud scheduler jobs run shoestring-purge-daily --project "$PROJECT" --location "$REGION"`. Purge is idempotent, so this is safe outside 08:00–09:30 UTC.
+   - Then the newest check-in turns green within 2 minutes.
+8. **[needs backend: admin command `sentry-test`]** This sends one fixed-text `info` event from the production image, with the release and environment and **no user data**:
+   ```sh
+   gcloud run jobs execute shoestring-admin --args sentry-test --region "$REGION" --project "$PROJECT" --wait
+   ```
+   - The event appears in `shoestring-api` (environment `production`, release `$SHA`).
+   - Run docs/runbooks/sentry-data-check.md step 1 on it: `user` has no IP, and there is no request data.
+   - The **first** run ever also sends an `error-new` email, which proves the alert path. Later runs reuse the same issue and stay quiet. Leave that issue unresolved.
+
+**If 1, 2 or 4 fails:** the release reports nothing, or the browser blocks the reports. That isn't user-facing, so there is **no rollback**. Tell the tech lead (ci-engineer for 1–2, backend-engineer for 4–5).
+**If 3 fails** (a `.map` returns 200): source code is public. Roll back (rollback.md) and tell the tech lead.
+**After any change** to the Sentry SDK setup or the Sentry settings, also run the canary (sentry-data-check.md step 2).
 - Record the deploy (date, SHA, revision) in the release notes or PR.
 
 ## Back out

@@ -69,6 +69,12 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - Every new limit: grep for `count`/`rollingCount`/`assertUnder` followed later by `hit`. Read-only pre-checks are fine only when a reservation enforces the limit afterwards (F-57).
     - Test proxies that honour a spoof header (`X-E2E-Client-IP`) are fine only if they are confined to test compose and dockerignored paths. Verify against .dockerignore and the Dockerfile COPY lines each time.
 
+15. **Sentry review (2026-11-17, `feat/sentry`).**
+    - **"Rebuilt in beforeSend" isn't the whole wire.** The SDK adds things *after* `beforeSend`: `_enhanceEventWithSdkInfo` merges `sdk.settings` (`infer_ip`), integrations and packages, plus envelope headers. Check the SDK source in node_modules/.pnpm and the e2e envelope test, not just the scrub function.
+    - **Stack frames are parsed from `error.stack`, which starts with the message.** Multi-line messages can produce fake frames on both sides (F-59). Any allowlist that keeps frames needs bounded `filename`/`function` charsets.
+    - **Alert thresholds vs cutoffs.** If a detective alert sits above a cutoff that the attacker's traffic can't cross (non-priority mail stops at 60%, alert at 80%), the alert never fires for that attack (F-60). Compare every alert threshold with the limit it is meant to watch.
+    - **devDependencies bundled into dist are runtime code** (@sentry/node). Never dismiss their advisories as dev-only (F-61). Check the dist chunk's source map to see what actually ships.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

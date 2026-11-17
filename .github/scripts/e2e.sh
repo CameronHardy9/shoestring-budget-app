@@ -16,7 +16,8 @@
 #   "visual" screenshot suite, run inside the pinned Playwright container
 # Environment passed to both: APP_ORIGIN, BASE_URL (= APP_ORIGIN, the edge in
 # front of Vite), API_URL (the edge in front of the backend), BACKEND_PORT,
-# DATABASE_URL, MIGRATOR_DATABASE_URL, DATABASE_ADMIN_URL (host ports), CI.
+# DATABASE_URL, MIGRATOR_DATABASE_URL, DATABASE_ADMIN_URL (host ports),
+# E2E_SENTRY_DSN (a fake DSN on a .test host), CI.
 # The backend derives the client IP from the edge's X-Forwarded-For entry; a
 # test acts as another client with X-E2E-Client-IP (.github/scripts/e2e-edge.mjs).
 source "$(dirname "$0")/lib.sh"
@@ -37,6 +38,9 @@ stack_env() {
   export APP_ORIGIN="http://localhost:$app_port"
   export BASE_URL="$APP_ORIGIN"
   export API_URL="http://127.0.0.1:$BACKEND_PORT"
+  # Fake Sentry DSN for suites that build the production SPA with one
+  # (VITE_SENTRY_DSN) and intercept its host; see lib.sh.
+  export E2E_SENTRY_DSN
 }
 
 # db_urls: the three database URLs on the host port (after the credentials).
@@ -79,7 +83,7 @@ case "$MODE" in
         echo "# Throwaway credentials of the local e2e stack (make e2e-up). Never commit."
         for v in $DB_PASSWORD_VARS; do echo "$v=${!v}"; done
         echo "APP_KEYRING='$APP_KEYRING'"
-        for v in APP_ORIGIN BASE_URL API_URL BACKEND_PORT DATABASE_URL MIGRATOR_DATABASE_URL DATABASE_ADMIN_URL; do
+        for v in APP_ORIGIN BASE_URL API_URL BACKEND_PORT DATABASE_URL MIGRATOR_DATABASE_URL DATABASE_ADMIN_URL E2E_SENTRY_DSN; do
           echo "$v=${!v}"
         done
       } >"$STACK_FILE.tmp.$$"
@@ -154,7 +158,7 @@ if has_script tests visual; then
   # alone and leave db/node_modules empty.
   docker run --rm --network host --ipc host --init \
     -e CI="${CI:-}" -e BASE_URL -e APP_ORIGIN -e API_URL -e BACKEND_PORT \
-    -e DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ADMIN_URL -e HOST_UID -e HOST_GID \
+    -e DATABASE_URL -e MIGRATOR_DATABASE_URL -e DATABASE_ADMIN_URL -e E2E_SENTRY_DSN -e HOST_UID -e HOST_GID \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 -e npm_config_store_dir=/app/node_modules/.pnpm-store \
     -v "$ROOT:/app" \
     -v shoestring_pw_node_modules:/app/node_modules \

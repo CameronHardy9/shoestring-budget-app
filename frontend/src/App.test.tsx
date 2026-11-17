@@ -224,6 +224,15 @@ describe("emailed links", () => {
     expect(window.location.hash).toBe("");
     render(<App />);
     expect(await screen.findByText("new@example.com")).toBeInTheDocument();
+    // F-50: the token lives in one place (link-token.ts), never in a query key.
+    expect(
+      JSON.stringify(
+        queryClient
+          .getQueryCache()
+          .getAll()
+          .map((q) => q.queryKey),
+      ),
+    ).not.toContain(token);
     await userEvent.type(
       screen.getByRole("textbox", { name: "Your name" }),
       "Sam",

@@ -31,6 +31,26 @@ export function applyUpdate(): void {
 
 const CHECK_EVERY_MS = 60_000;
 
+/**
+ * Reloads once when an UPDATED worker takes control (after "Reload" in the
+ * banner, so the page and its assets match). Not on the first install: then
+ * the new worker's clients.claim() also fires controllerchange, and a reload
+ * would throw away in-memory state the person never chose to lose, such as an
+ * emailed link's token (auth.md §4) on a first visit from that email.
+ */
+export function reloadOnTakeover(
+  container: Pick<ServiceWorkerContainer, "controller" | "addEventListener">,
+  reload: () => void,
+): void {
+  const hadController = container.controller !== null;
+  let reloading = false;
+  container.addEventListener("controllerchange", () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    reload();
+  });
+}
+
 export function registerServiceWorker(
   onNavigate: (listener: () => void) => () => void,
 ): void {
@@ -53,10 +73,7 @@ export function registerServiceWorker(
     registration.addEventListener("updatefound", () => {
       track(registration.installing);
     });
-    let reloading = false;
-    navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (reloading) return;
-      reloading = true;
+    reloadOnTakeover(navigator.serviceWorker, () => {
       window.location.reload();
     });
     let lastCheck = Date.now();

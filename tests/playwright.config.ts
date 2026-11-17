@@ -17,8 +17,9 @@ const common = {
   locale: "en-US",
   timezoneId: "America/New_York",
   reducedMotion: "reduce" as const,
-  // The service worker exists only in production builds; it is covered by the
-  // production-build job and the owner's phone check, never by these tests.
+  // The service worker exists only in production builds. Blocked everywhere
+  // except e2e/csp-prod/sw-first-visit.spec.ts, which runs the real /sw.js
+  // (install, offline and update: the owner's phone check).
   serviceWorkers: "block" as const,
 };
 

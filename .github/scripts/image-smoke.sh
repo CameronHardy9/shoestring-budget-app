@@ -11,7 +11,10 @@
 #      /api/healthz, and on /, an SPA deep link and /sw.js once frontend/ exists (F-53)
 #   5. the Host check rejects a foreign host
 #   6. /api/_test/reset and /api/_test/login return 404
-#   7. the SPA loads from STATIC_DIR (once frontend/ exists)
+#   7. the SPA loads from STATIC_DIR (once frontend/ exists), and no source map
+#      is in /app/public or reachable over HTTP (they go to Sentry privately)
+#   8. with SENTRY_DSN set, the server starts (loads its bundled Sentry chunk)
+#      and the CSP names the DSN's ingest host
 # Builds the image first when it is not there yet (make image).
 source "$(dirname "$0")/lib.sh"
 require_docker
@@ -90,7 +93,7 @@ const fs = require("node:fs"), path = require("node:path");
 const WORD = /(?<![A-Za-z0-9_])_test(?![A-Za-z0-9_])/, SENTINEL = "__SHOESTRING_TEST_HOOKS__";
 const allowed = new Set(["dist", "node_modules", "package.json", "public"]);
 const extra = fs.readdirSync("/app").filter((n) => !allowed.has(n));
-const sentinel = [], word = [];
+const sentinel = [], word = [], maps = [], mapRefs = [];
 const walk = (d) => {
   for (const e of fs.readdirSync(d, { withFileTypes: true })) {
     const p = path.join(d, e.name);
@@ -99,11 +102,13 @@ const walk = (d) => {
       const t = fs.readFileSync(p, "latin1");
       if (t.includes(SENTINEL)) sentinel.push(p);
       if (p.startsWith("/app/dist/") && /\.(m|c)?js$/.test(p) && WORD.test(t)) word.push(p);
+      if (p.startsWith("/app/public/") && p.endsWith(".map")) maps.push(p);
+      if (p.startsWith("/app/public/") && /\.(m|c)?js$/.test(p) && /[#@] sourceMappingURL=/.test(t)) mapRefs.push(p);
     }
   }
 };
 walk("/app");
-console.log(JSON.stringify({ extra, sentinel, word }));
+console.log(JSON.stringify({ extra, sentinel, word, maps, mapRefs }));
 '
 contents="$(docker run --rm --network none --entrypoint /nodejs/bin/node "$tag" -e "$scan")"
 extra="$(printf '%s' "$contents" | jq -r '.extra | join(" ")')"
@@ -112,6 +117,11 @@ word="$(printf '%s' "$contents" | jq -r '.word | join(" ")')"
 if [ -z "$extra" ]; then pass "/app holds only dist, node_modules, package.json, public"; else fail "unexpected entries in /app: $extra"; fi
 if [ -z "$sentinel" ]; then pass "test-hook sentinel absent from all of /app"; else fail "sentinel found in: $sentinel"; fi
 if [ -z "$word" ]; then pass "no \`_test\` word in /app/dist"; else fail "\`_test\` found in: $word"; fi
+# Source maps go to Sentry privately (make sourcemaps-upload), never to users.
+maps="$(printf '%s' "$contents" | jq -r '.maps | join(" ")')"
+map_refs="$(printf '%s' "$contents" | jq -r '.mapRefs | join(" ")')"
+if [ -z "$maps" ]; then pass "no source maps in /app/public"; else fail "source maps in /app/public: $maps"; fi
+if [ -z "$map_refs" ]; then pass "no sourceMappingURL comment in /app/public JS"; else fail "sourceMappingURL in: $map_refs"; fi
 
 # --- 2. config refusals (no database needed: config fails before any connect) ---
 log "Config refusals"
@@ -156,20 +166,26 @@ log "Starting throwaway Postgres and applying migrations (project $COMPOSE_PROJE
 compose_test run --rm --quiet-pull migrate
 note "Database migrated after $(elapsed)"
 
-log "Starting the production image ($tag) on 127.0.0.1:$SMOKE_PORT"
-docker run -d --name "$APP_NAME" --network "$NETWORK" -p "127.0.0.1:$SMOKE_PORT:8080" \
-  "${HARDEN[@]}" "${APP_ENV[@]}" "$tag" >/dev/null
-up=0
-for _ in $(seq 1 60); do
-  [ "$(docker inspect -f '{{.State.Running}}' "$APP_NAME")" = "true" ] || die "the app container exited (logs below)"
-  if curl -fsS -o /dev/null "$BASE/api/healthz" 2>/dev/null; then
-    up=1
-    break
-  fi
-  sleep 0.5
-done
-[ "$up" -eq 1 ] || die "the app did not answer /api/healthz within 30s"
-note "Listening after $(elapsed)"
+# start_app [docker env args...]: runs the image as $APP_NAME and waits for healthz.
+start_app() {
+  docker rm -f "$APP_NAME" >/dev/null 2>&1 || true
+  docker run -d --name "$APP_NAME" --network "$NETWORK" -p "127.0.0.1:$SMOKE_PORT:8080" \
+    "${HARDEN[@]}" "${APP_ENV[@]}" "$@" "$tag" >/dev/null
+  local up=0
+  for _ in $(seq 1 60); do
+    [ "$(docker inspect -f '{{.State.Running}}' "$APP_NAME")" = "true" ] || die "the app container exited (logs below)"
+    if curl -fsS -o /dev/null "$BASE/api/healthz" 2>/dev/null; then
+      up=1
+      break
+    fi
+    sleep 0.5
+  done
+  [ "$up" -eq 1 ] || die "the app did not answer /api/healthz within 30s"
+  note "Listening after $(elapsed)"
+}
+
+log "Starting the production image ($tag) on 127.0.0.1:$SMOKE_PORT, without SENTRY_DSN"
+start_app
 
 # --- 3-7. HTTP checks -----------------------------------------------------------
 log "HTTP checks"
@@ -266,6 +282,21 @@ if has_pkg frontend; then
   expect "GET /some/deep/link content type" text/html \
     "$(content_type -H 'Accept: text/html' "$BASE/some/deep/link")"
   check_headers "GET /sw.js" "$BASE/sw.js"
+  # The maps exist (in the sourcemaps stage) but are not served: a map URL next
+  # to every script the document loads answers 404, and with Accept: text/html
+  # at most the SPA fallback (index.html), never a map.
+  scripts="$(curl -s -H "$HOST_H" -H 'Accept: text/html' "$BASE/" |
+    grep -oE 'src="/assets/[^"]+\.js"' | sed -E 's/^src="//; s/"$//' || true)"
+  if [ -z "$scripts" ]; then fail "GET /: found no /assets/*.js script to probe for a map"; fi
+  for js in $scripts; do
+    expect "GET $js" 200 "$(status -H "$HOST_H" "$BASE$js")"
+    expect "GET $js.map" 404 "$(status -H "$HOST_H" "$BASE$js.map")"
+    if curl -s -H "$HOST_H" -H 'Accept: text/html' "$BASE$js.map" | grep -q '"mappings"'; then
+      fail "GET $js.map (Accept: text/html) returned a source map"
+    else
+      pass "GET $js.map (Accept: text/html): no source map"
+    fi
+  done
   sw_type="$(content_type "$BASE/sw.js")"
   case "$sw_type" in
     application/javascript | text/javascript) pass "GET /sw.js content type: $sw_type" ;;
@@ -278,6 +309,28 @@ fi
 if docker logs "$APP_NAME" 2>&1 | grep -q "test hooks registered"; then
   fail "logs say test hooks registered"
 fi
+
+# --- 8. with SENTRY_DSN ----------------------------------------------------------
+# The server imports @sentry/node only when SENTRY_DSN is set, from a lazy chunk
+# rolldown bundles into dist/ (no Sentry package in node_modules). Starting with
+# a DSN proves the chunk is in the image and loads under the hardened runtime.
+# The DSN is the e2e fake on a .test host that never resolves, so nothing is
+# sent; the CSP must then name exactly its ingest origin.
+log "Restarting the image with SENTRY_DSN (fake .test DSN)"
+start_app -e "SENTRY_DSN=$E2E_SENTRY_DSN"
+sentry_host="$(printf '%s' "$E2E_SENTRY_DSN" | sed -E 's#^https://[^@]*@([^/]*)/.*#\1#')"
+s_headers="$(curl -s -D - -o /dev/null -H "$HOST_H" "$BASE/api/healthz" | tr -d '\r' || true)"
+if printf '%s' "$s_headers" | grep -qiE "^content-security-policy:.*connect-src 'self' https://$sentry_host(;|$)"; then
+  pass "with SENTRY_DSN: connect-src 'self' https://$sentry_host"
+else
+  fail "with SENTRY_DSN: connect-src does not name https://$sentry_host"
+fi
+if printf '%s' "$s_headers" | grep -qiE "^reporting-endpoints: csp=\"https://$sentry_host/api/1/security/"; then
+  pass "with SENTRY_DSN: Reporting-Endpoints points at the ingest host"
+else
+  fail "with SENTRY_DSN: no Reporting-Endpoints for the ingest host"
+fi
+expect "with SENTRY_DSN: GET /api/readyz" 200 "$(status "$BASE/api/readyz")"
 
 if [ "$failures" -ne 0 ]; then die "make image-smoke: $failures check(s) failed"; fi
 log "make image-smoke: passed in $(elapsed)"

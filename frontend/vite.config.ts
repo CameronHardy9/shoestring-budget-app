@@ -5,13 +5,19 @@
 // browser's Host header unchanged (no changeOrigin): the backend compares Host
 // with APP_ORIGIN, port included (auth.md §3), and rejects anything else.
 //
-// Build (`pnpm build`): only index.html is an entry, so the dev-only style
-// preview (preview.html, src/preview/) never reaches dist/. scripts/check-dist.ts
+// Build (`pnpm build`): index.html plus the boot script (the link-token
+// capture, injected as the first <script>, F-50) are the only entries, so the
+// dev-only style preview (preview.html, src/preview/) never reaches dist/. scripts/check-dist.ts
 // asserts that, plus the asset naming the backend's cache rules expect.
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type ProxyOptions, type UserConfig } from "vite";
+import {
+  BOOT_ENTRY_NAME,
+  BOOT_SOURCE,
+  bootScriptPlugin,
+} from "./scripts/boot-script.ts";
 import { serviceWorkerPlugin } from "./scripts/service-worker.ts";
 
 export const DEFAULT_API_PROXY_TARGET = "http://localhost:3000";
@@ -34,7 +40,12 @@ export function buildConfig(
   env: Record<string, string | undefined>,
 ): UserConfig {
   return {
-    plugins: [react(), tailwindcss(), serviceWorkerPlugin()],
+    plugins: [
+      react(),
+      tailwindcss(),
+      bootScriptPlugin(),
+      serviceWorkerPlugin(),
+    ],
     server: {
       // make dev sets HOST=0.0.0.0 inside the container; default to loopback.
       host: env.HOST || "127.0.0.1",
@@ -60,6 +71,11 @@ export function buildConfig(
       rolldownOptions: {
         input: {
           index: fileURLToPath(new URL("./index.html", import.meta.url)),
+          // The link-token capture, its own first <script> (F-50,
+          // scripts/boot-script.ts).
+          [BOOT_ENTRY_NAME]: fileURLToPath(
+            new URL(`./${BOOT_SOURCE}`, import.meta.url),
+          ),
         },
         output: {
           // Hex hashes match backend/src/http/static.ts cacheControlFor

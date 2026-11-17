@@ -13,7 +13,7 @@ Free tiers are per **billing account** (V1).
 | Cloud Run GiB-seconds | 360,000 / month (V1) | ~5,000 (512 MiB) | ~98% | Billed at ~$0.0000025/GiB-s (V2) | Same |
 | Cloud Run Jobs (migrate, purge, admin, rewrap-mfa, backup) | Instance-based allowance (V1) | ~2,500 vCPU-s (30 purges × ~15 s, 30 backups × ~60 s, ~10 migrations, a few admin runs) | > 98% | Billed | Job execution durations > 5 min |
 | Cloud Run egress, North America | ~1 GiB / month (V1) | < 100 MB (SPA cached by the service worker; small JSON) | ~90% | ~$0.12/GB | Metrics: sent bytes > 700 MB |
-| Artifact Registry storage | 0.5 GB-month (V4) | ~220–320 MB (app: `prod-current` + `prod-previous` + up to 3 recent, shared base layers; backup image ~20 MB tagged `prod-backup`) | ~35% | $0.10/GB-month | `sizeBytes` > 350 MB |
+| Artifact Registry storage | 0.5 GB-month (V4) | ~220–320 MB (app: `prod-current` + `prod-previous` + up to 3 recent, shared base layers; backup image ~20 MB tagged `prod-backup`). **`@sentry/node` adds up to ~14 MB compressed per unique app image** (up to ~70 MB across the 5 kept), so the worst case is ~390 MB. backend-engineer is trying to bundle it to remove most of that. | ~22–35% | $0.10/GB-month | `sizeBytes` > 350 MB |
 | Artifact Registry egress to Cloud Run (same region) | Free | — | — | — | Never pull cross-region |
 | Secret Manager active versions | 6 (V6) | **5** (database-url, migrator-database-url, app-keyring, email-api-key, backup-database-url) | **1**: a rotation's extra version stays free | $0.06 / version / month, prorated (verify) | Count > 5 at the monthly check (billing-protection §8). The Cloudflare fallback's origin-auth secret would use the last free slot. |
 | Secret Manager access operations | 10,000 / month (V6) | ~3,900 (≈ 40 instance starts/day × 3 secrets, plus purge 30 × 1 and backup 30 × 1, plus admin, rewrap and migrate runs) | ~50% | $0.03 / 10,000 | Cold starts > 70/day |
@@ -48,7 +48,7 @@ Free tiers are per **billing account** (V1).
 | GitHub Actions (public repo) | Unlimited minutes on standard runners | CI + deploys (backups run in GCP, not Actions) | — | — | Spending limit stays $0 |
 | GitHub Actions artifacts | Not used for anything sensitive | Playwright traces on failure only (ci-engineer) | — | — | — |
 | GHCR (public package) | Free for public packages | 1 image per main build | — | — | Package visibility stays public; no secrets in images |
-| Sentry (Developer) | ~5,000 errors / month, 1 cron monitor (V18) | < 200 errors; 1 monitor (`purge`) | ~95% | Events dropped until next period (no bill with $0 PAYG) | Usage > 70%; spike-protection emails |
+| Sentry (Developer) | 5,000 errors / month, 1 cron monitor, 1 user, no pay-as-you-go (checked 2026-11-16, V18) | < 200 errors; 1 monitor (`purge`); 1 user | ~95%; monitors 0 spare | Events dropped until next period. **Can't bill**: the plan has no PAYG and no card is on file. | Usage > 70% (billing-protection.md §11 row 12); spike-protection emails |
 | Better Stack Uptime | ~10 monitors, ~10 heartbeats (V19) | 1 monitor, 1 heartbeat | — | Cannot add more | — |
 | Resend | 100 / day, 3,000 / month, 1 domain (V20) | < 100 / month | ~97% | Sends rejected: invites, resets and security notices fail, and recovery is blocked (F-09) | **Alert A6** at 80 sends in a day (Sentry, observability/README.md); dashboard > 2,000 / month |
 | HIBP Pwned Passwords range API | Free, no key | ~1 call per signup/password change | — | — | — |

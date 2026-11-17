@@ -229,6 +229,13 @@ export function sendError(
       },
       "request failed",
     );
+    // Unexpected errors only (errors.md: 4xx never go to Sentry). The tracker
+    // builds the event from the same F-07 allowlist; no request data.
+    deps.errors.captureError(err, {
+      requestId: req.id,
+      userId: (req.ss as RequestState | null)?.auth?.session.userId ?? null,
+      route: req.routeOptions.url ?? null,
+    });
   }
   // ss is null when Fastify fails before onRequest (e.g. a malformed URL).
   const ss = req.ss as RequestState | null;

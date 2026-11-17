@@ -1,6 +1,7 @@
 // Test harness: the real app (pipeline, route table, error handler, response
 // validation) over a strict fake DAL. Any DAL call a test did not configure
 // throws, so tests state exactly which data access they expect.
+import type { ErrorTracker } from "../observability/error-tracker.ts";
 import type {
   Dal,
   MeRecord,
@@ -441,6 +442,8 @@ export interface HarnessOptions {
   env?: Record<string, string>;
   routes?: readonly Route[];
   passwords?: PasswordService;
+  /** Error tracker (default NO_TRACKING via createDeps). */
+  errors?: ErrorTracker;
 }
 
 export async function makeHarness(o: HarnessOptions = {}): Promise<Harness> {
@@ -482,6 +485,7 @@ export async function makeHarness(o: HarnessOptions = {}): Promise<Harness> {
     clock,
     transport: outbox,
     passwords: o.passwords ?? fakePasswords(),
+    ...(o.errors ? { errors: o.errors } : {}),
     wallNow: () => wall.now,
     sleep: (ms) => {
       sleeps.push(ms);

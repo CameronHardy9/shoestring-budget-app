@@ -1,6 +1,6 @@
 # ADR-0007: Hosting on Cloud Run + Neon at $0
 - Status: **Accepted (owner, 2026-11-12)**, including risk R1 (bounded overshoot) and the Cloud Billing spend cap. Several facts are still to be verified: see "Open verification" (V0–V26).
-- Date: 2026-11-12 (converted from the proposal on 2026-11-13; revised 2026-11-13 with the owner's round-2 rulings: backups as a Cloud Run job, keyring escrow, Cloudflare fallback gated on security review)
+- Date: 2026-11-12 (converted from the proposal on 2026-11-13; revised 2026-11-13 with the owner's round-2 rulings: backups as a Cloud Run job, keyring escrow, Cloudflare fallback gated on security review; amended 2026-11-16 with the owner's round-8 rulings on Sentry alert delivery and volume, and the source-map upload)
 - Areas affected: sre, ci, backend, frontend, data, security
 - Inputs: infra/hosting-evaluation.md (sre), docs/mvp-planning/10-contract-review-decisions.md, security findings F-02, F-03, F-08, F-11, F-15, F-17, F-28
 
@@ -50,7 +50,7 @@ Running cost must be $0 (hard constraint). A card on file is acceptable only wit
 | Database | Neon free, 0.25 CU fixed, Postgres 17; the app uses the pooled endpoint (pool `min: 0`, idle timeout ≤ 30 s, so Neon can scale to zero); migrations, `pg_dump` and restores use the direct endpoint |
 | Cost cap | **Cloud Billing spend cap** (owner's choice) plus a $0.01 budget alert. The billing kill switch is a fallback only, because it is destructive (R5). |
 | Email | Resend free on `mail.<domain>` (Brevo free as fallback). Click and open tracking off. SPF and DKIM, and DMARC on the sending subdomain ramping from `p=none` (2 weeks of reports) to **`p=reject`** (F-29). |
-| Monitoring | Sentry free (errors + cron monitor for purge), Better Stack free (uptime on `/api/healthz`, backup heartbeat), Cloud Logging `_Default` at 30 days, GCP budget alert. Alerts: down, error spike, missed backup, failed purge, billing, email budget. Push via the Sentry and Better Stack apps. |
+| Monitoring | Sentry free (errors + cron monitor for purge), Better Stack free (uptime on `/api/healthz`, backup heartbeat), Cloud Logging `_Default` at 30 days, GCP budget alert. Alerts: down, error spike, missed backup, failed purge, billing, email budget. **Push:** Better Stack's app; Sentry and GCP budget alerts are emails, pushed by a Gmail filter plus Gmail app notifications (Sentry's mobile app isn't available; Slack and webhooks are paid). **Sentry volume:** spike protection plus the hard 5,000 errors/month free quota, with no SDK-side cap; the per-key (DSN) rate limit is paid-only and not used. The quota can never cost money; the worst case is Sentry going blind until the 1st. |
 | Logs | Cloud Run platform request logs contain client IP, raw User-Agent and query strings (PII). sre excludes them from `_Default` or minimizes them where the platform allows; app logs follow ARCHITECTURE "Never logged". |
 
 Scores against the criteria (from infra/hosting-evaluation.md): C1 ⚠️ (card, spend cap, R1) · C2 ⚠️ (estimated 1.5–3.5 s, must be measured: V9) · C3 ⚠️ (domain mapping is Preview: V3) · C4 ✅ · C5 ✅ · C6 ✅ (Neon: no expiry; restore window unknown, V8) · C7 ✅ · C8 ✅ (Cloud Scheduler → Cloud Run job) · C9 ✅ · C10 ✅.
@@ -87,7 +87,7 @@ Scores against the criteria (from infra/hosting-evaluation.md): C1 ⚠️ (card,
 - **ci:**
   - Deploy workflow (WIF, copy digest to AR, migrate job, readyz gate, traffic move).
   - Build the `prod-backup` image (pinned alpine, `postgresql17-client`, `age`, `curl`, non-root) in the same pipeline and copy it to Artifact Registry by digest (constraint 10). The AR cleanup policy must keep the current `prod-backup` digest. The deploy identity gets no `actAs` on the backup service account.
-  - Private source-map upload.
+  - Private source-map upload: Vite `hidden` maps only, by a main-only job in the GitHub environment `sentry`, whose Sentry organization auth token is the only Sentry credential in GitHub (it is not a database credential or application key, constraint 6). Maps are never served (image-smoke asserts 404) or kept as public artifacts. Backend maps are not uploaded; the server uses `--enable-source-maps`.
   - Prod-image smoke job (ADR-0009).
 - **backend:** `trustProxy` per constraint 8; Host check; config refusals (ARCHITECTURE "Config"); pool settings for Neon scale-to-zero; fast start-up (no lazy work on the request path).
 - **data:** `backup` role, `purge_security_events()` function, `sslmode=verify-full` in every URL.

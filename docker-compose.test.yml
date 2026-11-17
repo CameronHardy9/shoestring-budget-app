@@ -47,10 +47,19 @@ services:
       # One hop: the edge below (same count as production, ADR-0007).
       TRUST_PROXY_HOPS: "1"
       WEBAUTHN_RP_NAME: ""
+      # The fake DSN from .github/scripts/lib.sh (a .test host that never
+      # resolves), never a developer's real one: it puts the fake ingest host
+      # in the CSP connect-src and report-to, so the production SPA built with
+      # the same DSN (tests/scripts/build-prod-frontend.mjs) may send to it and
+      # the browser test intercepts that. The dev entry never starts Sentry.
+      # make test exports nothing, so it is blank there (no Sentry host).
+      SENTRY_DSN: ${E2E_SENTRY_DSN:-}
     # Reachable only through the edge (see the header).
     ports: !reset []
 
   frontend:
+    environment:
+      VITE_SENTRY_DSN: ""
     ports: !reset []
 
   edge:

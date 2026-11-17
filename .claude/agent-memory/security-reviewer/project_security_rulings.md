@@ -74,4 +74,10 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
 
 - **F-49 fixed and verified 2026-11-16 (`fix/f49-restore-race`).** The owner's status is now re-checked after `lockUser`, and all member locks are taken before the limit checks. `lockOwnedBudgetsAndCheckShared` locks *deleted* owned budgets too, which is what makes restore-first safe. Ruled Info, not a finding: `lockBudget` reads `m.role` in its locking statement, so the role can be stale after a wait. The deferred one-owner trigger blocks the only integrity break, and otherwise the actor gains only an action they could have taken an instant earlier.
 
+- **Sentry review 2026-11-17 (`feat/sentry`): approve.** F-50 closed. Verified: the Sentry halves of F-06 and F-07, the Sentry parts of F-23, and the F-09 alert code. New Lows F-59 to F-61.
+  - **`SAFE_MESSAGES` signed off** (7 patterns plus the contract-code passthrough). The dynamic-import pattern **keeps the chunk name**, on three conditions: OWN_ASSET stays bounded, the own-origin check stays, and file names stay `[name]-[hex hash]`. Any list change needs a fresh sign-off.
+  - Owner rulings I work under (round 8, 2026-11-16): spike protection only, no per-key DSN limit, and quota exhaustion = blind until the 1st is accepted. Don't re-raise the public-DSN flood. Load-shedding 503s going to Sentry is Info under that ruling.
+  - Ruled Info: glob@13.0.7 (via @sentry/bundler-plugins, never bundled or run), the `sentry` npm CLI package, and the two Semgrep WARNINGs in dist-checks.test.ts (test fixtures).
+  - The SW first-visit no-reload fix holds; the `hadController` staleness is only a UX issue.
+
 Related: [[project-review-hotspots]]

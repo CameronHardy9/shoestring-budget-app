@@ -26,6 +26,8 @@ import {
 import type { EmailTransport } from "../email/transports.ts";
 import { Throttles } from "../http/rate-limit.ts";
 import { createLogger } from "../logging.ts";
+import { NO_TRACKING, PURGE_MONITOR, initErrorTracker } from "../observability/error-tracker.ts";
+import type { CheckIn, ErrorTracker, TrackerOptions } from "../observability/error-tracker.ts";
 import type { AdminConfig, AdminNeeds } from "./config.ts";
 import { loadAdminConfig } from "./config.ts";
 
@@ -100,6 +102,8 @@ export interface AdminIo {
   out: (line: string) => void;
   createDal?: (config: AdminConfig) => Dal;
   transport?: EmailTransport;
+  /** Tests: a recording tracker instead of Sentry. */
+  initTracker?: (o: TrackerOptions) => Promise<ErrorTracker>;
 }
 
 class Exit extends Error {
@@ -127,15 +131,17 @@ const NEEDS: Record<
   AdminCommand,
   (f: Map<string, string | true>) => AdminNeeds
 > = {
-  "create-signup-invite": () => ({ email: true }),
-  "reset-mfa": () => ({ email: true }),
+  "create-signup-invite": () => ({ email: true, sentry: true }),
+  "reset-mfa": () => ({ email: true, sentry: true }),
   "revoke-sessions": () => ({}),
   "security-events": () => ({}),
   "rewrap-mfa": (f) => ({
     keyring: true,
     email: f.has("retire-recovery-codes"),
+    sentry: f.has("retire-recovery-codes"),
   }),
-  purge: () => ({}),
+  // Sentry for the A3 cron check-ins; still no secret beyond DATABASE_URL.
+  purge: () => ({ sentry: true }),
 };
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+$/;
@@ -156,9 +162,37 @@ export async function run(
     return EXIT.usage;
   }
   const { command, flags } = parsed;
+  const obs: { tracker: ErrorTracker; checkIn: CheckIn | null } = {
+    tracker: NO_TRACKING,
+    checkIn: null,
+  };
+  const code = await execute(command, flags, io, emit, obs);
+  // A3: ok only for a clean exit; any other code (users skipped, usage,
+  // config, unexpected) fails the check-in so the purge alert fires.
+  obs.checkIn?.finish(code === EXIT.ok ? "ok" : "error");
+  await obs.tracker.close(2000); // flush before the process exits
+  return code;
+}
+
+async function execute(
+  command: AdminCommand,
+  flags: Map<string, string | true>,
+  io: AdminIo,
+  emit: (fields: Record<string, unknown>, level?: string) => void,
+  obs: { tracker: ErrorTracker; checkIn: CheckIn | null },
+): Promise<number> {
   let dal: Dal | null = null;
   try {
     const config = loadAdminConfig(io.env, NEEDS[command](flags));
+    if (config.sentry?.dsn)
+      obs.tracker = await (io.initTracker ?? initErrorTracker)({
+        dsn: config.sentry.dsn,
+        release: config.sentry.release,
+        environment: config.nodeEnv,
+      });
+    // The scheduled run only: a manual dry run must not look like one.
+    if (command === "purge" && flags.get("dry-run") !== true)
+      obs.checkIn = obs.tracker.startCheckIn(PURGE_MONITOR);
     dal = io.createDal
       ? io.createDal(config)
       : createDal({
@@ -166,7 +200,13 @@ export async function run(
           clock: systemClock,
           applicationName: "shoestring-admin",
         });
-    const fields = await COMMAND_IMPL[command]({ dal, config, flags, io });
+    const fields = await COMMAND_IMPL[command]({
+      dal,
+      config,
+      flags,
+      io,
+      alerts: obs.tracker,
+    });
     emit({ command, outcome: "ok", ...fields });
     return EXIT.ok;
   } catch (e) {
@@ -202,6 +242,7 @@ interface Ctx {
   config: AdminConfig;
   flags: Map<string, string | true>;
   io: AdminIo;
+  alerts: ErrorTracker;
 }
 
 function mailer(ctx: Ctx): { mailer: Mailer; notifications: Notifications } {
@@ -225,6 +266,7 @@ function mailer(ctx: Ctx): { mailer: Mailer; notifications: Notifications } {
       clock,
       logger,
       dailyQuota: e.dailyQuota,
+      alerts: ctx.alerts,
     }),
     notifications: new Notifications(origin),
   };

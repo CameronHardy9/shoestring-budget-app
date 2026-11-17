@@ -6,10 +6,17 @@
 // - index.html has no inline script or style (strict CSP), and source maps
 //   are hidden (not referenced from the JS/CSS)
 // - initial JS and CSS stay inside the ARCHITECTURE budget (gzip)
+// - F-50: the link-token capture is the first <script>, self-contained, and
+//   the initial files carry no Sentry code (dist-checks.ts)
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import {
+  checkBootFirst,
+  checkNoInitialSentry,
+  type DistReader,
+} from "./dist-checks.ts";
 
 const DIST = fileURLToPath(new URL("../dist/", import.meta.url));
 const SENTINEL = "__SHOESTRING_DEV_PREVIEW__";
@@ -76,6 +83,15 @@ if (js > BUDGET.js)
   errors.push(`initial JS ${js} B gzip exceeds ${BUDGET.js} B`);
 if (css > BUDGET.css)
   errors.push(`initial CSS ${css} B gzip exceeds ${BUDGET.css} B`);
+
+const reader: DistReader = {
+  read: (path) =>
+    existsSync(join(DIST, path))
+      ? readFileSync(join(DIST, path), "utf8")
+      : null,
+};
+errors.push(...checkBootFirst(html, reader));
+errors.push(...checkNoInitialSentry(initial, reader));
 
 // PWA: the worker and manifest exist; the worker precaches no API path, no
 // source map, and nothing outside this build.

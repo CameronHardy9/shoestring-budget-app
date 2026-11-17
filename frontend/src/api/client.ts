@@ -23,6 +23,7 @@ import {
 } from "./errors.ts";
 import { uuidV4 } from "./ids.ts";
 import type { paths } from "./schema.gen.ts";
+import { reportError } from "../observability/report.ts";
 import { getCsrfToken, setLastRequestId } from "./session.ts";
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
@@ -137,8 +138,14 @@ export async function unwrap<D>(request: Promise<ApiResult<D>>): Promise<D> {
     }
     throw error;
   }
-  throw new UnexpectedResponseError(
+  const unexpected = new UnexpectedResponseError(
     response.status,
     response.headers.get(REQUEST_ID_HEADER),
   );
+  // Not a contract ErrorBody (a proxy's page, a broken body): the backend may
+  // never have seen it, so it goes to error tracking, tagged with the
+  // requestId. ApiErrors are not reported here: the backend reports its 5xx
+  // and 4xx are expected (errors.md).
+  reportError(unexpected, { type: "api", handled: true });
+  throw unexpected;
 }
