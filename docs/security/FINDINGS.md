@@ -32,6 +32,8 @@ Status values:
 
 **Sentry follow-ups review (2026-11-17, branch `fix/sentry-followups`, uncommitted tree on 704e2cd):** no Critical or High findings. **Approve.** **F-60** and **F-61** are fixed and verified. **F-59** is fixed and verified for every case it named, on both sides. Two narrower residuals remain, so they are filed as **F-62** (Low, defence in depth, not blocking): on the web, a message line that holds `(error: …)` is rewritten by the SDK's parser, so the "came from the message" check misses it; and on both sides, a message shortened after `.stack` was first read leaves a stale header. Either way, at most one identifier-shaped word and two integers get through, and there is still no trigger. Triage of the 4 open CodeQL alerts on main: none is a real issue (#1, #2 and #4 are false positives; #3 is won't-fix). The exact dismissal text is in the section at the end. The sw-register change and the `randomPassword()` test helper add no risk. Details are under "Sentry follow-ups review" at the end.
 
+**PR #20 audit, picomatch GHSA-fc5q-39xc-vjpf (2026-11-17):** a high-severity ReDoS in dev tooling only (vite, vitest, typescript-eslint through tinyglobby and fdir). It is not in any production dependency tree, not bundled, and never fed untrusted patterns, so it is **not exploitable**. **I signed off** on the time-boxed osv-scanner ignore: exact ID, `effectiveUntil = 2026-12-17` (checked against the osv-scanner v2.7.1 source: the advisory fails the gate again on that date, and unknown keys fail the scan), listed in the audit summary, thresholds unchanged. Details are at the end.
+
 ## Summary
 | ID | Sev | Owner → implements | Issue (first review) | Status | Note (re-review 2026-11-13) |
 |---|---|---|---|---|---|
@@ -1317,3 +1319,30 @@ None of these gets an F-number. If the owner prefers code to a dismissal for #4,
   - **GitHub environment auto-created without a branch policy (2026-11-17):** I checked that there was no exposure. The only deployment to `sentry` is from `main` (704e2cd, 14:18Z). `SENTRY_AUTH_TOKEN` was created at 15:11Z. The policy now allows `main` only (`custom_branch_policies: true`, one rule, `main`). The runbook now creates the environment before any workflow refers to it.
   - ci.yml header nit fixed.
 - **Sentry CLI login on the owner's Mac (new operational credential, Info):** an OAuth session with `project:write` and `alerts:write`, until about 2026-12-15. Any local process, including agent sessions, could use it to turn project-level protections off (`scrubIPAddresses`, `scrapeJavaScript`, Allowed Domains) or silence the A2/A6 alert rules. It can't change org-level Security & Privacy (that needs `org:write`). The runbook already says to log out after step 13. **Recommendation: log out as soon as step 13 is done, and don't keep the session for convenience.** Re-run the canary (sentry-data-check.md) after any CLI write to project settings. Added to the threat model (T133).
+
+### PR #20 audit: picomatch GHSA-fc5q-39xc-vjpf, time-boxed osv ignore: **signed off** (security-reviewer, 2026-11-17)
+The advisory is picomatch@4.0.7, GHSA-fc5q-39xc-vjpf (CVE-2026-112366, CVSS 8.7): a ReDoS from attacker-supplied extglob patterns, affecting every version through 4.0.7, with no patched release. **I ruled it not exploitable here.** It is not an F-number.
+
+**Reachability, checked by me:**
+- **Who pulls it in:** in pnpm-lock.yaml, picomatch@4.0.7's only parents are `fdir@6.5.0`, `tinyglobby@0.2.17`, `vite@8.3.7` and `vitest@5.1.0`, all dev tooling. typescript-eslint comes in through tinyglobby.
+- **Not in the production dependency tree:** `pnpm why picomatch --prod` is empty in backend/ and frontend/. The control query, `pnpm why pg --prod`, resolves, so the empty result is real.
+- **Not imported by shipped code:** no file in backend/src, db/src, frontend/src or frontend/sw imports picomatch, tinyglobby, fdir or micromatch.
+- **Not bundled:** picomatch, tinyglobby and fdir appear in none of the 34 frontend/dist maps and none of the 4 backend/dist maps, and no built JS file contains them. They are not in `bundled-runtime-packages.json`, so the F-61 rule doesn't make them runtime code.
+- **Where the patterns come from:** only the repo's own configs (vite, vitest and eslint include/exclude lists). Nothing a user, the API or a fork PR sends reaches them at run time. A fork PR that edits those configs can only slow its own read-only CI run.
+
+**The ignore (.github/osv-scanner.toml, .github/scripts/audit.sh), reviewed against osv-scanner v2.7.1 source (the pinned image):**
+- **Exact ID only:** one `[[IgnoredVulns]]` with `id = "GHSA-fc5q-39xc-vjpf"`. `FindVulnIgnore` matches by equal ID, with no wildcards and no package-wide ignore.
+- **Expiry fails again:**
+  - In v2.7.1, `effectiveUntil` is the current key; `ignoreUntil` is deprecated.
+  - `isInEffect` is `effectiveUntil.After(time.Now())`, so the date `2026-12-17` stops applying at 00:00 UTC that day. The advisory then reappears in osv.json and fails the gate.
+  - `tryLoadConfig` rejects unknown keys. A misspelled key therefore fails the scan (exit > 1, audit FAIL) instead of quietly making the ignore permanent.
+- **Visible:** audit.sh lists every entry with its state (active, expired, or NO EXPIRY), both after the osv step and in the final summary. It also reports unused entries taken from the osv log.
+- **Thresholds unchanged:** still CVSS ≥ 7.0 or unscored fails. The `groups`/`high` jq logic is untouched. The only change to the scan is `--config`.
+- **The `reason` text is accurate**, including "security-reviewer sign-off".
+
+**Notes for ci-engineer (Info, not blocking):**
+1. On 2026-12-17 itself, the summary still says "active until 2026-12-17", while osv has already stopped applying the ignore. The build fails correctly, but the label is a day late. Use `!(until > today)` for the "expired" test.
+2. The ignore is keyed by advisory ID, not by package scope. If picomatch enters a *production* dependency tree before 2026-12-17 without being bundled, the ignore would hide it. build.test.ts catches it only if it gets bundled into the backend. Before extending or re-ignoring, re-run `pnpm why picomatch --prod` in backend/ and frontend/; any result there means the ignore must go.
+3. The "unused" detection greps for osv's exact wording (`has unused ignores`). If a future osv version rewords it, the report goes quiet.
+
+**Re-check:** when picomatch > 4.0.7 ships (bump it and delete the entry), or on 2026-12-17, whichever comes first. Any extension needs a fresh sign-off.

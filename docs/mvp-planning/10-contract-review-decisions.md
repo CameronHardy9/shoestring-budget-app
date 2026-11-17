@@ -137,3 +137,5 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Old CodeQL alerts on main (#1–#4) | #1, #2, #4 **dismissed as false positives** by the tech lead (owner-authorized) with the security-reviewer's justification; **#3 fixed** in code (`readdirSync` withFileTypes) rather than dismissed. |
 | F-62 (Low, residual of F-59) | **Later Low follow-up** before launch (with the offline PR or its own small PR). |
 | Sentry CLI login on the owner's Mac | **Keep until bootstrap step 13 is done, then log out** and revoke under Authorized Applications. |
+| picomatch@4.0.7 high advisory (GHSA-fc5q-39xc-vjpf, ReDoS; dev tooling only, not bundled, no patched release) | **Time-boxed osv-scanner ignore for exactly this advisory until 2026-12-17**, reason recorded and printed by `make audit`; security-reviewer signs off; remove when picomatch > 4.0.7 ships. |
+| Dependabot alerts and security updates (were off) | **Turned on** by the tech lead via `gh api` (owner-authorized, this once), so transitive fixes such as a patched picomatch arrive as PRs. |

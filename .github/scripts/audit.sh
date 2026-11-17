@@ -10,6 +10,9 @@
 #   semgrep      ERROR / HIGH / CRITICAL fail; WARNING / MEDIUM and below are reported
 #   osv-scanner  CVSS >= 7.0 fails, and so does a vulnerability with no score
 #                (for example a malicious-package MAL- advisory)
+#                Time-boxed ignores for single advisory IDs live in
+#                .github/osv-scanner.toml (id + effectiveUntil + reason, no wildcards);
+#                the summary lists every one so an ignore is never silent.
 #   zizmor       high fails; lower findings are reported
 #
 # Triage (F-61): osv-scanner gates dev and prod dependencies alike. When
@@ -111,9 +114,11 @@ fi
 
 # --- osv-scanner: pnpm-lock.yaml ----------------------------------------------
 log "osv-scanner: dependencies in pnpm-lock.yaml"
+OSV_CONFIG=.github/osv-scanner.toml
 set +e
 docker run --rm "${as_user[@]}" -v "$ROOT:/src:ro" "$(tool_image osv-scanner)" \
-  scan source --lockfile /src/pnpm-lock.yaml --format json >"$OUT/osv.json" 2>"$OUT/osv.log"
+  scan source --config "/src/$OSV_CONFIG" --lockfile /src/pnpm-lock.yaml --format json \
+  >"$OUT/osv.json" 2>"$OUT/osv.log"
 osv_rc=$?
 set -e
 # Exit 0 = no vulnerabilities, 1 = vulnerabilities found; anything else is an error.
@@ -134,6 +139,26 @@ else
     record osv-scanner PASS "${pkgs:-lockfile scanned}, $total vulnerabilities, none high"
   fi
 fi
+# List every ignore in the osv config with its expiry. osv-scanner stops applying
+# an ignore after its effectiveUntil date, so an expired one gates the build again.
+today="$(date -u +%F)"
+declare -a OSV_IGNORES=()
+while read -r id until; do
+  [ -n "$id" ] || continue
+  state="active until $until"
+  [ -z "$until" ] && state="NO EXPIRY (add effectiveUntil)"
+  [ -n "$until" ] && ! [[ "$until" > "$today" ]] && state="expired $until, gating again"
+  OSV_IGNORES+=("osv ignore: $id  $state")
+done < <(awk -F'=' '
+  /^\[\[IgnoredVulns\]\]/ { if (id != "") print id, until; id = ""; until = "" }
+  /^[[:space:]]*id[[:space:]]*=/ { v = $2; sub(/#.*/, "", v); gsub(/[" \t]/, "", v); id = v }
+  /^[[:space:]]*(effectiveUntil|ignoreUntil)[[:space:]]*=/ { v = $2; sub(/#.*/, "", v); gsub(/[" \t]/, "", v); until = substr(v, 1, 10) }
+  END { if (id != "") print id, until }
+' "$ROOT/$OSV_CONFIG")
+if grep -q 'has unused ignores' "$OUT/osv.log" 2>/dev/null; then
+  OSV_IGNORES+=("osv ignore: unused entries in $OSV_CONFIG, remove them: $(sed -n '/has unused ignores/,$s/^ - //p' "$OUT/osv.log" | tr '\n' ' ')")
+fi
+for line in "${OSV_IGNORES[@]+"${OSV_IGNORES[@]}"}"; do note "$line"; done
 F61_NOTE="Triage (F-61): a devDependency bundled into backend dist/ or the frontend bundle (e.g. @sentry/node) is a runtime dependency, not dev-only"
 note "$F61_NOTE"
 
@@ -160,6 +185,7 @@ fi
 
 log "make audit summary ($(elapsed))"
 for line in "${SUMMARY[@]}"; do note "$line"; done
+for line in "${OSV_IGNORES[@]+"${OSV_IGNORES[@]}"}"; do note "$line"; done
 note "$F61_NOTE"
 note "Reports: .audit/ (gitignored)"
 if [ "$failed" -ne 0 ]; then die "make audit failed: fix the findings above (never dismiss them to get green)."; fi

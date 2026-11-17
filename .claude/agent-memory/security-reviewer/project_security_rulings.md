@@ -86,4 +86,8 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - The owner keeps the Sentry org slug and project IDs in the public repo (they are already public through the DSN). The auto-created GitHub `sentry` environment had no exposure (the secret was created after the only deploy, which was from main).
   - Info (T133): the Sentry CLI OAuth login on the owner's Mac has `project:write` and `alerts:write`. Recommend logging out after step 13.
 
+- **osv ignore policy (PR #20, 2026-11-17).** I signed off on `.github/osv-scanner.toml` ignoring picomatch GHSA-fc5q-39xc-vjpf until 2026-12-17: dev tooling only, not in the prod tree, not bundled.
+  - osv-scanner v2.7.1 uses `effectiveUntil` (`ignoreUntil` is deprecated) and rejects unknown keys, so a misspelled expiry fails the scan instead of becoming permanent.
+  - Ignores are keyed by advisory ID, not package scope. Before any extension, re-run `pnpm why <pkg> --prod` in backend/ and frontend/. Any extension needs a fresh sign-off.
+
 Related: [[project-review-hotspots]]
