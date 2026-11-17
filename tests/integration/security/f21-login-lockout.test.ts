@@ -7,9 +7,9 @@
 // the stack trusts exactly that one hop (F-08). Owner of a failure:
 // backend-engineer (or ci-engineer if every IP-dependent test fails at once:
 // the edge or TRUST_PROXY_HOPS changed).
-import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createUser } from "../../support/factories.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import type { TestUser } from "../../support/factories.ts";
 import { ApiClient, codeOf } from "../../support/http.ts";
 import { emails, lastEmail, tokenFromLink } from "../../support/hooks.ts";
@@ -42,7 +42,7 @@ async function resetFrom(ip: string, user: TestUser): Promise<string> {
   const token = tokenFromLink(
     (await lastEmail(user.email, "password_reset")).links[0]!,
   );
-  const newPassword = `pw-${randomUUID()}`;
+  const newPassword = randomPassword();
   const done = await c.post("/auth/password-reset/complete", {
     token,
     newPassword,

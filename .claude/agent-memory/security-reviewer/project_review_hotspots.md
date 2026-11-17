@@ -75,6 +75,11 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - **Alert thresholds vs cutoffs.** If a detective alert sits above a cutoff that the attacker's traffic can't cross (non-priority mail stops at 60%, alert at 80%), the alert never fires for that attack (F-60). Compare every alert threshold with the limit it is meant to watch.
     - **devDependencies bundled into dist are runtime code** (@sentry/node). Never dismiss their advisories as dev-only (F-61). Check the dist chunk's source map to see what actually ships.
 
+16. **Sentry follow-ups (2026-11-17).**
+    - **"Is this text from the message?" checks must see what the parser saw.** @sentry/core `createStackParser` rewrites `(error: X)` to `X` in each line before parsing, so verbatim-substring checks against the raw message miss crafted lines (F-62). To test any frame filter, run the real `defaultStackParser` from node_modules under Node 24 (scrub.ts imports fine with type stripping), not a hand-written stack.
+    - **V8 fixes the `stack` header at the first `.stack` read.** If the message is mutated after that, any header-length logic built from the current `message` is wrong. A shorter message exposes old lines as frames. Fail closed with an exact-prefix check.
+    - CodeQL's `js/insufficient-password-hash` fires on HIBP SHA-1 and on keyed HMACs (recovery codes, throttle keys) by name heuristics. These are false positives under the F-04 design.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

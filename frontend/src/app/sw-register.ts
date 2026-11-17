@@ -24,9 +24,14 @@ export function useUpdateAvailable(): boolean {
   );
 }
 
+/** Set by applyUpdate: the person chose "Reload", so a takeover reloads. */
+let updateRequested = false;
+
 /** Activates the waiting worker; the page reloads when it takes control. */
 export function applyUpdate(): void {
-  waiting?.postMessage("skip-waiting");
+  if (!waiting) return;
+  updateRequested = true;
+  waiting.postMessage("skip-waiting");
 }
 
 const CHECK_EVERY_MS = 60_000;
@@ -37,15 +42,19 @@ const CHECK_EVERY_MS = 60_000;
  * the new worker's clients.claim() also fires controllerchange, and a reload
  * would throw away in-memory state the person never chose to lose, such as an
  * emailed link's token (auth.md §4) on a first visit from that email.
+ * "Updated" means the page was controlled at load, or this tab asked for the
+ * update (`requested`): a tab whose first controller came by that claim has
+ * no controller at load, yet must still reload after its own "Reload".
  */
 export function reloadOnTakeover(
   container: Pick<ServiceWorkerContainer, "controller" | "addEventListener">,
   reload: () => void,
+  requested: () => boolean = () => updateRequested,
 ): void {
   const hadController = container.controller !== null;
   let reloading = false;
   container.addEventListener("controllerchange", () => {
-    if (!hadController || reloading) return;
+    if (reloading || !(hadController || requested())) return;
     reloading = true;
     reload();
   });

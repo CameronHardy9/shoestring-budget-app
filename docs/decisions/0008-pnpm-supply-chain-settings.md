@@ -1,5 +1,5 @@
 # ADR-0008: pnpm 10 with supply-chain settings
-- Status: Accepted (owner, 2026-11-12)
+- Status: Accepted (owner, 2026-11-12); amended 2026-11-17 (advisory triage of bundled code, F-61)
 - Date: 2026-11-13
 - Areas affected: ci, frontend, backend, data, tests, security
 - Inputs: ci-engineer request; security finding F-16; owner decision "pnpm 10.34.9 with its supply-chain settings" (mvp-planning/10)
@@ -29,3 +29,6 @@ The repo is public, and CI holds deploy and backup identities. A compromised npm
 - New dependencies can be up to 7 days behind upstream. The occasional urgent bump needs the documented exclusion.
 - ci-engineer owns `pnpm-workspace.yaml`/`.npmrc` settings and the CI checks that they are present. security-reviewer reviews any `onlyBuiltDependencies` or exclusion change.
 - Contributors need Corepack enabled, with Node 24 (ADR-0001).
+
+## Amendments
+- **2026-11-17 (owner ruling, mvp-planning/10 round 8, F-61): bundled code is runtime for advisory triage.** Anything bundled into a runtime artifact (the backend `dist/` or the frontend bundle) is a runtime dependency for advisory triage, even when `package.json` lists it under `devDependencies`. Dependabot's "Development dependency" label and its absence from `pnpm audit --prod` are not grounds to dismiss an advisory. Before dismissing one as dev-only, the triager confirms that the package does not appear in either artifact. The motivating case is `@sentry/node` (with `@sentry/core`, `@sentry/server-utils`, `@sentry/opentelemetry` and `@opentelemetry/api`): a backend devDependency that ships in `dist/chunks/esm-*.js` and runs on every 5xx. osv-scanner already reads the whole lockfile, so `make audit` is unchanged; this rule governs triage, not the scan.

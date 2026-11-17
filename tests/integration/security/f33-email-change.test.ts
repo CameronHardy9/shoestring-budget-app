@@ -6,9 +6,9 @@
 //      B → C and leaves cancel_A open; cancel_A then reverts to A and deletes
 //      every cancel token created after it.
 // POST /me/email-change answers at a fixed 1 s (F-22), so calls are few.
-import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { adminQuery } from "../../support/db-locks.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import { createUser, uniqueEmail } from "../../support/factories.ts";
 import { ApiClient, codeOf, detailsOf } from "../../support/http.ts";
 import {
@@ -170,7 +170,7 @@ describe("F-33 regression 2: the cancel-token chain (seeded through the database
     expect(
       (
         await client.post("/me/password", {
-          newPassword: `pw-${randomUUID()}`,
+          newPassword: randomPassword(),
         })
       ).status,
     ).toBe(204);

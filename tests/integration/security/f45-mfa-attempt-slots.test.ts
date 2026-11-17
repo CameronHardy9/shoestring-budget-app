@@ -7,13 +7,13 @@
 // "In flight" is made deterministic, not timed: an EXCLUSIVE lock on
 // auth_throttles stops a verify after it reserved its session slot and before
 // it charges the per-user budget (the reserve-first order of auth.md §6).
-import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createUserWithTotp,
   nextTotpStep,
   startMfaSignIn,
 } from "../../support/auth.ts";
+import { randomPassword } from "../../support/passwords.ts";
 import type { MfaUser } from "../../support/auth.ts";
 import { holdExclusiveLock } from "../../support/db-locks.ts";
 import { ApiClient, codeOf } from "../../support/http.ts";
@@ -166,7 +166,7 @@ describe("F-45: the per-user budget of 20 failed checks per 24 h", () => {
       "/auth/password-reset/complete",
       {
         token: t.token,
-        newPassword: `pw-${randomUUID()}`,
+        newPassword: randomPassword(),
         mfa: { method: "totp", code: totp(u.secret, now()) },
       },
     );
@@ -191,7 +191,7 @@ describe("F-45: at most 5 checks per password-reset token", () => {
       Array.from({ length: 10 }, () =>
         c.post("/auth/password-reset/complete", {
           token: t.token,
-          newPassword: `pw-${randomUUID()}`,
+          newPassword: randomPassword(),
           mfa: { method: "totp", code: wrongTotp(u.secret, now()) },
         }),
       ),

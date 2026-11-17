@@ -23,7 +23,8 @@ rm "$F"
 - `request` has no `query_string`, `fragment`, `cookies`, `data`, or headers other than `User-Agent`.
 - Tags are only `requestId`, `userId`, `route`, `release`, plus Sentry's own (`environment`, `level`, `browser`, `os`, `runtime`, `handled`, `mechanism`, `monitor.slug`).
 - Breadcrumbs carry method, path and status only, never a query or a body.
-- A `[Filtered]` value is a **pass**: the server-side scrubber caught it. Still tell the tech lead which field it was, because the SDK should not have sent it (defence in depth).
+  - **Expected `[Filtered]` paths:** a path containing a sensitive-field word is replaced whole, for example `/api/me/sessions` (`session`), `/api/auth/password-reset/…` (`password`) and `/api/me/mfa/recovery-codes` (`code`). That is the org's Global Sensitive Fields scrubbing values that **contain** the word (bootstrap-production.md step 11b, S2). It is **not** an SDK leak and needs no report.
+- A `[Filtered]` value is a **pass**: the server-side scrubber caught it. Except for the expected breadcrumb paths above, still tell the tech lead which field it was, because the SDK should not have sent it (defence in depth).
 
 Anything else → step 3.
 
@@ -47,8 +48,19 @@ grep -c SSCONTROL ~/Downloads/canary.json     # must print 1 or more: the event 
 jq '.user' ~/Downloads/canary.json            # no ip_address and no geo
 rm ~/Downloads/canary.json
 ```
-- **Pass:** both counts are as stated, and `user` has no `ip_address` or `geo`. Delete the canary issue (step 3a) so it doesn't sit in the issue list.
-- **Fail:** stop. Re-check the Security & Privacy settings (bootstrap-production.md step 11b, S5). If they are correct and the canary still fails, tell the tech lead and security-reviewer **before** real users arrive.
+**Or check it through the API** (no download; needs the Sentry CLI login, bootstrap-production.md step 11b "Sentry CLI"). Use the `event_id` the script printed:
+```sh
+export SENTRY_ORG=cameron-hardy EVENT_ID="<event_id from the canary run>"
+for p in shoestring-api shoestring-web; do      # run once per project, with that project's event_id
+  sentry api "projects/$SENTRY_ORG/$p/events/$EVENT_ID/" > "$TMPDIR/canary.json" || continue
+  grep -c SSCANARY "$TMPDIR/canary.json"; grep -c SSCONTROL "$TMPDIR/canary.json"; jq '.user' "$TMPDIR/canary.json"
+done
+rm -f "$TMPDIR/canary.json"; unset EVENT_ID
+```
+The `|| continue` skips the project that doesn't hold this event ID. The pass rule is the same.
+- **Pass:** both counts are as stated, and `user` has no `ip_address` or `geo`. Then delete the canary issue in the **UI** (step 3, item 1) so it doesn't sit in the issue list. Deleting needs `event:admin`, which the CLI login doesn't have.
+- **Last pass: 2026-11-17, both projects** (bootstrap). That run also confirmed that Global Sensitive Fields remove a **value** containing a sensitive word under a harmless key: the canary's `extra.note` (`"payee SSCANARY-…-value-match"`) was scrubbed.
+- **Fail:** stop. Re-check the Security & Privacy settings (bootstrap-production.md step 11b, S2 and S4). If they are correct and the canary still fails, tell the tech lead and security-reviewer **before** real users arrive.
 - The canary uses environment `smoke` and level `info`, so the production alert rules (`environment = production`) stay quiet.
 
 ## 3. A leak was found: purge it

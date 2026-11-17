@@ -164,7 +164,7 @@ flowchart LR
 - **Email.** One adapter interface with three transports: console (local dev), test (in-memory outbox; test-hooks.md), and provider (Resend on `mail.<domain>`, Brevo as fallback).
   - Messages are **plain text only**, with click and open tracking disabled and links built only from `APP_ORIGIN`.
   - User text is escaped, never linkified, and length-capped (F-29). Emails never contain financial data.
-  - Sends are counted per UTC day: past 60% of `EMAIL_DAILY_QUOTA` only priority mail goes out; at 100% all mail stops. Sentry alerts the owner at 80% (`warning`) and 100% (`error`) (auth.md §14, F-09, alert A6).
+  - Sends are counted per UTC day: past 60% of `EMAIL_DAILY_QUOTA` only priority mail goes out, and Sentry raises a `warning` to the owner at that same cutoff; at 100% all mail stops and Sentry raises an `error` (auth.md §14, F-09, F-60, alert A6).
   - Provider timeout is 700 ms. Enumeration-sensitive endpoints answer at a fixed 1 s (F-22).
 - **Health (sre proposal, adopted).**
   - `GET /api/healthz`: the process is up; no DB access. This is the Cloud Run **startup probe** and the uptime monitor's target, so neither wakes Neon, and a Neon outage does not take the SPA down.

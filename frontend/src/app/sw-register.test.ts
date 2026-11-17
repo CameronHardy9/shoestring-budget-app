@@ -29,4 +29,28 @@ describe("service worker takeover", () => {
     c.dispatchEvent(new Event("controllerchange"));
     expect(reload).toHaveBeenCalledOnce();
   });
+
+  it("reloads after this tab's own Reload even if its first controller came by claim", () => {
+    const c = container(null);
+    const reload = vi.fn();
+    let requested = false;
+    reloadOnTakeover(c, reload, () => requested);
+    // The first install's claim: no reload, the link token survives.
+    c.dispatchEvent(new Event("controllerchange"));
+    expect(reload).not.toHaveBeenCalled();
+    // Later the person taps "Reload to update"; the new worker takes over.
+    requested = true;
+    c.dispatchEvent(new Event("controllerchange"));
+    c.dispatchEvent(new Event("controllerchange"));
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it("does not count an update nobody asked for in this tab", () => {
+    const c = container(null);
+    const reload = vi.fn();
+    reloadOnTakeover(c, reload, () => false);
+    c.dispatchEvent(new Event("controllerchange"));
+    c.dispatchEvent(new Event("controllerchange"));
+    expect(reload).not.toHaveBeenCalled();
+  });
 });

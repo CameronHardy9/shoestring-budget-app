@@ -16,7 +16,7 @@ Owner: sre. Status: **DRAFT, configured by the owner during bootstrap** (docs/ru
 | A3 | **Purge failed or missed** | Sentry cron monitor `purge` + alert `purge-cron` | Schedule `0 8 * * *` UTC, check-in margin 60 min, max runtime 15 min, failure tolerance 1; alert on a missed, timed-out or failed check-in | email (Gmail push) | docs/runbooks/purge-failed.md |
 | A4 | **Backup missed or failed** | Better Stack heartbeat `shoestring-backup` | No ping for 24 h + 2 h grace, or a `/fail` ping | email + Better Stack push | docs/runbooks/backup-missed.md |
 | A5 | **Billing** | GCP budgets `shoestring-prod-1usd`, `shoestring-backup-1usd` | Actual $0.01 / $0.50 / $1.00, forecast $1.00; the spend cap reached | email | docs/runbooks/billing-alert.md |
-| A6 | **Email quota** (F-09) | Sentry alerts `email-quota-warning` and `email-quota-exhausted` | The email adapter sends a `warning` event when the day's sends reach 80% of `EMAIL_DAILY_QUOTA` (80 of Resend's 100/day), and an `error` event at 100%. Both use fingerprint `email-quota-threshold`, and their fixed message starts with `email_quota_threshold:`. | email (Gmail push) | docs/runbooks/email-quota.md |
+| A6 | **Email quota** (F-09) | Sentry alerts `email-quota-warning` and `email-quota-exhausted` | The email adapter sends a `warning` event when the day's sends reach 60% of `EMAIL_DAILY_QUOTA` (60 of Resend's 100/day), the cutoff where non-priority mail such as password resets and budget invitations stops, and an `error` event at 100% (F-60, owner ruling 2026-11-17). Both use fingerprint `email-quota-threshold`, and their fixed message starts with `email_quota_threshold:`. | email (Gmail push) | docs/runbooks/email-quota.md |
 A3 and A6 need backend support (cross-area requests in the sre report).
 
 ## Sentry (Developer free plan)
@@ -79,8 +79,8 @@ SDK settings the code must use (backend and frontend own them; listed so the set
 - `error-new` (A2): error issue new, regressed or escalating. Throttle 30 min.
 - `error-spike` (A2): more than 10 events in 15 min on one error issue. Throttle 30 min. Sentry offers no 10-minute window.
 - `purge-cron` (A3): source = monitor `purge`. Every trigger.
-- `email-quota-warning` (A6): message contains `email_quota_threshold` (underscores; the fingerprint uses hyphens), level `warning`. Throttle 12 h.
-- `email-quota-exhausted` (A6): same message match, level ≥ `error`. Throttle 12 h.
+- `email-quota-warning` (A6, 60%): message contains `email_quota_threshold` (underscores; the fingerprint uses hyphens), level `warning`. Throttle 12 h.
+- `email-quota-exhausted` (A6, 100%): same message match, level ≥ `error`. Throttle 12 h. Neither rule matches the percentage, so the F-60 move from 80% to 60% needed no rule change.
 
 **Cron monitor:** slug `purge`, project `shoestring-api`, crontab `0 8 * * *` UTC, check-in margin 60 min, max runtime 15 min, failure tolerance 1, recovery tolerance 1, owner = the owner. If the backend's SDK upserts the monitor config, it must send these same values.
 

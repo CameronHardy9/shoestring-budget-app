@@ -3,7 +3,6 @@
 // both see the same budget and each other's transactions. Also: the owner
 // transfers ownership, deletes the budget and undoes the deletion; members are
 // emailed on deletion and restore.
-import { randomUUID } from "node:crypto";
 import type { Browser, Page, TestInfo } from "@playwright/test";
 import {
   addMember,
@@ -11,6 +10,7 @@ import {
   createUser,
   uniqueEmail,
 } from "../support/factories.ts";
+import { randomPassword } from "../support/passwords.ts";
 import type { TestBudget } from "../support/factories.ts";
 import { endsWithRegex } from "../support/regex.ts";
 import {
@@ -93,7 +93,7 @@ test.describe("J6 share a budget", () => {
     await partner.getByLabel("Your name").fill("Sam Partner");
     await partner
       .getByLabel("Password", { exact: true })
-      .fill(`pw-${randomUUID()}`);
+      .fill(randomPassword());
     await partner.getByTestId("sign-up-submit").click();
     await expect(
       partner.getByRole("heading", { name: "Set up your budget" }),

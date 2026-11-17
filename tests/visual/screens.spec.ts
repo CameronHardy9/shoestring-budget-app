@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import type { Page } from "@playwright/test";
 import { DEFAULT_NOW, signupInvite } from "../support/hooks.ts";
+import { randomPassword } from "../support/passwords.ts";
 import { ApiClient } from "../support/http.ts";
 import type { CspViolation, CspViolations } from "../e2e/fixtures.ts";
 import {
@@ -100,7 +101,7 @@ async function household(page: Page): Promise<{ id: string }> {
   const signup = await api.post("/auth/signup", {
     token: await signupInvite(email),
     displayName: "Robin Visual",
-    password: `pw-${randomUUID()}`,
+    password: randomPassword(),
   });
   expect(signup.status).toBe(201);
   const created = await api.post<{ id: string }>(

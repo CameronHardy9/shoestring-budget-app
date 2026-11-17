@@ -22,7 +22,7 @@ import type {
   StackFrame,
 } from "@sentry/node";
 import type { SafeError } from "../logging.ts";
-import { serializeError } from "../logging.ts";
+import { FUNCTION_NAME, serializeError } from "../logging.ts";
 
 export interface ErrorContext {
   requestId: string;
@@ -36,7 +36,7 @@ export interface ErrorContext {
 export const ALERTS = {
   emailQuotaWarning: {
     level: "warning",
-    message: "email_quota_threshold: 80% of EMAIL_DAILY_QUOTA used today",
+    message: "email_quota_threshold: 60% of EMAIL_DAILY_QUOTA used today",
     fingerprint: ["email-quota-threshold"],
   },
   emailQuotaReached: {
@@ -95,7 +95,6 @@ const SAFE_TOKEN = /^[A-Za-z0-9_.$:-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const REQUEST_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const ROUTE = /^\/[A-Za-z0-9/:_.*-]{0,200}$/;
-const FUNCTION = /^[A-Za-z0-9_.$<>[\] -]{1,200}$/;
 const FILENAME = /^[A-Za-z0-9_./:@+-]{1,300}$/;
 const SAFE_FIELDS = ["code", "constraint", "table", "column"] as const;
 const VALUE = new RegExp(
@@ -148,7 +147,7 @@ function cleanFrame(f: StackFrame): StackFrame {
   const out: StackFrame = {};
   if (typeof f.filename === "string" && FILENAME.test(f.filename))
     out.filename = f.filename;
-  if (typeof f.function === "string" && FUNCTION.test(f.function))
+  if (typeof f.function === "string" && FUNCTION_NAME.test(f.function))
     out.function = f.function;
   if (Number.isSafeInteger(f.lineno)) out.lineno = f.lineno;
   if (Number.isSafeInteger(f.colno)) out.colno = f.colno;
@@ -207,8 +206,15 @@ export function errorEvent(
 /**
  * beforeSend: rebuilds the event from the allowlist. Applied to every event,
  * including ones the SDK built itself from a raw error (uncaught exceptions).
+ * `original` is the hint's originalException: when the SDK parsed its stack,
+ * its frames are replaced by ours (F-59: the SDK skips only the first line,
+ * so a multi-line message could add frames of its own).
  */
-export function scrubEvent(event: Event, root: string): ErrorEvent {
+export function scrubEvent(
+  event: Event,
+  root: string,
+  original?: unknown,
+): ErrorEvent {
   const out: Event = {};
   if (typeof event.event_id === "string") out.event_id = event.event_id;
   if (typeof event.timestamp === "number") out.timestamp = event.timestamp;
@@ -243,7 +249,7 @@ export function scrubEvent(event: Event, root: string): ErrorEvent {
   const values = event.exception?.values;
   if (values?.length) {
     out.exception = {
-      values: values.slice(-3).map((v) => {
+      values: values.slice(-3).map((v, i, kept) => {
         const e: Exception = {
           type:
             typeof v.type === "string" && SAFE_TOKEN.test(v.type)
@@ -255,16 +261,23 @@ export function scrubEvent(event: Event, root: string): ErrorEvent {
               ? v.value
               : WITHHELD,
         };
-        const frames = v.stacktrace?.frames
-          ?.map((f) =>
-            cleanFrame({
-              ...f,
-              ...(typeof f.filename === "string"
-                ? { filename: safeFilename(f.filename, root) }
-                : {}),
-            }),
-          )
-          .slice(-50);
+        const frames =
+          original === undefined
+            ? v.stacktrace?.frames
+                ?.map((f) =>
+                  cleanFrame({
+                    ...f,
+                    ...(typeof f.filename === "string"
+                      ? { filename: safeFilename(f.filename, root) }
+                      : {}),
+                  }),
+                )
+                .slice(-50)
+            : // The outermost value is the original error; other values have
+              // no source we can parse safely, so they get no frames.
+              i === kept.length - 1
+              ? framesFrom(serializeError(original).frames ?? [], root)
+              : [];
         if (frames?.length) e.stacktrace = { frames };
         if (v.mechanism)
           e.mechanism = {
@@ -334,7 +347,8 @@ export function sentryOptions(
     // No transactions or spans exist: tracesSampleRate is 0 (v11 streams spans
     // and ignores beforeSendTransaction, so it is not set).
     beforeBreadcrumb: () => null,
-    beforeSend: (event) => scrubEvent(event, root),
+    beforeSend: (event, hint) =>
+      scrubEvent(event, root, hint.originalException),
     ...(o.transport ? { transport: o.transport } : {}),
   };
 }

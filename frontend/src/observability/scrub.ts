@@ -3,12 +3,14 @@
 // only these fields, so anything the SDK or a future integration adds is
 // dropped unless it is listed here.
 //
-//   kept: error type names and stack frames (file URL without ?/#, function,
-//         line, column), mechanism, level, release, environment, timestamp,
-//         event ID, SDK name, the route TEMPLATE (/budgets/:budgetId), the
-//         opaque user ID, the failing API response's requestId, the browser
-//         (User-Agent), and breadcrumbs reduced to fetch (method, path, status)
-//         and navigation (route templates).
+//   kept: error type names and stack frames (own hashed chunk URL without
+//         ?/# or "<external>", identifier-only function name, line, column;
+//         frames whose text came from the message are dropped: F-59),
+//         mechanism, level, release, environment, timestamp, event ID, SDK
+//         name, the route TEMPLATE (/budgets/:budgetId), the opaque user ID,
+//         the failing API response's requestId, the browser (User-Agent), and
+//         breadcrumbs reduced to fetch (method, path, status) and navigation
+//         (route templates).
 //         Error messages only when the whole message matches a reviewed
 //         SAFE_MESSAGES pattern (below); any other message becomes REDACTED.
 //   never: free-text error messages (they can quote API data: JSON.parse and
@@ -17,7 +19,8 @@
 //          bodies, headers other than User-Agent, extra, contexts, other tags.
 //
 // Pure functions with type-only Sentry imports, so they are tested without
-// the SDK (observability/scrub.test.ts) and the main bundle never loads it.
+// initialising the SDK (observability/scrub.test.ts uses only its stack
+// parser) and the main bundle never loads it.
 import type { Breadcrumb, ErrorEvent, EventHint } from "@sentry/browser";
 import { ERROR_COPY } from "../api/messages.ts";
 
@@ -50,8 +53,24 @@ export function pathOf(url: string): string {
 }
 
 const IDENTIFIER = /^[A-Za-z_$][\w$.]{0,63}$/;
-/** Stack-frame function names: code identifiers ("Object.save", "<anonymous>"). */
-const FUNCTION_NAME = /^[\w$.<>[\] ]{1,128}$/;
+/**
+ * Stack-frame function names as browsers print them, and nothing with free
+ * text (F-59): an optional "new "/"async " prefix, then identifier characters
+ * plus "." (Object.save), "<" ">" (Object.<anonymous>, Firefox's "fn/<") and
+ * "/" (Firefox nesting), then Chrome's optional " [as name]". No "@", no
+ * other spaces. Anything else (incl. Sentry's "?") becomes ANONYMOUS.
+ */
+const FUNCTION_NAME =
+  /^(?:new |async )?[\w$.<>/]{1,128}(?: \[as [\w$]{1,64}\])?$/;
+export const ANONYMOUS = "<anonymous>";
+/** A frame's file that is not one of this app's own chunks (F-59). */
+export const EXTERNAL = "<external>";
+/** Fixed browser pseudo-files: no data, worth keeping (Array.map in native). */
+const PSEUDO_FILES: ReadonlySet<string> = new Set([
+  "<anonymous>",
+  "native",
+  "[native code]",
+]);
 /**
  * A known-safe error message (owner ruling, docs/mvp-planning/10 round 8).
  * Rules, enforced by patternProblems() and its test:
@@ -73,6 +92,57 @@ const OWN_ASSET =
   "(https?://[a-z0-9.-]{1,253}(?::\\d{1,5})?)/assets/[A-Za-z0-9_-]{1,64}-[0-9a-f]{8}\\.js";
 const ownOrigin = (match: RegExpExecArray, ctx: ScrubContext) =>
   match[1] === ctx.origin;
+const OWN_ASSET_URL = new RegExp(`^${OWN_ASSET}$`);
+
+/**
+ * A stack frame's file as it may be sent (F-59): this origin's own hashed
+ * chunk (cut at ?/#), a fixed pseudo-file, or EXTERNAL. Never free text.
+ */
+export function safeFrameFile(filename: unknown, ctx: ScrubContext): string {
+  if (typeof filename !== "string") return EXTERNAL;
+  if (PSEUDO_FILES.has(filename)) return filename;
+  const bare = stripUrl(filename);
+  const match = OWN_ASSET_URL.exec(bare);
+  return match && ownOrigin(match, ctx) ? bare : EXTERNAL;
+}
+
+/** A stack frame's function name as it may be sent (F-59). */
+export function safeFrameFunction(name: unknown): string {
+  return typeof name === "string" && FUNCTION_NAME.test(name)
+    ? name
+    : ANONYMOUS;
+}
+
+/**
+ * Whether a parsed frame came from a message line rather than the real
+ * stack (F-59). V8's error.stack starts with the whole message and Sentry
+ * skips only its first line, so a frame-shaped later line ("    at x (y:1:2)")
+ * becomes a frame. Such a frame's file or "at fn " / "fn@" text is in the
+ * message after its first line. Over-matching only drops a frame.
+ */
+export function fromMessage(
+  frame: { filename?: unknown; function?: unknown },
+  tails: readonly string[],
+): boolean {
+  if (tails.length === 0) return false;
+  const { filename, function: fn } = frame;
+  const needles: string[] = [];
+  if (typeof filename === "string" && filename !== "") needles.push(filename);
+  if (typeof fn === "string" && fn !== "" && fn !== "?")
+    needles.push(`at ${fn} `, `at ${fn}(`, `${fn}@`);
+  return needles.some((n) => tails.some((t) => t.includes(n)));
+}
+
+/** Each message's text after its first line (only multi-line messages). */
+function messageTails(messages: readonly unknown[]): string[] {
+  const tails: string[] = [];
+  for (const m of messages) {
+    if (typeof m !== "string") continue;
+    const nl = m.indexOf("\n");
+    if (nl !== -1) tails.push(m.slice(nl + 1));
+  }
+  return tails;
+}
 
 export const SAFE_MESSAGES: readonly SafeMessage[] = [
   // UnexpectedResponseError (api/errors.ts): built from the status code only.
@@ -267,6 +337,15 @@ export function scrubEvent(
 ): ErrorEvent {
   const route = ctx.routeOf(pathOf(ctx.pathname));
   const requestId = requestIdOf(hint.originalException);
+  const original = hint.originalException;
+  // Every message frames may have been parsed from: the values (possibly
+  // truncated by the SDK) and the thrown error's own (F-59).
+  const tails = messageTails([
+    ...(event.exception?.values ?? []).map((v) => v.value),
+    typeof original === "object" && original !== null
+      ? (original as { message?: unknown }).message
+      : undefined,
+  ]);
   const values = (event.exception?.values ?? []).map((v) => ({
     type: safeType(v.type),
     value: safeMessage(v.value, ctx),
@@ -283,18 +362,15 @@ export function scrubEvent(
     ...(v.stacktrace?.frames
       ? {
           stacktrace: {
-            frames: v.stacktrace.frames.map((f) => ({
-              ...(typeof f.filename === "string"
-                ? { filename: stripUrl(f.filename) }
-                : {}),
-              ...(typeof f.function === "string" &&
-              FUNCTION_NAME.test(f.function)
-                ? { function: f.function }
-                : {}),
-              ...(num(f.lineno) !== undefined ? { lineno: f.lineno } : {}),
-              ...(num(f.colno) !== undefined ? { colno: f.colno } : {}),
-              ...(typeof f.in_app === "boolean" ? { in_app: f.in_app } : {}),
-            })),
+            frames: v.stacktrace.frames
+              .filter((f) => !fromMessage(f, tails))
+              .map((f) => ({
+                filename: safeFrameFile(f.filename, ctx),
+                function: safeFrameFunction(f.function),
+                ...(num(f.lineno) !== undefined ? { lineno: f.lineno } : {}),
+                ...(num(f.colno) !== undefined ? { colno: f.colno } : {}),
+                ...(typeof f.in_app === "boolean" ? { in_app: f.in_app } : {}),
+              })),
           },
         }
       : {}),

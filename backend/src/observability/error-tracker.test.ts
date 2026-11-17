@@ -269,6 +269,60 @@ describe("captureError: built from the F-07 allowlist only", () => {
     expect(events[1]!.payload.message).toBeUndefined();
   });
 
+  // F-59: V8 repeats the whole message in the stack; the SDK's own parser
+  // skips only its first line. Neither path may turn message lines into frames.
+  const fakeFrameError = () =>
+    new Error(
+      `failed for ${EMAIL}\n    at ${PAYEE} (${EMAIL}:1:2)\n    at ${MEMO} (x.js:3:4)\n    at evil.js:5:6`,
+    );
+  const framesOf = (it: Item) =>
+    (it.payload.exception as { values: { stacktrace?: { frames: Record<string, unknown>[] } }[] })
+      .values.flatMap((v) => v.stacktrace?.frames ?? []);
+
+  for (const path of ["captureError", "uncaught (SDK-built)"] as const) {
+    it(`a multi-line message with fake frames: none reaches Sentry (${path})`, async () => {
+      const { t, raw, items } = await tracker();
+      if (path === "captureError")
+        t.captureError(fakeFrameError(), { requestId: "r-1", userId: null, route: null });
+      else Sentry.captureException(fakeFrameError());
+      await t.flush();
+      expectClean(raw);
+      for (const leak of ["x.js", "evil.js", "copay"])
+        expect(raw.join("\n")).not.toContain(leak);
+      const [event] = items().filter((i) => i.type === "event");
+      const frames = framesOf(event!);
+      expect(frames.length).toBeGreaterThan(0);
+      // Only this file's real frames (base name: the repo is outside ROOT).
+      expect(frames.at(-1)).toMatchObject({ filename: "error-tracker.test.ts" });
+    });
+  }
+
+  it("beforeSend drops function names that are not identifiers", () => {
+    const e = scrubEvent(
+      {
+        exception: {
+          values: [
+            {
+              type: "Error",
+              value: "x",
+              stacktrace: {
+                frames: [
+                  { filename: "/srv/shoestring/dist/a.js", function: `${MEMO} ${EMAIL}`, lineno: 1 },
+                  { filename: "/srv/shoestring/dist/b.js", function: "new Foo.bar", lineno: 2 },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      ROOT,
+    );
+    expect(e.exception!.values![0]!.stacktrace!.frames).toEqual([
+      { filename: "app:///dist/a.js", lineno: 1 },
+      { filename: "app:///dist/b.js", function: "new Foo.bar", lineno: 2 },
+    ]);
+  });
+
   it("tags and user only when they have the expected shape", () => {
     const e = scrubEvent(
       {
@@ -453,6 +507,12 @@ describe("frame helpers", () => {
       "node:internal/process/task_queues",
     );
     expect(safeFilename("C:\\Users\\someone\\x.js", ROOT)).toBeUndefined();
+  });
+
+  it("keeps a frame's location but not a function name with spaces", () => {
+    expect(framesFrom([`at ${MEMO} (a.js:1:2)`], ROOT)).toEqual([
+      { filename: "a.js", lineno: 1, colno: 2, in_app: true },
+    ]);
   });
 
   it("ignores lines that are not frames", () => {

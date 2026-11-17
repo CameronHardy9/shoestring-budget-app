@@ -59,6 +59,8 @@ event="$(jq -nc --arg id "$id" --arg c "$c" --argjson now "$now" --arg rel "${CA
     email: ($c + "-email"), payee: ($c + "-payee"), memo: ($c + "-memo"),
     amount: ($c + "-amount"), code: ($c + "-code"), password: ($c + "-password"),
     token: ($c + "-token"), session: ($c + "-session"),
+    # Harmless key, value containing a sensitive word: proves Global Sensitive
+    # Fields also scrub matching *values*. Confirmed scrubbed 2026-11-17 (both projects).
     note: ("payee " + $c + "-value-match"),
     control: ("SSCONTROL-" + $id)
   },

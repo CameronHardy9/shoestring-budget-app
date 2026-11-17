@@ -18,6 +18,7 @@ import { ApiClient } from "./http.ts";
 import type { ApiResponse, Query } from "./http.ts";
 import { now, signupInvite, testLogin } from "./hooks.ts";
 import { dal } from "./dal.ts";
+import { randomPassword } from "./passwords.ts";
 import { totp } from "./totp.ts";
 import { enrollPasskey, SoftAuthenticator } from "./webauthn.ts";
 import type { Persona, World } from "./world.ts";
@@ -39,7 +40,6 @@ export interface Recipe {
 }
 
 const anon = (): ApiClient => new ApiClient("anonymous");
-const NEW_PASSWORD = (): string => `new-${randomUUID()}`;
 
 /** Path for an operation with its params filled in. */
 export function pathFor(
@@ -127,7 +127,7 @@ export const RECIPES: Record<string, Recipe> = {
       body: {
         token: await signupInvite(uniqueEmail("invitee")),
         displayName: "New Tester",
-        password: NEW_PASSWORD(),
+        password: randomPassword(),
       },
     }),
   },
@@ -162,7 +162,7 @@ export const RECIPES: Record<string, Recipe> = {
       await dal().tokens.issuePasswordResetToken(a.user.userId, t.hash);
       return {
         client: anon(),
-        body: { token: t.token, newPassword: NEW_PASSWORD() },
+        body: { token: t.token, newPassword: randomPassword() },
       };
     },
   },
@@ -203,7 +203,7 @@ export const RECIPES: Record<string, Recipe> = {
   },
   changePassword: {
     status: 204,
-    prepare: async () => ({ body: { newPassword: NEW_PASSWORD() } }),
+    prepare: async () => ({ body: { newPassword: randomPassword() } }),
   },
   requestEmailChange: {
     status: 202,

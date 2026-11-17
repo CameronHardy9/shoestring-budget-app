@@ -2,7 +2,8 @@
 // (auth.md §14 F-22, deviation 1), under the app-wide daily budget (F-09):
 // past 60% of EMAIL_DAILY_QUOTA only priority mail goes out; at 100% nothing.
 // Never throws: a failed or dropped send is logged with counts only.
-// A6 (observability/README.md): a Sentry `warning` at 80% and an `error` at
+// A6 (observability/README.md): a Sentry `warning` at that 60% cutoff (F-60:
+// from there on password resets and invitations are dropped) and an `error` at
 // 100% of the quota, once per UTC day each (one-shot reservations).
 import type { AppClock } from "../clock.ts";
 import { sha256 } from "../crypto/keyring.ts";
@@ -27,14 +28,28 @@ export interface MailerOptions {
   alerts?: Pick<ErrorTracker, "enabled" | "alert">;
 }
 
-/** Constant, PII-free keys like email:daily (no keyring HMAC needed). */
+/** Sends counted today from which only priority mail goes out (auth.md §14). */
+export function bulkCutoff(quota: number): number {
+  return Math.floor(quota * 0.6);
+}
+
+/**
+ * Constant, PII-free keys like email:daily (no keyring HMAC needed). The
+ * warning line is exactly the bulk cutoff (F-60): bulk mail can raise the
+ * count to the cutoff but never past it, so any higher line would never fire
+ * on a bulk flood, the case where resets silently stop.
+ */
 const QUOTA_ALERTS: readonly {
   scope: string;
-  share: number;
+  line: (quota: number) => number;
   alert: Alert;
 }[] = [
-  { scope: "email:quota_warning", share: 0.8, alert: ALERTS.emailQuotaWarning },
-  { scope: "email:quota_error", share: 1, alert: ALERTS.emailQuotaReached },
+  {
+    scope: "email:quota_warning",
+    line: bulkCutoff,
+    alert: ALERTS.emailQuotaWarning,
+  },
+  { scope: "email:quota_error", line: (q) => q, alert: ALERTS.emailQuotaReached },
 ];
 
 export class Mailer {
@@ -61,7 +76,7 @@ export class Mailer {
     // keyring HMAC (the admin job sends mail without mounting APP_KEYRING).
     const key = { scope: "email:daily", keyHash: sha256("email:daily\0app") };
     const quota = this.o.dailyQuota;
-    const softLimit = Math.floor(quota * 0.6);
+    const softLimit = bulkCutoff(quota);
     // Over the limit for this message once `used` sends are already counted.
     const over = (used: number) =>
       used >= quota || (!message.priority && used >= softLimit);
@@ -104,7 +119,7 @@ export class Mailer {
   }
 
   /**
-   * A6: once the day's kept sends reach 80% (and 100%) of the quota, the
+   * A6: once the day's kept sends reach the 60% cutoff (and 100%), the
    * first send to see it wins a one-shot reservation and raises the alert.
    * `>=` plus the reservation means concurrent sends can neither skip the
    * threshold nor raise it twice.
@@ -113,7 +128,7 @@ export class Mailer {
     const alerts = this.o.alerts;
     if (!alerts?.enabled) return;
     for (const q of QUOTA_ALERTS) {
-      if (sentToday < Math.ceil(this.o.dailyQuota * q.share)) continue;
+      if (sentToday < q.line(this.o.dailyQuota)) continue;
       try {
         const key = { scope: q.scope, keyHash: sha256(`${q.scope}\0app`) };
         const once = await this.o.throttles.reserve(key, DAY);
@@ -141,9 +156,10 @@ export class Mailer {
     const day = Math.floor(this.o.clock.now().getTime() / DAY);
     if (this.warnedDay === day) return;
     this.warnedDay = day;
-    // Log only (once per day per instance): 60% is the bulk cutoff (auth.md
-    // §14), from here only priority mail goes out. The Sentry alerts (A6) are
-    // separate: a warning at 80% and an error at 100% (quotaAlerts below).
+    // Once per day per instance: 60% is the bulk cutoff (auth.md §14), from
+    // here only priority mail goes out. The A6 Sentry warning fires at this
+    // same point (F-60), once per UTC day across instances, through the
+    // one-shot reservation in quotaAlerts; the error follows at 100%.
     this.o.logger.warn(
       { alert: "email_budget_60pct" },
       "email budget: 60% of the daily quota used",

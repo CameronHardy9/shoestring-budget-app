@@ -1,2 +1,2 @@
 - [Backend gotchas](gotchas.md) — formatter \u, fetch Host, Semgrep strings, safe deps, Sentry v11 (no sendDefaultPii, permissive dataCollection)
-- [Backend status](phase-a-status.md) — all ops; reserve-first limits, F-58, Sentry wiring (2026-11-16); what's still open
+- [Backend status](phase-a-status.md) — all ops; reserve-first limits, F-58, Sentry wiring + F-59/60/61 follow-ups (2026-11-17); still open

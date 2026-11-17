@@ -2,7 +2,9 @@ name: CI
 # Runs exactly the Makefile targets everyone runs locally:
 #   check (lint + typecheck + unit) -> e2e, and audit in parallel.
 # Every third-party action is pinned to a full commit SHA (Dependabot keeps
-# them current). No job reads secrets, and `pull_request` (never
+# them current). The only job that reads a secret is `sourcemaps`
+# (SENTRY_AUTH_TOKEN from the `sentry` environment, deployment branches: main),
+# which runs only on main (push or manual dispatch). `pull_request` (never
 # `pull_request_target`) gives fork PRs a read-only token and no secrets.
 
 on:

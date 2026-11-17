@@ -1,0 +1,16 @@
+# osv-scanner config for `make audit` (.github/scripts/audit.sh passes it with --config).
+#
+# Rules for this file (owned by ci-engineer; every entry needs security-reviewer sign-off):
+# - One entry per advisory ID. No wildcards, no package-wide ignores.
+# - Every entry has an effectiveUntil date (at most about 30 days out) and a reason
+#   that records the triage, who ruled on it and when to re-check. After that date
+#   the advisory gates the build again. (effectiveUntil is osv-scanner 2.x's name for
+#   the older ignoreUntil key.)
+# - make audit prints every active ignore in its summary, so none is silent.
+# - Triage (F-61): a devDependency bundled into backend dist/ or the frontend
+#   bundle is a runtime dependency and cannot be ignored as "dev-only".
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf" # CVE-2026-112366, picomatch ReDoS via extglob patterns, CVSS 8.7
+effectiveUntil = 2026-12-17
+reason = "picomatch@4.0.7 (affected through 4.0.7; 4.0.7 is the latest release, so no patched version exists). Reaches the lockfile only through dev tooling (typescript-eslint, vite, vitest via tinyglobby and fdir). Not bundled: absent from backend dist/ (bundled-runtime-packages.json) and from the frontend bundle. No attacker can supply glob patterns to these tools. Owner ruling 2026-11-17; security-reviewer sign-off; re-check when picomatch > 4.0.7 ships."

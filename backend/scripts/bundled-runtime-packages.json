@@ -1,0 +1,26 @@
+{
+  "$comment": "F-61: every npm package rolldown bundles into dist/ (read from the chunk source maps by scripts/build.test.ts). All of these run in production, whatever their dependency type in package.json: treat any advisory in them as a runtime advisory, never as dev-only. Add a package here only after reviewing it.",
+  "packages": [
+    "@opentelemetry/api",
+    "@sentry/conventions",
+    "@sentry/core",
+    "@sentry/node",
+    "@sentry/opentelemetry",
+    "@sentry/server-runtime-injection",
+    "@sentry/server-utils",
+    "kysely",
+    "pg",
+    "pg-connection-string",
+    "pg-int8",
+    "pg-pool",
+    "pg-protocol",
+    "pg-types",
+    "pgpass",
+    "postgres-array",
+    "postgres-bytea",
+    "postgres-date",
+    "postgres-interval",
+    "split2",
+    "xtend"
+  ]
+}
