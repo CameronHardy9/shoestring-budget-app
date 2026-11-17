@@ -9,16 +9,17 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
   - **Local is Postgres 17.12** (ci-engineer's compose).
   - Neon free is believed to support 17 (it offers 14–17), but Neon manages the minor version itself, so production's 17.x minor may differ from 17.12. Majors must match; minors may drift. Verify (V30) and record `select version();` at bootstrap: ______.
   - `pg_dump`/`pg_restore` clients must be major 17 or newer.
-- **Connections:** the app uses the **pooled** endpoint (`-pooler` host). Migrations, `pg_dump` and restores use the **direct** endpoint. Every URL has `sslmode=verify-full` (F-28). libpq tools also add `sslrootcert=system`. The Neon default owner role (`neondb_owner`) is used only by the owner for role setup, never by the app (F-28).
+- **Connections:** the app uses the **pooled** endpoint (`-pooler` host). Migrations, `pg_dump` and restores use the **direct** endpoint. Every URL has `sslmode=verify-full` (F-28). libpq tools (`psql`, `pg_dump`, `pg_restore`, the backup URL) also add `sslrootcert=system`; the URLs node-postgres reads (`DATABASE_URL`, `MIGRATOR_DATABASE_URL`) must **not** have it (node-pg treats it as a file path and fails with ENOENT). The Neon default owner role (`neondb_owner`) is used only by the owner for role setup, never by the app (F-28).
 - **Jobs** (Cloud Run Jobs, each with its own service account and only the secrets it needs: F-02, F-28):
-  - `shoestring-migrate`: release step (app image)
+  - `shoestring-migrate`: release step, **migrate image** (below): its entrypoint runs dbmate as `migrator`, then db/roles.sql's grant check. No `--command`/`--args`; only `MIGRATOR_DATABASE_URL`; `--max-retries 0`, 10 min, 512 MiB. No Sentry SDK: a failure shows only as the execution status and its logs. `DATABASE_ADMIN_URL` is local/test only, never set in production.
   - `shoestring-purge`: Cloud Scheduler, daily 08:00 UTC, counts-only output (app image)
   - `shoestring-admin`: owner-run admin commands, target email in `--args` (R-12 accepted). Destructive single-user commands run in two steps: a dry run, then `--yes --expect-user-id`. App image, `DATABASE_URL` plus email config only, **never the keyring**. **Never run admin commands in GitHub Actions** (OD-3).
   - `shoestring-rewrap-mfa`: owner-run `rewrap-mfa` for keyring rotation (app image, `DATABASE_URL` + `APP_KEYRING`). It is separate so `shoestring-admin` never mounts the keyring (admin-commands.md contract).
   - `shoestring-backup`: Cloud Scheduler, daily 09:15 UTC, **backup image** (below).
   - Cloud Scheduler: **2 of the 3 free jobs** per billing account (purge, backup). One spare.
-- **Images:** CI builds, scans and pushes to GHCR. The deploy copies the digest to Artifact Registry. Deploy by **digest**, never by tag. Two images:
-  - **App** `…/shoestring/app`: service, migrate, purge, admin. The moving tags `prod-current` and `prod-previous` protect the rollback target from infra/artifact-registry/cleanup-policy.json.
+- **Images:** CI builds (linux/amd64 only; never a Mac build), scans and pushes to GHCR (lowercase paths: `ghcr.io/<owner>/<repo, lowercased>[-migrate|-backup]:sha-<full sha>`). The GHCR packages are **public** (owner ruling 2026-11-17; free private storage is 500 MB), so copying from GHCR needs no credential. The deploy copies the digest to Artifact Registry. Deploy by **digest**, never by tag. Three images (packages in the AR repo `shoestring`):
+  - **App** `…/shoestring/app`: service, purge, admin, rewrap-mfa. Holds nothing of `db/`. The moving tags `prod-current` and `prod-previous` protect the rollback target from infra/artifact-registry/cleanup-policy.json.
+  - **Migrate** `…/shoestring/migrate` (Dockerfile target `migrate`): the `shoestring-migrate` job only. Compiled migrate CLI, pg, dbmate, `db/migrations`, `db/roles.sql`. **Always the same SHA as the app image** (the app's readyz requires the newest migration its build ships with). Tag `prod-current` (its own, per package) marks the job's image; no `prod-previous`, because rollback never runs migrate. ~33 MB uncompressed on top of the shared distroless base (measured locally 2026-11-17).
   - **Backup** `…/shoestring/backup`: a small dedicated image. It is a pinned `alpine` base plus `bash`, `postgresql17-client`, `age`, `curl` and `ca-certificates`, a non-root user, and entrypoint deploy/backup/backup.sh (ci-engineer: `Dockerfile.backup`). Tag `prod-backup` (protected by the `prod-` keep rule).
   - Why not the app image: `pg_dump` would add surface to the internet-facing service, and the backup is decoupled from app releases. It is only ~20 MB, which matters for AR's 0.5 GB.
   - The **owner** updates the backup job's image; the deployer cannot (no actAs on the backup SA).
@@ -27,8 +28,11 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
 - **Hard cap:** a Cloud Billing **spend cap** at $1 on the prod project (owner decision). The kill switch in infra/billing-kill-switch/ is a fallback only, used if V0 fails.
 
 ## Client IP (F-08)
-- Normal path (domain mapping, DNS-only): Fastify `trustProxy: 1` (exact hop count, **never `true`**). The client IP is the rightmost `X-Forwarded-For` entry. Expected; **measured at bootstrap** with the echo probe (V26). Record the result: hop count = ____ on ____.
-- **V26 must be measured before launch** (security-reviewer). Launch is blocked until the hop count above is filled in.
+- Normal path (domain mapping, DNS-only): Fastify `trustProxy: 1` (exact hop count, **never `true`**), set by the service env var `TRUST_PROXY_HOPS=1` (bootstrap step 12b). The client IP is the rightmost `X-Forwarded-For` entry. Expected; **measured at bootstrap** with the echo probe (V26), on **both** public paths, because the one value applies to both (F-65):
+  - `run.app` URL: hop count = ____ on ____
+  - custom domain (domain mapping): hop count = ____ on ____
+- **V26 must be measured before launch** (security-reviewer). Launch is blocked until **both** counts above are filled in and agree.
+- **If the two paths differ, stop:** no single `TRUST_PROXY_HOPS` is safe while both URLs are public (too low on one path shares one IP bucket among all users; too high on the other lets clients forge their IP). Escalate to security-reviewer; don't pick a value.
 - Cloudflare proxy fallback: the hop count stays 1, but the trusted client IP becomes `CF-Connecting-IP`, and only when the request carries a valid origin-auth header. That needs a backend change and an extra secret (hosting-evaluation.md §3a). **It is switched on only after a security-reviewer review and sign-off** (owner ruling 2026-11-13).
 
 ## Environments
@@ -100,7 +104,7 @@ Backup job plain env vars (not secret): `BACKUP_BUCKET`, `BACKUP_AGE_RECIPIENT` 
 
 The `age` **private** key is held offline in two places: vault A and one offline copy (F-17). It is never in GitHub or GCP.
 
-Non-secret runtime config (plain env vars on the service): `NODE_ENV=production` (also set in the Dockerfile, F-10), `APP_ORIGIN=https://shoestring.<domain>`, `WEBAUTHN_RP_ID=shoestring.<domain>`, `WEBAUTHN_RP_NAME=Shoestring`, `EMAIL_TRANSPORT=provider`, `EMAIL_FROM=Shoestring <no-reply@mail.<domain>>`, `COOKIE_SECURE=true`, `HIBP_ENABLED=true`, `LOG_LEVEL=info`, `APP_RELEASE=<git sha>` (name ratified by the architect), `SENTRY_DSN`, `EMAIL_DAILY_QUOTA=100` (F-09, name pending backend). `TEST_HOOKS` is never set.
+Non-secret runtime config (plain env vars on the service): `NODE_ENV=production` (also set in the Dockerfile, F-10), `TRUST_PROXY_HOPS=1` (**required**: config.ts refuses to start in production without it or below 1; F-08, V26 measures it; the jobs don't read it), `APP_ORIGIN=https://shoestring.<domain>`, `WEBAUTHN_RP_ID=shoestring.<domain>`, `WEBAUTHN_RP_NAME=Shoestring`, `EMAIL_TRANSPORT=provider`, `EMAIL_FROM=Shoestring <no-reply@mail.<domain>>`, `COOKIE_SECURE=true`, `HIBP_ENABLED=true`, `LOG_LEVEL=info`, `APP_RELEASE=<git sha>` (name ratified by the architect), `SENTRY_DSN`, `EMAIL_DAILY_QUOTA=100` (F-09, name pending backend). `TEST_HOOKS` is never set.
 
 ## Monitoring stack (details: observability/README.md)
 | Alert | Tool (free) | Channel | Runbook |
@@ -123,5 +127,5 @@ Non-secret runtime config (plain env vars on the service): `NODE_ENV=production`
 - Run an admin command or a backup in GitHub Actions. Put any database credential into GitHub.
 - Put a token, secret or any personal data other than the target email (R-12) into job args, overrides or labels.
 - Print anything from a dump in logs, or store a dump anywhere but the backup bucket.
-- Delete an image tagged `prod-current` or `prod-previous`.
+- Delete an image tagged `prod-current` or `prod-previous` (in the `app` or `migrate` package).
 - Add a card to Neon. Turn on the Cloudflare proxy **without a security-reviewer review and sign-off** and the hosting-evaluation.md §3a checklist.

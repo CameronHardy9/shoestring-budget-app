@@ -57,3 +57,12 @@ Facts verified 2026-11-12 that shaped the pipeline scripts:
   - Earlier state: @sentry/node 11.10.0 pulled in @sentry/bundler-plugins: the `sentry` CLI package (15 MB), oxc-parser with a native binding, and glob 13.0.7 (osv medium). That raised the image from 325 to 419 MB uncompressed (73 to 87 MB gzip).
 - osv-scanner 2.7 ignores (2026-11-17): `.github/osv-scanner.toml` is passed with `--config`. `ignoreUntil` is deprecated, so use `effectiveUntil` (it gives a stderr warning otherwise). An `id` of the GHSA also filters its CVE alias. After the date, the advisory is reported again (tested with a past date). The stderr line "has unused ignores" marks stale entries, and audit.sh shows it in the summary.
 - Dependabot security updates and vulnerability alerts are OFF on the repo (2026-11-17: `automated-security-fixes` enabled:false, `vulnerability-alerts` 404). Version updates only bump direct deps, so a transitive fix (for example picomatch) needs the owner to turn those on, or a manual `pnpm update -r <pkg>`.
+
+- Migrate image (2026-11-17):
+  - The Dockerfile's LAST stage is the default target, so image.sh passes `--target runtime`. Keep runtime last anyway.
+  - node-pg (pg-connection-string 2.14) reads `sslrootcert=system` as a FILE path (ENOENT). dbmate (Go) accepts it. The migrate CLI uses both, so MIGRATOR_DATABASE_URL must be plain `?sslmode=verify-full` (Go and Node then use the system/bundled roots).
+  - `pnpm install --frozen-lockfile --offline --filter ./db` works with only db/ copied into the build stage (other importers absent).
+  - Third-party packages ship `testing` dirs (pg-protocol/src/testing): name scans for our seed/testing code must skip node_modules.
+  - GHCR image paths must be lowercase; the repo slug has capitals (use `tr A-Z a-z`, bash 3.2 has no `${,,}`).
+  - `CMD []` after ENTRYPOINT inspects as `null`; ENTRYPOINT alone already clears the base CMD.
+  - `--user 0:0 --cap-drop ALL` cannot read the distroless nonroot user's 0700 /home/nonroot (root without DAC caps). Root scans in image-smoke use SCAN_HARDEN = HARDEN + `--cap-add DAC_READ_SEARCH` only (security Info item, 2026-11-17).

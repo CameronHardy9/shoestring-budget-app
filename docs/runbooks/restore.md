@@ -54,20 +54,49 @@ gcloud logging read 'protoPayload.methodName:"RunJob" AND protoPayload.resourceN
 umask 077; KEYFILE=$(mktemp); trap 'rm -P "$KEYFILE" 2>/dev/null || rm -f "$KEYFILE"' EXIT
 pbpaste > "$KEYFILE"; pbcopy < /dev/null
 
-# 4. Target database. In the Neon Console create database "shoestring_restore_<yyyymmdd>" on branch main
-#    (or a new project for total loss). Copy its DIRECT connection string for the migrator role.
-read -rs RESTORE_URL; export RESTORE_URL
+# 4. Target database. In the Neon Console create database "shoestring_restore_<yyyymmdd>" on branch main,
+#    owner neondb_owner (or a new project for total loss). You need two DIRECT connection strings for it,
+#    each with ?sslmode=verify-full&sslrootcert=system appended (psql/pg_restore are libpq).
+#    The owner URL is NOT exported (psql gets it as an argument) and is unset straight after step 5 (F-64).
+read -rs RESTORE_OWNER_URL                             # role neondb_owner (the database owner)
+read -rs RESTORE_URL; export RESTORE_URL               # role migrator (new project: fill this in after step 5)
 
-# 5. Roles and grants (data-engineer's idempotent script, planned as db/roles.sql: verify the path)
-psql "$RESTORE_URL" -v ON_ERROR_STOP=1 -f db/roles.sql
+# 5. Roles and database grants, as the database OWNER (F-44: only the owner can revoke TEMPORARY from
+#    PUBLIC; the migrate job and step 7 run as migrator and fail closed without this).
+#    roles.sql runs as the most privileged role, so it comes only from a commit that is (a) the release of
+#    the revision taking traffic now, (b) a full sha, and (c) on origin/main (F-64). It holds no secrets.
+#    Run this from your clone of the repo.
+set -o pipefail                                        # a failed `git show` must fail the pipe, not feed psql nothing
+SERVING_REV=$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format=json \
+  | jq -r '[.status.traffic[] | select(.percent==100) | .revisionName] | if length==1 then .[0] else empty end')
+SERVING_SHA=$(gcloud run revisions describe "$SERVING_REV" --region "$REGION" --project "$PROJECT" --format=json \
+  | jq -r '.spec.containers[0].env[] | select(.name=="APP_RELEASE") | .value')
+git fetch origin main
+check_sha() {
+  [[ "$SERVING_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "STOP: release of '$SERVING_REV' is not a full git sha" >&2; return 1; }
+  git merge-base --is-ancestor "$SERVING_SHA" origin/main || { echo "STOP: $SERVING_SHA is not on origin/main" >&2; return 1; }
+  git cat-file -e "$SERVING_SHA:db/roles.sql" || { echo "STOP: no db/roles.sql at $SERVING_SHA" >&2; return 1; }
+}
+check_sha && git log -1 --format='%H %cs %s' "$SERVING_SHA"   # CONFIRM: a release you recognise. Any STOP: stop, tell the tech lead
+roles_sql() { check_sha && git show "$SERVING_SHA:db/roles.sql" | psql "$1" -v ON_ERROR_STOP=1 -f -; }
+roles_sql "$RESTORE_OWNER_URL"
+#    New Neon project only: the roles were just created without passwords. Set them now with
+#    `psql "$RESTORE_OWNER_URL"` then \password app, \password migrator and \password backup
+#    (bootstrap-production.md step 8 items 5-6; new values into the password manager), then fill in
+#    RESTORE_URL (migrator) above before step 6.
+unset RESTORE_OWNER_URL                                # the owner role is not needed again in this restore
+#    After a rollback, the revision taking traffic is older than the latest revision, whose migrate image the
+#    job holds. If that newer release changed roles.sql's owner part, "After any restore" step 0 fails closed
+#    on the grant check: tell the tech lead; the owner part is then re-run from the newer (main) sha.
 
 # 6. Restore: stream, decrypt, restore in one transaction
 gcloud storage cat "gs://$BACKUP_BUCKET/daily/$OBJ" \
   | age --decrypt -i "$KEYFILE" \
   | pg_restore --no-owner --no-privileges --exit-on-error --single-transaction --dbname "$RESTORE_URL"
 
-# 7. Re-apply grants on the restored objects, then check the audit-log protections survived (F-11, F-26)
-psql "$RESTORE_URL" -v ON_ERROR_STOP=1 -f db/roles.sql
+# 7. Re-apply grants on the restored objects AS MIGRATOR (it owns them after --no-owner), then check the
+#    audit-log protections survived (F-11, F-26). Its final block verifies the whole end state.
+roles_sql "$RESTORE_URL"
 psql "$RESTORE_URL" -At -c "select has_table_privilege('app','public.security_events','INSERT'),
   has_table_privilege('app','public.security_events','SELECT'), has_table_privilege('app','public.security_events','UPDATE'),
   has_table_privilege('app','public.security_events','DELETE'), has_table_privilege('app','public.security_events','TRUNCATE')"
@@ -87,11 +116,19 @@ psql "$RESTORE_URL" -At -c "select count(*) from users" \
    - Same Neon project, new database: the roles and passwords are unchanged, so only the database name in each URL changes.
    - New Neon project: set all three passwords with `\password` (bootstrap-production.md step 8) first.
 10. **Run "After any restore" below** (F-11) **before** reopening traffic.
-11. Clean up: `rm -P "$KEYFILE"; trap - EXIT; unset RESTORE_URL KEYFILE`. Turn Handoff back on. Keep the old database for 7 days, then drop it.
+11. Clean up: `rm -P "$KEYFILE"; trap - EXIT; unset RESTORE_URL RESTORE_OWNER_URL KEYFILE`. Turn Handoff back on. Keep the old database for 7 days, then drop it.
 
 ## After any restore (paths A and B; F-11, reviewed by security-reviewer)
 A restore brings back state you had deliberately removed: revoked sessions, old (possibly compromised) password hashes, removed members, removed MFA factors, and open reset, email-change and email-change-cancel tokens. The contract order is: restore → `revoke-sessions --all --yes --restore` → `purge --yes` → reopen traffic → notice by BCC. Time-based purges re-run correctly; event-based changes do not. With ingress still **internal**:
 ```sh
+# 0. Bring the schema up to date. A dump (or a point in time) from before the latest deploy lacks that
+#    release's migrations, and readyz fails until they are applied. The migrate job holds the LATEST
+#    deployed release's migrate image; with nothing pending it only re-checks the grants. It must end
+#    with "migrate: done" (job log); it has no Sentry.
+#    After a rollback, that is the rolled-back (bad) release's image, so this re-applies its migrations.
+#    They are expand-only, so the serving (older) release still works against them, exactly as before
+#    the restore.
+gcloud run jobs execute shoestring-migrate --region "$REGION" --project "$PROJECT" --wait
 # 1. Revoke every session and delete every open one-time token, INCLUDING email_change_cancel tokens
 #    (--restore: a restored, already-used cancel token would otherwise be replayable; F-11, admin-commands.md)
 gcloud run jobs execute shoestring-admin --region "$REGION" --project "$PROJECT" --args="revoke-sessions,--all,--yes,--restore" --wait
@@ -107,7 +144,7 @@ gcloud run services update shoestring --ingress all --region "$REGION" --project
 6. Note in the incident record that steps 1–5 were done, with times.
 
 ## C. Restore drill (before launch, then quarterly)
-Run path B steps 2–8 against a **new Neon project `shoestring-drill`** (never the production project), with no change to production traffic or secrets. The "After any restore" steps are **not** run for a drill (nothing serves the drill database). Then:
+Run path B steps 2–8 against a **new Neon project `shoestring-drill`** (never the production project), with no change to production traffic or secrets. Step 5 there creates the roles, so set the migrator password (`\password migrator` as `neondb_owner`) before building `RESTORE_URL`; a throwaway value is fine, as the project is deleted the same day. The "After any restore" steps are **not** run for a drill (nothing serves the drill database). Then:
 - Time it from step 2 to the end of step 8 and record it as RTO evidence in README.md.
 - Optionally run the app locally against the drill database, but **only with the production entrypoint**: the production image or `node dist/server.js`, with `NODE_ENV=production`, **no `TEST_HOOKS`**, and `DATABASE_URL` passed via a `read -rs` variable. **Never `make dev`**: its test hooks would act on real users' data (F-40).
 - Delete the `shoestring-drill` project the same day. Remove the key file.

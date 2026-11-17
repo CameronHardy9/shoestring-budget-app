@@ -6,8 +6,14 @@
 To release a commit on `main` whose CI run is green. One release at a time. Avoid 08:00–09:30 UTC (purge and backup run then).
 
 ## Preconditions
-- CI is green for the commit, and the image `ghcr.io/<owner>/<repo>:sha-<full sha>` exists (ci-engineer confirms the exact name).
+- CI is green for the commit, and **both** images for that exact SHA exist in GHCR (linux/amd64, built by CI; never a build from a Mac):
+  - app `ghcr.io/<owner>/<repo>:sha-<full sha>` (the service and the purge, admin and rewrap-mfa jobs)
+  - migrate `ghcr.io/<owner>/<repo>-migrate:sha-<full sha>` (the `shoestring-migrate` job only)
+  - GHCR paths are **lowercase**; the repo slug has capitals, so use `GH_REPO_LC` below.
+  - Both packages are **public** (owner ruling 2026-11-17), so `crane` reads them with no GitHub credential (no `read:packages` token, no `crane auth login ghcr.io`). `UNAUTHORIZED` from GHCR means a package went private: stop and tell the tech lead.
+  - Always the **same SHA** for both: the app's `/api/readyz` requires the newest migration its build ships with.
 - Any migration in the release is **expand-only**: the currently serving version must keep working against the new schema (data-engineer's checklist). Otherwise stop; rollback would not be safe.
+- **If the release changes `db/roles.sql`** (`git diff --stat <serving sha> <new sha> -- db/roles.sql` prints anything): run it as the database **owner** before step 3, from a clean checkout at the new SHA (`git switch --detach <new sha>`; then `git status --porcelain db/roles.sql` must print nothing, F-64), exactly as in bootstrap-production.md step 8 item 5 (`psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f db/roles.sql`; `unset OWNER_URL` afterwards). The migrate job re-runs it as `migrator` and fails closed if the owner's part (database grants, the F-44 revokes) is missing.
 - `gcloud`, `jq` and `crane` are installed; `gcloud auth login` done; `gcloud auth configure-docker us-east1-docker.pkg.dev` done once.
 
 ## Steps: normal path (GitHub Actions)
@@ -21,14 +27,21 @@ The workflow (ci-engineer writes `.github/workflows/deploy.yml` to this spec) ru
 ```sh
 export PROJECT="shoestring-prod-<suffix>" REGION="us-east1"
 export SHA="<full git sha>"
-export GHCR_IMAGE="ghcr.io/<owner>/<repo>:sha-$SHA"
+export GH_REPO="<owner>/<repo>"
+GH_REPO_LC=$(printf '%s' "$GH_REPO" | tr '[:upper:]' '[:lower:]')     # GHCR paths are lowercase (bash 3.2: no ${,,})
+export GHCR_IMAGE="ghcr.io/$GH_REPO_LC:sha-$SHA"
+export GHCR_MIGRATE_IMAGE="ghcr.io/$GH_REPO_LC-migrate:sha-$SHA"
 export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
+export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
 
-# 1. Copy the CI-built image to Artifact Registry. Same digest; never rebuild.
+# 1. Copy both CI-built images (same SHA) to Artifact Registry. Same digests; never rebuild.
 DIGEST=$(crane digest "$GHCR_IMAGE")
 crane copy "$GHCR_IMAGE" "$AR_REPO:sha-$SHA"
 IMAGE="$AR_REPO@$DIGEST"
-echo "$IMAGE"
+MIGRATE_DIGEST=$(crane digest "$GHCR_MIGRATE_IMAGE")
+crane copy "$GHCR_MIGRATE_IMAGE" "$MIGRATE_AR_REPO:sha-$SHA"
+MIGRATE_IMAGE="$MIGRATE_AR_REPO@$MIGRATE_DIGEST"
+echo "$IMAGE"; echo "$MIGRATE_IMAGE"
 
 # 2. Record what is serving now (for rollback and the prod-previous tag)
 PREV_REVISION=$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format=json \
@@ -37,8 +50,11 @@ PREV_IMAGE=$(gcloud run revisions describe "$PREV_REVISION" --region "$REGION" -
   --format='value(spec.containers[0].image)')
 echo "previous: $PREV_REVISION $PREV_IMAGE"
 
-# 3. Migrations first (migrator role, expand-only), with the NEW image
-gcloud run jobs update shoestring-migrate --image "$IMAGE" --region "$REGION" --project "$PROJECT"
+# 3. Migrations first (migrator role, expand-only), with the NEW release's MIGRATE image.
+#    The image's entrypoint runs the migration: never add --command or --args. Its only config is the
+#    MIGRATOR_DATABASE_URL secret pinned on the job. It has no Sentry: --wait exiting non-zero and the
+#    job log are the only failure signals.
+gcloud run jobs update shoestring-migrate --image "$MIGRATE_IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs execute shoestring-migrate --region "$REGION" --project "$PROJECT" --wait
 
 # 4. New revision with NO traffic, reachable on a tag URL
@@ -52,23 +68,27 @@ curl -fsS -m 10 "$CANDIDATE_URL/api/readyz"  && echo
 curl -fsS -m 10 "$CANDIDATE_URL/api/healthz" && echo     # release field should equal $SHA (backend to confirm the field)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CANDIDATE_URL/api/_test/reset"   # must print 404: test hooks absent (F-10)
 
-# 6. Shift all traffic, drop the tag, and point the jobs at the new image
+# 6. Shift all traffic, drop the tag, re-probe on the PUBLIC URL, and point the jobs at the new image
 gcloud run services update-traffic shoestring --to-latest --region "$REGION" --project "$PROJECT"
 gcloud run services update-traffic shoestring --remove-tags candidate --region "$REGION" --project "$PROJECT"
+PUBLIC_URL=$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format 'value(status.url)')
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "$PUBLIC_URL/api/_test/reset"   # must print 404 (F-10); else roll back NOW
+curl -fsS -m 10 "$PUBLIC_URL/api/readyz" && echo
 gcloud run jobs update shoestring-purge --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-admin --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-rewrap-mfa --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 # shoestring-backup uses its own image and is updated by the owner only (bootstrap step 12g)
 
-# 7. Protect the rollback target from the registry cleanup policy
+# 7. Protect the rollback target and the images the jobs use from the registry cleanup policy
 gcloud artifacts docker tags add "$PREV_IMAGE" "$AR_REPO:prod-previous"
 gcloud artifacts docker tags add "$IMAGE" "$AR_REPO:prod-current"
+gcloud artifacts docker tags add "$MIGRATE_IMAGE" "$MIGRATE_AR_REPO:prod-current"   # the job's image; no prod-previous (rollback never migrates)
 ```
 Steps 4 and 6 use `gcloud run deploy` flags until deploy/cloudrun/service.yaml exists. After that, step 4 becomes `gcloud run services replace deploy/cloudrun/service.yaml` with the image digest filled in, preceded by the same command with `--dry-run`.
 
 ## Verify
 - `curl -fsS https://shoestring.<domain>/api/healthz` returns 200 with the new release.
-- `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shoestring.<domain>/api/_test/reset` prints **404** (F-10). Anything else: roll back at once and tell the tech lead (security incident).
+- `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shoestring.<domain>/api/_test/reset` prints **404** (F-10) on the custom domain too (step 6 probed the `run.app` URL). Anything else: roll back at once (rollback.md) and tell the tech lead (security incident).
 - On your phone: open the app, sign in, add a transaction, see it in the month view (J2/J3).
 - **Sentry smoke check** (below): it passes, and Sentry shows no new `production` issues within 15 minutes.
 - Better Stack monitor is green.
@@ -109,4 +129,5 @@ curl -sSI "$SITE/" | grep -i '^reporting-endpoints'                             
 - **Before step 6** (gate failed): nothing serves the new revision. Run `gcloud run services update-traffic shoestring --remove-tags candidate --region "$REGION" --project "$PROJECT"`. The expand-only migration can stay.
 - **After step 6:** follow rollback.md (one command: traffic back to `$PREV_REVISION`).
 - **The candidate's `/api/_test/reset` is not 404:** stop and do not shift traffic. Drop the tag as above and tell the tech lead (F-10).
-- **Migration job failed:** nothing was deployed. Read the job logs (`gcloud run jobs executions list --job shoestring-migrate --region "$REGION" --project "$PROJECT"`, then Logging), and hand them to the tech lead for data-engineer. Do not re-run blindly.
+- **Step 6's public `/api/_test/reset` probe is not 404:** roll back at once (rollback.md step 2), then tell the tech lead (security incident, F-10).
+- **Migration job failed:** nothing was deployed (the job runs no Sentry, so this is the only place it shows). Read the job logs (`gcloud run jobs executions list --job shoestring-migrate --region "$REGION" --project "$PROJECT"`, then Logging), and hand them to the tech lead for data-engineer. Do not re-run blindly.

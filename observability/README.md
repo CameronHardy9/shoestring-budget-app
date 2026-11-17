@@ -102,6 +102,7 @@ SDK settings the code must use (backend and frontend own them; listed so the set
 - **Why exclude the request logs:** Cloud Run's platform request logs contain client IP, user agent and full URL, all forbidden by the logging policy. The app writes its own JSON line per request (route template, status, latency, requestId, opaque userId).
   - Alternative if security-reviewer prefers it: route them to a separate bucket with 1-day retention instead of excluding them.
 - **Viewing:** Logs Explorer `resource.type="cloud_run_revision" resource.labels.service_name="shoestring" jsonPayload.requestId="<id>"` follows one request. Jobs: `resource.type="cloud_run_job"`.
+- **`shoestring-migrate` has no alert by design.** Its CLI has no Sentry SDK, and it only runs inside a deploy (or a restore) that the owner watches with `--wait`. A failure shows as a non-zero `--wait`, a failed execution, and its job log (`resource.labels.job_name="shoestring-migrate"`); deploy.md "Back out" covers it. Nothing serves the new release until it succeeds.
 - **Metrics:** Cloud Run console → `shoestring` → Metrics (request count by response class, latency p50/p95/p99, instance count, billable instance time). There are no alert policies, because their pricing is unverified (V22).
 
 ## SLO

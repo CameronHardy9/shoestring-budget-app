@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # make image-smoke: the prod-image smoke test (ADR-0009, test-hooks.md §6).
-# Runs the production image exactly as built (NODE_ENV comes from the image,
-# no test hooks) with production-like config against a throwaway, migrated
-# Postgres, and checks:
+# Migrates a throwaway Postgres with the migrate job image (make image-migrate),
+# then runs the production image exactly as built (NODE_ENV comes from the
+# image, no test hooks) with production-like config against it, and checks:
+#   M. the migrate image holds only its allowlist (compiled migrate CLI, pg,
+#      dbmate with this platform's binary, migrations/, roles.sql), refuses a
+#      missing or insecure MIGRATOR_DATABASE_URL, bootstraps and migrates the
+#      database, and re-runs the way the Cloud Run job does (MIGRATOR_DATABASE_URL
+#      only) without printing any credential
 #   1. the image holds only dist/, node_modules/, package.json and public/, the
-#      test-hook sentinel appears nowhere in /app, and dist/ has no `_test` word
+#      test-hook sentinel appears nowhere in /app, and dist/ has no `_test` word;
+#      nothing of db/ is anywhere in the image (no @shoestring package, seed,
+#      testing or test-support code, migrations, roles.sql or dbmate)
 #   2. config refuses TEST_HOOKS=1 and a missing TRUST_PROXY_HOPS
 #   3. /api/healthz and /api/readyz respond 200
 #   4. the security headers and CSP (exact script-src and style-src) on
@@ -15,7 +22,8 @@
 #      is in /app/public or reachable over HTTP (they go to Sentry privately)
 #   8. with SENTRY_DSN set, the server starts (loads its bundled Sentry chunk)
 #      and the CSP names the DSN's ingest host
-# Builds the image first when it is not there yet (make image).
+# Builds either image first when it is not there yet (make image, make
+# image-migrate).
 source "$(dirname "$0")/lib.sh"
 require_docker
 command -v curl >/dev/null || die "curl is required"
@@ -30,16 +38,22 @@ tag="$(image_tag)"
 if ! docker image inspect "$tag" >/dev/null 2>&1; then
   bash "$ROOT/.github/scripts/image.sh"
 fi
+migrate_tag="$(migrate_image_tag)"
+if ! docker image inspect "$migrate_tag" >/dev/null 2>&1; then
+  bash "$ROOT/.github/scripts/image-migrate.sh"
+fi
 
 export COMPOSE_PROJECT_NAME=shoestring-smoke
 export POSTGRES_DB=shoestring_test
 export POSTGRES_PORT="${SMOKE_POSTGRES_PORT:-55434}"
 SMOKE_PORT="${SMOKE_PORT:-58080}"
 APP_NAME="shoestring-smoke-app"
+MIGRATE_NAME="shoestring-smoke-migrate"
 NETWORK="${COMPOSE_PROJECT_NAME}_default"
 BASE="http://127.0.0.1:$SMOKE_PORT"
-# Postgres plus the one-shot migrate service; no backend/frontend dev servers.
-PROFILE_ARGS=(--profile db)
+# Postgres only: migrations come from the migrate image, not the dev compose
+# migrate service; no backend/frontend dev servers.
+PROFILE_ARGS=()
 
 # Fresh throwaway credentials, passed to containers by name (-e VAR), so values
 # never appear in argv or logs.
@@ -50,6 +64,10 @@ export_throwaway_credentials
 export APP_ORIGIN="https://shoestring.test"
 export WEBAUTHN_RP_ID="shoestring.test"
 export DATABASE_URL="postgres://app:${APP_DB_PASSWORD}@postgres:5432/$POSTGRES_DB"
+# The migrate job's one variable, and the superuser URL for the local role
+# bootstrap (never set in production, where the owner runs roles.sql once).
+export MIGRATOR_DATABASE_URL="postgres://migrator:${MIGRATOR_DB_PASSWORD}@postgres:5432/$POSTGRES_DB"
+export DATABASE_ADMIN_URL="postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/$POSTGRES_DB"
 export EMAIL_API_KEY="re_smoke_dummy_not_a_key"
 export EMAIL_FROM="Shoestring <no-reply@shoestring.test>"
 export EMAIL_DAILY_QUOTA=100
@@ -60,6 +78,10 @@ APP_ENV=(-e APP_ORIGIN -e WEBAUTHN_RP_ID -e DATABASE_URL -e APP_KEYRING
 # Tighter than Cloud Run: read-only root, no capabilities. A failure here means
 # the app writes outside /tmp or needs a capability, worth knowing either way.
 HARDEN=(--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges)
+# The image-content scans run as root with HARDEN plus the one capability that
+# lets them list and read every file regardless of mode (for example the
+# nonroot user's 0700 home), so no directory is skipped. Nothing is writable.
+SCAN_HARDEN=("${HARDEN[@]}" --cap-add DAC_READ_SEARCH)
 
 failures=0
 pass() { note "PASS  $*"; }
@@ -78,7 +100,7 @@ cleanup() {
     log "Last app logs"
     docker logs --tail 60 "$APP_NAME" 2>&1 || true
   fi
-  docker rm -f "$APP_NAME" shoestring-smoke-refuse >/dev/null 2>&1 || true
+  docker rm -f "$APP_NAME" "$MIGRATE_NAME" shoestring-smoke-refuse >/dev/null 2>&1 || true
   compose_test down --remove-orphans >/dev/null 2>&1 || true
   exit "$rc"
 }
@@ -123,6 +145,47 @@ map_refs="$(printf '%s' "$contents" | jq -r '.mapRefs | join(" ")')"
 if [ -z "$maps" ]; then pass "no source maps in /app/public"; else fail "source maps in /app/public: $maps"; fi
 if [ -z "$map_refs" ]; then pass "no sourceMappingURL comment in /app/public JS"; else fail "sourceMappingURL in: $map_refs"; fi
 
+# F-43: the backend bundle inlines the data-access code it uses, so nothing of
+# db/ belongs in the internet-facing image: no workspace package, seed, testing
+# or test-support code, migrations, roles.sql or dbmate (its binary or package),
+# by path anywhere in the filesystem, and no dbmate migration SQL in /app by
+# content. Runs as root with SCAN_HARDEN (read-only, no network, only
+# DAC_READ_SEARCH) so no directory is skipped.
+db_scan='
+const fs = require("node:fs"), path = require("node:path");
+const SKIP = new Set(["/proc", "/sys", "/dev"]);
+const NAME = /^(@shoestring|migrations|testing|test-support|seed)$|^seed\.|^roles\.sql$|dbmate/i;
+const MIGRATION_SQL = /^-- migrate:(up|down)/m;
+const found = [], unreadable = [];
+let entries = 0;
+const walk = (d) => {
+  let list;
+  try { list = fs.readdirSync(d, { withFileTypes: true }); } catch (e) { unreadable.push(d); return; }
+  for (const e of list) {
+    const p = path.join(d, e.name);
+    if (SKIP.has(p)) continue;
+    entries++;
+    if (NAME.test(e.name)) found.push(p);
+    if (e.isDirectory()) walk(p);
+    else if (e.isFile() && p.startsWith("/app/") && MIGRATION_SQL.test(fs.readFileSync(p, "latin1"))) found.push(p);
+  }
+};
+walk("/");
+console.log(JSON.stringify({ entries, found, unreadable }));
+'
+db_contents="$(docker run --rm --network none "${SCAN_HARDEN[@]}" --user 0:0 --entrypoint /nodejs/bin/node "$tag" -e "$db_scan")"
+db_found="$(printf '%s' "$db_contents" | jq -r '.found | join(" ")')"
+db_unreadable="$(printf '%s' "$db_contents" | jq -r '.unreadable | join(" ")')"
+db_entries="$(printf '%s' "$db_contents" | jq -r '.entries')"
+# A scan that saw almost nothing proves nothing (the image has thousands of files).
+if [ "$db_entries" -lt 1000 ]; then fail "db-content scan saw only $db_entries entries"; fi
+if [ -n "$db_unreadable" ]; then fail "db-content scan could not read: $db_unreadable"; fi
+if [ -z "$db_found" ]; then
+  pass "no db/ content anywhere in the image ($db_entries entries: @shoestring, seed, testing, test-support, migrations, roles.sql, dbmate)"
+else
+  fail "db/ content in the runtime image: $db_found"
+fi
+
 # --- 2. config refusals (no database needed: config fails before any connect) ---
 log "Config refusals"
 # expect_refusal <label> <expected message> <docker env args...>
@@ -161,9 +224,112 @@ else
   fail "dist/admin.js did not load cleanly (exit $admin_rc)"
 fi
 
-# --- throwaway Postgres + migrations --------------------------------------------
-log "Starting throwaway Postgres and applying migrations (project $COMPOSE_PROJECT_NAME)"
-compose_test run --rm --quiet-pull migrate
+# --- M. the migrate job image ---------------------------------------------------
+log "Migrate image contents ($migrate_tag)"
+migrate_scan='
+const fs = require("node:fs"), path = require("node:path");
+const SENTINEL = "__SHOESTRING_TEST_HOOKS__";
+const allowed = new Set(["dist", "migrations", "node_modules", "package.json", "roles.sql"]);
+const extra = fs.readdirSync("/app").filter((n) => !allowed.has(n));
+const bad = [], distExtra = [], sentinel = [], binaries = [];
+// Our seed/testing code anywhere outside node_modules; in node_modules no
+// workspace package and no kysely (third-party packages may ship their own
+// test helpers, for example pg-protocol/src/testing).
+const OURS = /^(testing|test-support|seed)$|^seed\./, ANYWHERE = /^(@shoestring|kysely)$|^kysely@/;
+const walk = (d) => {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, e.name);
+    if (ANYWHERE.test(e.name) || (!p.startsWith("/app/node_modules/") && OURS.test(e.name))) bad.push(p);
+    if (e.isDirectory()) { walk(p); continue; }
+    if (!e.isFile()) continue;
+    if (p.startsWith("/app/dist/") && !p.endsWith(".js")) distExtra.push(p);
+    if (/\/@dbmate\/[^/]+\/bin\/dbmate$/.test(p)) binaries.push(p);
+    if (fs.readFileSync(p, "latin1").includes(SENTINEL)) sentinel.push(p);
+  }
+};
+walk("/app");
+const want = "@dbmate/linux-" + process.arch + "/bin/dbmate";
+const migrations = fs.readdirSync("/app/migrations").filter((n) => n.endsWith(".sql")).length;
+console.log(JSON.stringify({ extra, bad, distExtra, sentinel, binaries, want,
+  ok: binaries.length === 1 && binaries[0].endsWith(want), migrations,
+  entry: fs.existsSync("/app/dist/cli/migrate.js") }));
+'
+m_contents="$(docker run --rm --network none "${SCAN_HARDEN[@]}" --user 0:0 --entrypoint /nodejs/bin/node "$migrate_tag" -e "$migrate_scan")"
+m_field() { printf '%s' "$m_contents" | jq -r "$1"; }
+if [ -z "$(m_field '.extra | join(" ")')" ]; then pass "migrate /app holds only dist, migrations, node_modules, package.json, roles.sql"; else fail "unexpected entries in migrate /app: $(m_field '.extra | join(" ")')"; fi
+if [ -z "$(m_field '.bad | join(" ")')" ]; then pass "migrate image: no workspace package, seed, testing, test-support or kysely"; else fail "migrate image contains: $(m_field '.bad | join(" ")')"; fi
+if [ -z "$(m_field '.distExtra | join(" ")')" ]; then pass "migrate dist/ holds only compiled JS (no maps, declarations or sources)"; else fail "migrate dist/ extras: $(m_field '.distExtra | join(" ")')"; fi
+if [ -z "$(m_field '.sentinel | join(" ")')" ]; then pass "test-hook sentinel absent from the migrate image"; else fail "sentinel in migrate image: $(m_field '.sentinel | join(" ")')"; fi
+if [ "$(m_field '.ok')" = true ]; then pass "exactly one dbmate binary, for this platform ($(m_field '.want'))"; else fail "dbmate binaries: $(m_field '.binaries | join(" ")'), want only $(m_field '.want')"; fi
+expect "migrate image: compiled CLI present" true "$(m_field '.entry')"
+n_sql="$(find "$ROOT/db/migrations" -name '*.sql' | grep -c . || true)"
+expect "migrate image: migrations (db/migrations has $n_sql)" "$n_sql" "$(m_field '.migrations')"
+
+# run_migrate <name> <docker args...>: runs the migrate image with its own
+# entrypoint (no command or args, as the Cloud Run job does), hardened like the
+# app. Sets m_rc and m_out. Credentials go in by name (-e VAR), never in argv.
+run_migrate() {
+  local name="$1"
+  shift
+  set +e
+  m_out="$(docker run --rm --name "$name" "${HARDEN[@]}" "$@" "$migrate_tag" 2>&1)"
+  m_rc=$?
+  set -e
+}
+# no_secrets_in <label> <text>: none of this run's passwords or URLs was printed.
+no_secrets_in() {
+  local v leaked=""
+  for v in POSTGRES_PASSWORD APP_DB_PASSWORD MIGRATOR_DB_PASSWORD; do
+    if printf '%s' "$2" | grep -qF "${!v}"; then leaked="$leaked $v"; fi
+  done
+  if [ -z "$leaked" ]; then pass "$1: no credential in the output"; else fail "$1: printed$leaked"; fi
+}
+
+log "Migrate image refusals (no database needed)"
+run_migrate "$MIGRATE_NAME" --network none
+if [ "$m_rc" -ne 0 ] && printf '%s' "$m_out" | grep -qF "MIGRATOR_DATABASE_URL is not set"; then
+  pass "no MIGRATOR_DATABASE_URL: refused (exit $m_rc)"
+else
+  fail "no MIGRATOR_DATABASE_URL: expected a refusal (exit $m_rc)"
+fi
+# A remote host without sslmode=verify-full is refused before any connection (F-28, F-42).
+# A dummy password: this URL is passed in argv and never reaches a server.
+run_migrate "$MIGRATE_NAME" --network none \
+  -e "MIGRATOR_DATABASE_URL=postgres://migrator:dummy-not-a-password@db.shoestring.test:5432/shoestring?sslmode=require"
+if [ "$m_rc" -ne 0 ] && printf '%s' "$m_out" | grep -qF "must use sslmode=verify-full"; then
+  pass "remote MIGRATOR_DATABASE_URL without verify-full: refused (exit $m_rc)"
+else
+  fail "remote MIGRATOR_DATABASE_URL without verify-full: expected a refusal (exit $m_rc)"
+fi
+no_secrets_in "refusal" "$m_out"
+
+log "Starting throwaway Postgres (project $COMPOSE_PROJECT_NAME)"
+compose_test up -d --wait --quiet-pull postgres >/dev/null
+note "Postgres healthy after $(elapsed)"
+
+# First run: the local bootstrap (roles.sql as superuser, role passwords from
+# the URLs), standing in for the owner's one-time roles.sql in production.
+log "Migrating with the migrate image ($migrate_tag): bootstrap run"
+run_migrate "$MIGRATE_NAME" --network "$NETWORK" -e MIGRATOR_DATABASE_URL -e DATABASE_URL -e DATABASE_ADMIN_URL
+printf '%s
+' "$m_out" | sed 's/^/    | /'
+no_secrets_in "bootstrap run" "$m_out"
+if [ "$m_rc" -ne 0 ] || ! printf '%s' "$m_out" | grep -qx "migrate: done"; then
+  die "the migrate image failed to migrate the throwaway database (exit $m_rc)"
+fi
+pass "bootstrap run: migrated (exit 0)"
+# Second run exactly as the Cloud Run job: MIGRATOR_DATABASE_URL only. Nothing
+# left to apply; roles.sql re-applies and verifies the grants as migrator.
+log "Migrating again as the Cloud Run job does (MIGRATOR_DATABASE_URL only)"
+run_migrate "$MIGRATE_NAME" --network "$NETWORK" -e MIGRATOR_DATABASE_URL
+printf '%s
+' "$m_out" | sed 's/^/    | /'
+no_secrets_in "job-shaped run" "$m_out"
+if [ "$m_rc" -eq 0 ] && printf '%s' "$m_out" | grep -qx "migrate: done"; then
+  pass "job-shaped run: idempotent, grants verified (exit 0)"
+else
+  fail "job-shaped run failed (exit $m_rc)"
+fi
 note "Database migrated after $(elapsed)"
 
 # start_app [docker env args...]: runs the image as $APP_NAME and waits for healthz.

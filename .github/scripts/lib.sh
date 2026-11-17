@@ -210,8 +210,10 @@ ensure_local_env() {
 }
 
 # Production image release and tag for the current checkout (make image,
-# make image-smoke). Release: git SHA (+ -dirty-<hash>) unless APP_RELEASE is set.
-# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty-<hash>].
+# make image-migrate, make image-smoke). Release: git SHA (+ -dirty-<hash>)
+# unless APP_RELEASE is set.
+# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty-<hash>], and for the
+# migrate job image <MIGRATE_IMAGE_NAME or shoestring-migrate>:<same>.
 # <hash> is 12 hex characters of a SHA-256 over the uncommitted changes (staged,
 # unstaged and deletions as a binary diff against HEAD, plus the name and
 # content hash of every untracked, not-ignored file), so two different dirty
@@ -239,6 +241,11 @@ image_tag() {
   local sha
   sha="$(_git_sha)"
   echo "${IMAGE_NAME:-shoestring}:${sha:0:12}$(_git_dirty)"
+}
+migrate_image_tag() {
+  local sha
+  sha="$(_git_sha)"
+  echo "${MIGRATE_IMAGE_NAME:-shoestring-migrate}:${sha:0:12}$(_git_dirty)"
 }
 
 # Build arguments shared by make image and make sourcemaps-upload, so the second

@@ -139,3 +139,8 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Sentry CLI login on the owner's Mac | **Keep until bootstrap step 13 is done, then log out** and revoke under Authorized Applications. |
 | picomatch@4.0.7 high advisory (GHSA-fc5q-39xc-vjpf, ReDoS; dev tooling only, not bundled, no patched release) | **Time-boxed osv-scanner ignore for exactly this advisory until 2026-12-17**, reason recorded and printed by `make audit`; security-reviewer signs off; remove when picomatch > 4.0.7 ships. |
 | Dependabot alerts and security updates (were off) | **Turned on** by the tech lead via `gh api` (owner-authorized, this once), so transitive fixes such as a patched picomatch arrive as PRs. |
+
+## Pre-deploy pass (2026-11-17)
+| Topic | Decision |
+|---|---|
+| GHCR package visibility (free private storage is 500 MB; ~129 MB per commit for the app + migrate images) | **Public packages** for app, migrate and backup. Free and unlimited; the repo is already public and no secrets are baked into images. crane needs no GHCR credentials. |

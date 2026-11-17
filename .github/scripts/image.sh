@@ -16,7 +16,7 @@ tag="$(image_tag)"
 image_build_args "$release"
 
 log "Building production image $tag (APP_RELEASE=$release, SPA Sentry DSN: $(dsn_summary "${VITE_SENTRY_DSN:-}"))"
-docker build --pull "${IMAGE_BUILD_ARGS[@]}" --tag "$tag" .
+docker build --pull "${IMAGE_BUILD_ARGS[@]}" --target runtime --tag "$tag" .
 uid="$(docker image inspect --format '{{.Config.User}}' "$tag")"
 case "$uid" in "" | 0 | root | 0:*) die "image runs as root (User='$uid')" ;; esac
 env_node="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$tag" | grep -x 'NODE_ENV=production' || true)"

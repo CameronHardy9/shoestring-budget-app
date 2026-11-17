@@ -6,7 +6,7 @@ SCRIPTS := .github/scripts
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
-        lint typecheck test check e2e e2e-up e2e-down audit image image-smoke sourcemaps-upload
+        lint typecheck test check e2e e2e-up e2e-down audit image image-migrate image-smoke sourcemaps-upload
 
 help: ## Show targets and the phone-testing recipe
 	@echo "Shoestring: canonical commands"
@@ -76,7 +76,10 @@ audit: ## Secret scan (gitleaks) + SAST (Semgrep) + dependencies (osv-scanner) +
 image: ## Build the production image (skips until backend/ exists; API-only until frontend/ exists)
 	@bash $(SCRIPTS)/image.sh
 
-image-smoke: ## Run the production image against a throwaway Postgres and probe it (ADR-0009)
+image-migrate: ## Build the migrate job image (Dockerfile target migrate; skips until db/ exists)
+	@bash $(SCRIPTS)/image-migrate.sh
+
+image-smoke: ## Migrate a throwaway Postgres with the migrate image, then run and probe the app image (ADR-0009)
 	@bash $(SCRIPTS)/image-smoke.sh
 
 sourcemaps-upload: ## Upload the SPA's source maps privately to Sentry (CI on main; skips without SENTRY_AUTH_TOKEN)

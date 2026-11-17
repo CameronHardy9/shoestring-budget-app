@@ -39,7 +39,7 @@ job_output() {          # IDs and counts from the latest execution of <job>
     --project "$PROJECT" --limit 200 --order asc --format="value(jsonPayload.message,textPayload)"
 }
 ```
-Each job definition fixes the command as `node dist/admin.js` (bootstrap-production.md step 12), so `--args` holds only the subcommand and its flags. Use the `--flag=value` form.
+Each job definition fixes the command as `/nodejs/bin/node /app/dist/admin.js` (bootstrap-production.md step 12; the distroless image has no `node` on its PATH), so `--args` holds only the subcommand and its flags. Executing `shoestring-admin` **without** `--args` runs its stored default, a read-only `purge --dry-run` (counts only). The CLI has no `--help`. Use the `--flag=value` form.
 - gcloud splits `--args` on commas by default. `job_run` therefore switches the delimiter to `;` with gcloud's `^;^` prefix, so a comma can never split an argument.
 - The CLI also rejects any email containing `,` (contract, being added by the architect). Emails containing `;` aren't supported by `job_run`; none of our users has one.
 - For hand-typed commands, use `--args="^;^reset-mfa;--email=a@example.com"`.

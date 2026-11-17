@@ -1,8 +1,16 @@
 # Production image: one same-origin container. Fastify (backend/) serves the API
 # at /api and the built SPA (frontend/) at /. Build once per commit and deploy the
-# same image to every environment (sre). Build with `make image`.
+# same image to every environment (sre). Build with `make image` (target runtime,
+# the last stage).
+#
+# A second image from the same commit, target `migrate` (make image-migrate), is
+# the Cloud Run job shoestring-migrate: only the compiled migrate CLI, pg, dbmate
+# and db's migrations and roles.sql. The app image holds nothing of db/: the
+# backend bundle inlines the data-access code (make image-smoke checks both).
 #
 # Expectations on the area packages (see the ci-engineer report):
+#   db:       `build` script (tsc) writes db/dist/cli/migrate.js; migrate.ts reads
+#             migrations/ and roles.sql from two directories above its own file
 #   frontend: `build` script writes the SPA to frontend/dist (hidden source maps OK)
 #   backend:  `build` script writes backend/dist with dist/server.js and dist/admin.js,
 #             serves STATIC_DIR at /, and listens on HOST:PORT
@@ -90,6 +98,73 @@ RUN mkdir -p /public /sourcemaps \
 # stage comes from the cache and the files match the image byte for byte).
 FROM scratch AS sourcemaps
 COPY --from=build /sourcemaps/ /
+
+# ---- migrate-build: the migrate CLI and only what it needs at runtime ----------
+# The image for the Cloud Run job shoestring-migrate (target `migrate`, built by
+# make image-migrate). Only db/ is copied in, so app changes do not rebuild it.
+FROM fetch AS migrate-build
+COPY db/ ./db/
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --offline --filter ./db
+# db's own production build (tsc, tsconfig.build.json): it already leaves out
+# the seed, testing and test-support code and the unit tests.
+RUN pnpm --filter ./db run build
+# db's production dependencies from the lockfile (dbmate + this platform's
+# binary, pg, kysely), in pnpm's isolated layout.
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm --filter ./db deploy --prod --offline --config.inject-workspace-packages=true /deploy
+# Assemble /migrate with exactly what `node dist/cli/migrate.js` loads:
+#   dist/   cli/migrate.js plus the local modules it imports (followed from the
+#           compiled files, so a new import is picked up, never the whole DAL)
+#   migrations/, roles.sql   read from dist/cli/../.. (DB_DIR in migrate.ts)
+#   node_modules/            pg and dbmate. kysely is the DAL's query builder,
+#                            which the migrate CLI does not load: removed.
+#   package.json             only "type": "module" (no scripts, no seed entry)
+# No source maps or type declarations.
+RUN mkdir /migrate \
+ && cd db/dist && node --input-type=module -e ' \
+      import { cpSync, mkdirSync, readFileSync } from "node:fs"; \
+      import { dirname, join, normalize } from "node:path"; \
+      const seen = new Set(), todo = ["cli/migrate.js"]; \
+      while (todo.length) { \
+        const f = todo.pop(); \
+        if (seen.has(f)) continue; \
+        seen.add(f); \
+        const text = readFileSync(f, "utf8"); \
+        for (const m of text.matchAll(/(?:\bfrom|\bimport)\s*\(?\s*["\x27](\.{1,2}\/[^"\x27]+)["\x27]/g)) \
+          todo.push(normalize(join(dirname(f), m[1]))); \
+        mkdirSync(join("/migrate/dist", dirname(f)), { recursive: true }); \
+        cpSync(f, join("/migrate/dist", f)); \
+      } \
+      console.log("migrate image dist: " + [...seen].sort().join(" "));' \
+ && cd /app \
+ && cp -R db/migrations /migrate/migrations \
+ && cp db/roles.sql /migrate/roles.sql \
+ && rm -rf /deploy/node_modules/.bin /deploy/node_modules/kysely /deploy/node_modules/.pnpm/kysely@* \
+ && mv /deploy/node_modules /migrate/node_modules \
+ && printf '{ "private": true, "type": "module" }\n' > /migrate/package.json \
+ && if { find /migrate -path /migrate/node_modules -prune -o \( -name 'seed*' -o -name testing \
+              -o -name test-support -o -name '*.test.*' \) -print; \
+            find /migrate -name '@shoestring*'; } | grep .; then \
+      echo "error: seed, testing or workspace package content in /migrate (above)" >&2; exit 1; fi
+
+# ---- migrate: the Cloud Run job image (distroless, non-root, read-only code) ---
+# Runs the migration with no command or args: dbmate as migrator, then
+# roles.sql's grant check. Reads MIGRATOR_DATABASE_URL (required; a non-local
+# host needs sslmode=verify-full). DATABASE_ADMIN_URL is local/test only.
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a AS migrate
+USER root
+WORKDIR /app
+ARG APP_RELEASE=dev
+ENV NODE_ENV=production \
+    APP_RELEASE=$APP_RELEASE
+COPY --from=migrate-build /migrate /app
+LABEL org.opencontainers.image.title="shoestring-migrate" \
+      org.opencontainers.image.source="https://github.com/CameronHardy9/shoestring-budget-app" \
+      org.opencontainers.image.revision=$APP_RELEASE
+USER nonroot
+# Setting ENTRYPOINT clears the base image's CMD, so the job needs no args.
+ENTRYPOINT ["/nodejs/bin/node", "/app/dist/cli/migrate.js"]
 
 # ---- runtime: distroless, non-root, no shell or package manager ---------------
 FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:6abfcb367ebc291572c774c1592a986be2ab26a2486f73093401327495a5962a AS runtime

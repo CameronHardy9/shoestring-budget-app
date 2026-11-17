@@ -256,7 +256,7 @@ New code-level surfaces: the `@shoestring/db` package boundary, the migrate CLI 
 |---|---|---|---|---|---|
 | T101 | Tenant isolation | Backend code mints a `BudgetScope` without a membership check (exported `issueBudgetScope`) or calls raw-`budgetId` DAL internals through a relative import into `db/src` | E/I | WeakSet registry, Semgrep cast bans, two-household suite with a coverage check | **F-41** (Medium; tooling gap in the R-7 condition) |
 | T102 | Migrate / testing | A superuser URL that only looks local (`?host=` override) bootstraps roles or TRUNCATEs a remote database; the migrator URL is used without `verify-full` | T/I | Hostname allowlist; refusals never echo the URL | **F-42** |
-| T103 | Seed | Demo accounts with an operator-known password are created in production (seed ships in the image, no environment guard) | S/E | example.com addresses; random password unless `SEED_USER_PASSWORD` is set | **F-43** |
+| T103 | Seed | Demo accounts with an operator-known password are created in production (seed ships in the image, no environment guard) | S/E | example.com addresses; random password unless `SEED_USER_PASSWORD` is set | **F-43** closed 2026-11-17: the guard was verified on 2026-11-13, and now nothing of `db/` is in the app image and no seed is in the migrate image (checked on the built images) |
 | T104 | DB roles | `app` creates temporary objects (default PUBLIC `TEMPORARY`) | E | `pg_temp` pinned last in the only SECURITY DEFINER function | **F-44** |
 | T105 | Audit log | `app` deletes or rewrites security events | R/T | INSERT/SELECT only; `purge_security_events()` takes no "now" and uses the database clock | Verified (F-26) |
 | T106 | Category delete vs quick-add race | Deferred split→category FK moves the failure to the transaction's COMMIT (raw 23503) | D/I | Pre-check plus `SET CONSTRAINTS … IMMEDIATE` in `deleteCategory`; composite FK unchanged | Accepted deviation; backend F-07 serializer must cover commit-time errors. **Covered 2026-11-14** (backend ledger test: commit-time 23503 is 500 with allowlisted fields only) |
@@ -349,6 +349,22 @@ No new API endpoint or role.
 | T132 | Source maps | Maps or `sourceMappingURL` reach users (source exposure; maps would also defeat the hidden-maps design) | I | `hidden` maps; the Dockerfile moves maps out of `/public` and fails if any remain; image-smoke asserts 404 and no `sourceMappingURL` | Holds (the maps are public-repo code anyway) |
 | T133 | Sentry config | A local process using the owner's Sentry CLI login (an agent session or malware) changes project settings (IP scrubbing, JS fetching, Allowed Domains) or deletes or loosens the alert rules, so data or alerts are silently lost | T/I | Narrow scopes (no `org:write`, no `event:admin`); org-level Security & Privacy still enforces scrubbing; `--dry-run` discipline; login expiry ~2026-12-15 | **Info (2026-11-17):** log out as soon as bootstrap step 13 is done; re-run the canary after any CLI write to project settings |
 
+### 5.12 Pre-deploy pass (review 2026-11-17, `chore/pre-deploy`)
+New artifacts and flows:
+- A second image per commit, `migrate` (distroless, nonroot): it holds the compiled migrate CLI, pg, dbmate, migrations and roles.sql, and runs only as the `shoestring-migrate` job with `MIGRATOR_DATABASE_URL`. The app image holds nothing of `db/`.
+- The owner ruled that the **GHCR packages (app, migrate, backup) are public** (2026-11-17). The deploy copies from them by digest without credentials.
+- The runbooks now run roles.sql as the database owner from a repo checkout or `git show` (bootstrap 8, the deploy precondition, restore 5).
+- `TRUST_PROXY_HOPS=1` is set on the service.
+
+No new endpoint, role or data store.
+
+| ID | Area | Threat | STRIDE | Mitigation | Status |
+|---|---|---|---|---|---|
+| T134 | Public images | Pulling a public image reveals a secret, config or code that the public repo doesn't | I | No secret build args (the auth token goes to `docker run -e`); build-stage ARGs and RUN lines aren't in the final history; `.env*`, `.git`, `.github`, `.claude`, `docs` and `infra` are dockerignored; only the `/out`, `/public` and `/migrate` assemblies reach a final stage; backend maps aren't served | Holds (checked on the built images 2026-11-17). For the future publish workflow, check: main only, `packages: write` scoped to the publish job, no secret build args (`provenance: mode=max` records build args), attestations preferred |
+| T135 | Migrate job | The migrator credential runs arbitrary code through a job override, or migrate logs leak the URL | E/I | Dedicated image (no admin or server code; overrides can't change the command); one secret; dbmate gets the URL through env; the CLI prints SQLSTATEs only; image-smoke greps every run for the passwords | Holds. Deployer rights over the job are unchanged (F-39) |
+| T136 | Restore | roles.sql runs as `neondb_owner` from a wrong or unreviewed commit (empty `SERVING_SHA` means the index copy; any fetched branch; an `APP_RELEASE` env value the deployer can set) | T/E | The migrate job's verify block fails closed on a missing owner part | **F-64** fixed and verified 2026-11-17: `check_sha` (full SHA, on `origin/main`, file exists), the SHA of the revision taking 100% of traffic, pipefail, owner URL not exported and unset; porcelain checks in bootstrap and deploy |
+| T137 | Client IP | `TRUST_PROXY_HOPS` measured on `run.app` but wrong for the domain mapping, or set high enough to trust a forged entry on the other public path | S/D | `TRUST_PROXY_HOPS=1` required and bounded 1–5 in production; hop-count trust function; no use of forwarded Host or Proto | **F-65** fixed in the runbook 2026-11-17 (mandatory 14a and 14b, stop on a mismatch); the measurement is still the F-08/V26 launch gate |
+
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
 
@@ -439,6 +455,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-17 | v3.0 | Sentry integration review (`feat/sentry`): §5.11 T127–T132; TB6 and the Sentry token asset rewritten; T73 and T74 updated (owner's spike-protection-only ruling); R-5 detail. F-50 closed; the Sentry halves of F-06 and F-07, the Sentry parts of F-23 and the F-09 alert code verified. `SAFE_MESSAGES` signed off. New F-59, F-60 and F-61 (Low). |
 | 2026-11-17 | v3.1 | Sentry follow-ups review (`fix/sentry-followups`): F-59, F-60 and F-61 verified; T128–T131 updated; new T133 (Sentry CLI login on the owner's Mac) and its §2.2 asset row; §5.11 A6 thresholds updated to 60%/100%. New F-62 (Low, F-59 residuals). CodeQL alerts #1–#4 triaged as not real (FINDINGS). |
 | 2026-11-17 | v3.2 | Offline and F-62 review (`fix/offline-and-f62`): F-62 verified with an accepted residual; TB6 and T128 updated; new F-63 (Low, web). "Online to save" (mutations `networkMode: "always"`, offline states) adds no endpoint, data flow, storage or trust boundary: no queued writes remain, retries reuse the Idempotency-Key under T8's existing controls. |
+| 2026-11-17 | v3.3 | Pre-deploy pass (`chore/pre-deploy`): §5.12 T134–T137 (separate migrate image, public GHCR packages per the owner's ruling, owner-run roles.sql, `TRUST_PROXY_HOPS`). F-43 closed (T103); F-47 still closed; F-10 post-deploy probes and the F-44 owner runs are now in the runbooks. New F-64 and F-65 (Low, sre). |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.
