@@ -9,6 +9,7 @@ import {
   ANONYMOUS,
   asStackParserSees,
   EXTERNAL,
+  framesTrusted,
   fromMessage,
   pathOf,
   patternProblems,
@@ -351,6 +352,9 @@ describe("stack frames (F-59)", () => {
       },
     };
   }
+  /** The event Sentry builds for a real error (its own V8 stack). */
+  const realEventOf = (error: Error) =>
+    eventFor(error.name, error.message, error.stack ?? "");
   const framesOf = (event: ErrorEvent, error: unknown) =>
     scrubEvent(event, { originalException: error }, ctx).exception?.values?.[0]
       ?.stacktrace?.frames;
@@ -517,10 +521,10 @@ describe("stack frames (F-59)", () => {
     expect(fromMessage({ function: "?" }, ["at ? (x:1:2)"])).toBe(false);
   });
 
-  describe("F-62", () => {
-    // Vitest installs Error.prepareStackTrace (source maps), which formats
-    // the header differently ("TypeError: " for an empty message). Browsers
-    // use V8's own formatting, so these tests do too.
+  // Vitest installs Error.prepareStackTrace (source maps), which formats
+  // the header differently ("TypeError: " for an empty message). Browsers
+  // use V8's own formatting, so the tests that depend on it do too.
+  function useV8StackFormat() {
     const v8 = Error as unknown as { prepareStackTrace?: unknown };
     let saved: unknown;
     beforeEach(() => {
@@ -530,6 +534,10 @@ describe("stack frames (F-59)", () => {
     afterEach(() => {
       v8.prepareStackTrace = saved;
     });
+  }
+
+  describe("F-62", () => {
+    useV8StackFormat();
 
     // (a) @sentry/core rewrites "(error: X)" to "X" in each line before
     // parsing it, so the frame's text is not verbatim in the message.
@@ -761,6 +769,167 @@ describe("stack frames (F-59)", () => {
           v8StackHeader(name, message),
         );
       }
+    });
+  });
+
+  describe("F-63", () => {
+    useV8StackFormat();
+
+    // (1) The SDK parses every stack line without "Error: ", so on V8 the
+    // header's first line (a name that doesn't end in "Error") and every
+    // line of a multi-line name can become frames too.
+    const CHUNK = `${ORIGIN}/assets/foo-12345678.js`;
+    const HEADERS: readonly (readonly [string, string])[] = [
+      ["ReauthCancelled", `Pharmacy@${CHUNK}:777:9`],
+      ["ReauthCancelled", "Paid /rent:1200:31"],
+      [`X\n    at Pharmacy (${CHUNK}:777:9)`, ""],
+      [`X\n    at Pharmacy (${CHUNK}:777:9)`, "Re-authentication cancelled"],
+      [`X\n    at Pharmacy (${CHUNK}:777:9)\nY`, "m"],
+    ];
+    const LEAKS = ["Pharmacy", "foo-12345678", "/rent", "Paid"];
+    /** A frame the parser built from header text. */
+    const fromHeader = (f: { lineno?: number; colno?: number }) =>
+      LEAKS.some((text) => JSON.stringify(f).includes(text)) ||
+      (f.lineno === 777 && f.colno === 9) ||
+      (f.lineno === 1200 && f.colno === 31);
+
+    it("(1) drops frames parsed from the header line or a multi-line name", () => {
+      for (const [name, message] of HEADERS) {
+        const label = JSON.stringify([name, message]);
+        const stack = `${v8StackHeader(name, message)}\n${REAL_V8}`;
+        const event = eventFor(name, message, stack);
+        // The real parser really does build a frame from the header.
+        const parsed = event.exception?.values?.[0]?.stacktrace?.frames ?? [];
+        expect(parsed.some(fromHeader), label).toBe(true);
+
+        const frames = framesOf(event, { name, message, stack });
+        const out = JSON.stringify(frames);
+        for (const text of LEAKS) expect(out, label).not.toContain(text);
+        expect(frames, label).toEqual(REAL_FRAMES);
+      }
+    });
+
+    it("(1) does the same for real V8 errors and the SDK's parser", () => {
+      for (const [name, message] of HEADERS) {
+        const label = JSON.stringify([name, message]);
+        const error = new Error(message);
+        error.name = name;
+        const event = realEventOf(error);
+        const parsed = event.exception?.values?.[0]?.stacktrace?.frames ?? [];
+        expect(parsed.filter(fromHeader), label).toHaveLength(1);
+
+        const frames = framesOf(event, error) ?? [];
+        expect(frames, label).toHaveLength(parsed.length - 1);
+        expect(frames.some(fromHeader), label).toBe(false);
+        const out = JSON.stringify(frames);
+        for (const text of LEAKS) expect(out, label).not.toContain(text);
+      }
+    });
+
+    it("(1) also covers a linked cause's header", () => {
+      const cause = new Error(`Pharmacy@${CHUNK}:777:9`);
+      cause.name = "ReauthCancelled";
+      const outer = new Error("Network request failed", { cause });
+      const event: ErrorEvent = {
+        type: undefined,
+        exception: {
+          values: [cause, outer].map((e) => ({
+            type: e.name,
+            value: e.message,
+            stacktrace: { frames: defaultStackParser(e.stack ?? "") },
+          })),
+        },
+      };
+      expect(JSON.stringify(event)).toContain("foo-12345678");
+      const out = scrubEvent(event, { originalException: outer }, ctx);
+      const values = out.exception?.values ?? [];
+      for (const v of values) {
+        expect(v.stacktrace?.frames?.length).toBeGreaterThan(0);
+        expect(v.stacktrace?.frames?.some(fromHeader)).toBe(false);
+      }
+      for (const text of LEAKS) expect(JSON.stringify(out)).not.toContain(text);
+    });
+
+    it("(1) keeps every frame of the app's own errors", () => {
+      // Their headers are fixed text that names no file or frame.
+      for (const error of [
+        new ReauthCancelled(),
+        new SignOutError({ cause: new NetworkError() }),
+        new UnexpectedResponseError(502, null),
+        Object.assign(new Error("m"), { name: "" }),
+      ]) {
+        const event = realEventOf(error);
+        const parsed = event.exception?.values?.[0]?.stacktrace?.frames ?? [];
+        expect(parsed.length, error.name).toBeGreaterThan(0);
+        expect(framesOf(event, error), error.name).toHaveLength(parsed.length);
+      }
+    });
+
+    // (2) The SDK follows only Error causes, but walks AggregateError.errors
+    // whatever the cause is: a long non-Error cause chain must not use up
+    // the walk before the child the SDK reports.
+    const staleError = () => {
+      const error = new Error(
+        "Unexpected token in JSON\n    at Pharmacy (x.js:4500:2)",
+      );
+      expect(error.stack).toContain("Pharmacy");
+      error.message = "Unexpected token";
+      return error;
+    };
+    const plainChain = (length: number) => {
+      let chain: object = {};
+      for (let i = 1; i < length; i++) chain = { cause: chain };
+      return chain;
+    };
+
+    it("(2) a long non-Error cause chain can't hide an errors[] child", () => {
+      const control = new AggregateError([staleError()], "m");
+      expect(framesTrusted(control, 2, true)).toBe(false);
+      const agg = new AggregateError([staleError()], "m", {
+        cause: plainChain(40),
+      });
+      expect(framesTrusted(agg, 2, true)).toBe(false);
+
+      // End to end: the SDK reports the stale child, and nothing of it goes.
+      const child = (agg.errors as Error[])[0] as Error;
+      const event: ErrorEvent = {
+        type: undefined,
+        exception: {
+          values: [child, agg].map((e) => ({
+            type: e.name,
+            value: e.message,
+            stacktrace: { frames: defaultStackParser(e.stack ?? "") },
+          })),
+        },
+      };
+      expect(JSON.stringify(event)).toContain("Pharmacy");
+      const out = scrubEvent(event, { originalException: agg }, ctx);
+      for (const v of out.exception?.values ?? [])
+        expect(v.stacktrace).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain("Pharmacy");
+      expect(JSON.stringify(out)).not.toContain("4500");
+    });
+
+    it("(2) fails closed when the walk reaches its cap", () => {
+      // Even when every error in it is fresh.
+      const fresh = () =>
+        new AggregateError([new Error("a")], "m", { cause: plainChain(40) });
+      expect(framesTrusted(fresh(), 2, true)).toBe(false);
+      const errorChain = (length: number) => {
+        let error = new Error("e");
+        for (let i = 1; i < length; i++)
+          error = new Error("e", { cause: error });
+        return error;
+      };
+      expect(framesTrusted(errorChain(40), 6, true)).toBe(false);
+      // Below the cap, and with cycles, fresh errors are still trusted.
+      expect(framesTrusted(errorChain(8), 6, true)).toBe(true);
+      expect(
+        framesTrusted(new AggregateError([new Error("a")], "m"), 2, true),
+      ).toBe(true);
+      const cyclic = new Error("x");
+      cyclic.cause = cyclic;
+      expect(framesTrusted(cyclic, 1, true)).toBe(true);
     });
   });
 });

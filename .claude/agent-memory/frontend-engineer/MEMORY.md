@@ -1,3 +1,3 @@
-- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP, Tailwind v4, React 19 lazy, jsdom seams, V8 stack headers, TanStack defaults
-- [Build status](project-phase1-status.md) — owner decisions, MVP + hardening + lost-tap + offline/F-62, device-only checks, open items
+- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP, Tailwind v4, React 19 lazy, jsdom seams, V8 stack headers + Sentry parser/linkedErrors, TanStack defaults
+- [Build status](project-phase1-status.md) — owner decisions, MVP + hardening + lost-tap + offline/F-62 + F-63, device-only checks, open items
 - [No .env secrets](feedback-no-env-secrets.md) — don't read seed passwords from .env for checks; use test hooks or ask

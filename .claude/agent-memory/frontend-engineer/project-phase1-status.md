@@ -17,3 +17,4 @@ Lost-tap follow-up (2026-11-16, fix/loading-tap-targets, owner ruling round 6): 
 
 
 Offline + F-62 web (2026-11-17, fix/offline-and-f62, owner rulings round 7/8): mutations `networkMode: "always"` (fail fast offline, no exceptions); every data screen's pending slot is `PendingSlot` (incl. Home, which wasn't on the owner's list). F-62 (b) residual: a line-break-exact message cut can't be detected; flagged to the tech lead for security-reviewer. Not done: an offline note for a paused "Load more" (Transactions) — the button just does nothing visible until reconnect.
+F-63 web (2026-11-17, fix/f63-scrub): header-line haystack + fail-closed linked-error cap in scrub.ts; awaiting security-reviewer verification.
