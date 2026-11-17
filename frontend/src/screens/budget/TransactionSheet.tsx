@@ -2,6 +2,12 @@
 // is already up) → tap a category → Save. Date (budget's today), payee, memo
 // and split are optional and one tap away.
 //
+// "+" is never ignored: the sheet opens at once, even before the budget has
+// loaded, with the amount field focused and usable. Everything below it waits
+// behind one loading region until the budget, its categories and the recent
+// transactions (which order the chips) have arrived, so no chip or button
+// appears, moves or reorders under a finger.
+//
 // Honest saving: the Save button shows progress; on failure everything typed
 // stays and Retry re-sends with the SAME Idempotency-Key (ADR-0002), so a save
 // whose response was lost can never create a duplicate. A new key is made only
@@ -15,6 +21,7 @@ import type { Budget, Category, Transaction } from "../../api/types.ts";
 import { useMe } from "../../app/auth.tsx";
 import {
   getTransaction,
+  PAGE_SIZE,
   useCategories,
   useCreateTransaction,
   useDeleteTransaction,
@@ -29,6 +36,7 @@ import {
   draftFrom,
   emptyDraft,
   endSplit,
+  keepKnownFirst,
   MAX_SPLITS,
   newRow,
   orderCategories,
@@ -50,6 +58,7 @@ import {
   ErrorState,
   FormError,
   LoadingState,
+  OfflineState,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
 import { dayLabel } from "../../lib/dates.ts";
@@ -184,32 +193,95 @@ function ConflictPanel({
   );
 }
 
+/**
+ * Stands in for the chips and buttons until the sheet has what it needs. The
+ * last thing in the form, so nothing tappable sits below it and moves when it
+ * is replaced. Failures say so, with a retry, instead of loading forever.
+ */
+function SheetPending({
+  offline,
+  budgetError,
+  onRetryBudget,
+  categoriesError,
+  onRetryCategories,
+}: {
+  /** A read is paused: offline with nothing cached (it waits, never fails). */
+  offline: boolean;
+  budgetError: unknown;
+  onRetryBudget: (() => void) | undefined;
+  categoriesError: unknown;
+  onRetryCategories: () => void;
+}) {
+  if (budgetError) {
+    return (
+      <ErrorState
+        error={budgetError}
+        title="Couldn't load this budget"
+        {...(onRetryBudget ? { onRetry: onRetryBudget } : {})}
+      />
+    );
+  }
+  if (categoriesError) {
+    return (
+      <ErrorState
+        error={categoriesError}
+        title="Couldn't load the categories"
+        onRetry={onRetryCategories}
+      />
+    );
+  }
+  if (offline) {
+    return (
+      <OfflineState message="You're offline. The categories will appear when you reconnect." />
+    );
+  }
+  return <LoadingState rows={2} label="Loading categories…" />;
+}
+
 function Editor({
+  budgetId,
   budget,
+  budgetError,
+  budgetPaused,
+  onRetryBudget,
   mode,
   onClose,
 }: {
-  budget: Budget;
+  budgetId: string;
+  budget: Budget | undefined;
+  budgetError: unknown;
+  budgetPaused: boolean;
+  onRetryBudget: (() => void) | undefined;
   mode: SheetMode;
   onClose: () => void;
 }) {
   const me = useMe();
   const toast = useToast();
-  const categoriesQuery = useCategories(budget.id);
-  const recent = useTransactions(budget.id, {
-    month: budget.currentMonth,
-    categoryId: null,
-  });
-  const create = useCreateTransaction(budget.id);
-  const replace = useReplaceTransaction(budget.id);
-  const remove = useDeleteTransaction(budget.id);
+  const categoriesQuery = useCategories(budgetId);
+  const recent = useTransactions(
+    budgetId,
+    { month: budget?.currentMonth ?? "", categoryId: null },
+    PAGE_SIZE,
+    budget !== undefined,
+  );
+  const create = useCreateTransaction(budgetId);
+  const replace = useReplaceTransaction(budgetId);
+  const remove = useDeleteTransaction(budgetId);
 
   const editing = mode.kind === "edit" ? mode.transaction : null;
   const [draft, setDraft] = useState<Draft>(() =>
     editing
       ? draftFrom(editing)
-      : (mode.kind === "create" && mode.draft) || emptyDraft(budget.today),
+      : (mode.kind === "create" && mode.draft) ||
+        emptyDraft(budget?.today ?? ""),
   );
+  // Opened before the budget loaded: the date is the budget's today (its time
+  // zone, not the phone's), filled in as soon as the budget arrives.
+  const [awaitingToday, setAwaitingToday] = useState(() => draft.date === "");
+  if (awaitingToday && budget) {
+    setAwaitingToday(false);
+    setDraft((d) => ({ ...d, date: budget.today }));
+  }
   const [version, setVersion] = useState(editing?.version ?? 0);
   const [showErrors, setShowErrors] = useState(false);
   const [server, setServer] = useState<{
@@ -244,13 +316,36 @@ function Editor({
     () => recentCategoryIds(recent.data?.pages[0]?.items ?? []),
     [recent.data],
   );
+  // Data only, never status: a failed background refetch keeps the data, and
+  // must not fold the form away mid-entry.
+  // A recent list paused offline counts as settled: chips use the default
+  // order rather than wait for a connection.
+  const ready =
+    budget !== undefined &&
+    categoriesQuery.data !== undefined &&
+    (!recent.isPending || recent.isPaused);
+  // The chip order is captured once, when the chips first appear, and kept
+  // until the sheet closes: "Save & new" refetches the recent list, and a chip
+  // must not move between the person reading it and tapping it. The category
+  // just used leads the next time the sheet opens.
+  const [frozen, setFrozen] = useState<{
+    recentIds: string[];
+    known: ReadonlySet<string>;
+  } | null>(null);
+  if (frozen === null && ready) {
+    setFrozen({
+      recentIds,
+      known: new Set(allCategories.map((c) => c.id)),
+    });
+  }
   const keepIds = editing ? editing.splits.map((s) => s.categoryId) : [];
-  const ordered = orderCategories(
+  const liveOrder = orderCategories(
     allCategories,
-    recentIds,
+    frozen?.recentIds ?? recentIds,
     draft.direction,
     keepIds,
   );
+  const ordered = frozen ? keepKnownFirst(liveOrder, frozen.known) : liveOrder;
   const chips = showAll ? ordered : ordered.slice(0, CHIP_LIMIT);
   const selectedHidden =
     draft.categoryId !== null && !chips.some((c) => c.id === draft.categoryId);
@@ -258,7 +353,8 @@ function Editor({
     ? [...chips, ...ordered.filter((c) => c.id === draft.categoryId)]
     : chips;
 
-  const built = buildTransaction(draft, budget.today);
+  const today = budget?.today ?? "";
+  const built = buildTransaction(draft, today);
   const local = built.ok ? { rows: {} } : built.errors;
   const errors: DraftErrors = showErrors
     ? {
@@ -282,6 +378,8 @@ function Editor({
     andNew: boolean,
     opts: { overrideVersion?: number } = {},
   ) {
+    // Enter in the amount field while the rest is still loading.
+    if (!ready) return;
     setShowErrors(true);
     setFailure(null);
     if (!built.ok) return;
@@ -314,7 +412,7 @@ function Editor({
       if (andNew) {
         setSavedNote(message);
         setDraft({
-          ...emptyDraft(budget.today),
+          ...emptyDraft(today),
           direction: draft.direction,
           date: draft.date,
         });
@@ -327,10 +425,10 @@ function Editor({
     } catch (error) {
       if (error instanceof ApiError) {
         if (error.code === "UNAUTHENTICATED")
-          stashDraft(budget.id, me.id, draft);
+          stashDraft(budgetId, me.id, draft);
         if (error.code === "VERSION_CONFLICT" && editing) {
           try {
-            setConflict(await getTransaction(budget.id, editing.id));
+            setConflict(await getTransaction(budgetId, editing.id));
           } catch (e) {
             if (e instanceof ApiError && e.code === "NOT_FOUND") setGone(true);
             else setFailure(e);
@@ -371,7 +469,7 @@ function Editor({
       if (error instanceof ApiError && error.code === "VERSION_CONFLICT") {
         setConfirmDelete(false);
         try {
-          setConflict(await getTransaction(budget.id, editing.id));
+          setConflict(await getTransaction(budgetId, editing.id));
         } catch (e) {
           setFailure(e);
         }
@@ -381,16 +479,7 @@ function Editor({
     }
   }
 
-  if (categoriesQuery.isPending) return <LoadingState rows={2} />;
-  if (categoriesQuery.isError) {
-    return (
-      <ErrorState
-        error={categoriesQuery.error}
-        onRetry={() => void categoriesQuery.refetch()}
-      />
-    );
-  }
-  if (allCategories.length === 0) {
+  if (categoriesQuery.data && allCategories.length === 0) {
     return (
       <Alert tone="info">
         This budget has no categories yet. Add some under Budgets first.
@@ -424,7 +513,7 @@ function Editor({
     amountCents !== null && draft.split
       ? remainderFor(amountCents, rowCents, lastIndex)
       : null;
-  const { min, max } = dateBounds(budget.today);
+  const { min, max } = dateBounds(today);
   const reused =
     failure instanceof ApiError && failure.code === "IDEMPOTENCY_KEY_REUSED";
 
@@ -483,314 +572,346 @@ function Editor({
         />
       </div>
 
-      {!draft.split ? (
-        <div className="flex flex-col gap-2">
-          <ChipGroup
-            label="Category"
-            hideLabel
-            chips={visibleChips.map((c) => ({ id: c.id, label: c.name }))}
-            value={draft.categoryId}
-            onChange={(categoryId) => {
-              update({ categoryId });
-            }}
-            {...(errors.category ? { errorMessage: errors.category } : {})}
-          />
-          {ordered.length > CHIP_LIMIT ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="self-start"
-              aria-expanded={showAll}
+      {ready ? (
+        <>
+          {!draft.split ? (
+            <div className="flex flex-col gap-2">
+              <ChipGroup
+                label="Category"
+                hideLabel
+                chips={visibleChips.map((c) => ({ id: c.id, label: c.name }))}
+                value={draft.categoryId}
+                onChange={(categoryId) => {
+                  update({ categoryId });
+                }}
+                {...(errors.category ? { errorMessage: errors.category } : {})}
+              />
+              {ordered.length > CHIP_LIMIT ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="self-start"
+                  aria-expanded={showAll}
+                  onPress={() => {
+                    setShowAll((v) => !v);
+                  }}
+                >
+                  {showAll
+                    ? "Fewer categories"
+                    : `All categories (${String(ordered.length)})`}
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <fieldset
+              className="flex flex-col gap-2"
+              data-testid="split-editor"
+            >
+              <legend className="mb-2 text-sm font-medium text-fg">
+                Split between categories
+              </legend>
+              {draft.rows.map((row, i) => (
+                <div key={row.key} className="flex items-start gap-2">
+                  <CategorySelect
+                    label={`Category ${String(i + 1)}`}
+                    categories={ordered}
+                    value={row.categoryId}
+                    error={errors.rows[i]?.category}
+                    onChange={(categoryId) => {
+                      update({
+                        rows: draft.rows.map((r, j) =>
+                          j === i ? { ...r, categoryId } : r,
+                        ),
+                      });
+                    }}
+                  />
+                  <AmountField
+                    label={`Amount ${String(i + 1)}${row.categoryId ? `, ${categoryName(row.categoryId)}` : ""}`}
+                    hideLabel
+                    className="w-32"
+                    value={row.text}
+                    onChange={(text) => {
+                      update({
+                        rows: draft.rows.map((r, j) =>
+                          j === i ? { ...r, text } : r,
+                        ),
+                      });
+                    }}
+                    errorMessage={errors.rows[i]?.amount}
+                  />
+                  <Button
+                    variant="quiet"
+                    size="icon"
+                    aria-label={`Remove ${row.categoryId ? categoryName(row.categoryId) : `line ${String(i + 1)}`}`}
+                    onPress={() => {
+                      const rows = draft.rows.filter((_, j) => j !== i);
+                      update(
+                        rows.length === 1
+                          ? endSplit({ ...draft, rows })
+                          : { rows },
+                      );
+                    }}
+                  >
+                    <Icon name="trash" />
+                  </Button>
+                </div>
+              ))}
+              {draft.rows.length < MAX_SPLITS ? (
+                <Button
+                  variant="ghost"
+                  size="md"
+                  className="self-start"
+                  onPress={() => {
+                    update({ rows: [...draft.rows, newRow()] });
+                  }}
+                >
+                  <Icon name="plus" /> Add category
+                </Button>
+              ) : null}
+              <div aria-live="polite" data-testid="split-left-to-assign">
+                {balance?.kind === "under" ? (
+                  <Alert tone="warning">
+                    <Money cents={balance.leftCents} /> left to assign
+                  </Alert>
+                ) : balance?.kind === "over" ? (
+                  <Alert tone="danger">
+                    Splits are <Money cents={balance.overCents} /> more than the
+                    total
+                  </Alert>
+                ) : balance?.kind === "balanced" ? (
+                  <Alert tone="success">Fully assigned</Alert>
+                ) : null}
+              </div>
+              {rest !== null && balance?.kind === "under" && lastCategory ? (
+                <Button
+                  variant="secondary"
+                  onPress={() => {
+                    update({
+                      rows: draft.rows.map((r, j) =>
+                        j === lastIndex
+                          ? { ...r, text: centsToInputString(rest) }
+                          : r,
+                      ),
+                    });
+                  }}
+                >
+                  Put the rest on {categoryName(lastCategory)}
+                </Button>
+              ) : null}
+              {errors.split && balance?.kind !== "under" ? (
+                <p className="text-sm text-danger">{errors.split}</p>
+              ) : null}
+            </fieldset>
+          )}
+
+          <div className="flex gap-2">
+            <OptionPill
+              icon="calendar"
+              pressed={showDate}
+              label={`Date: ${dayLabel(draft.date, today)}`}
               onPress={() => {
-                setShowAll((v) => !v);
+                setShowDate((v) => !v);
               }}
             >
-              {showAll
-                ? "Fewer categories"
-                : `All categories (${String(ordered.length)})`}
-            </Button>
+              {dayLabel(draft.date, today)}
+            </OptionPill>
+            <OptionPill
+              icon="note"
+              pressed={showNote}
+              onPress={() => {
+                setShowNote((v) => !v);
+              }}
+            >
+              Note
+            </OptionPill>
+            <OptionPill
+              icon="split"
+              pressed={draft.split}
+              label={draft.split ? "Split, on" : "Split"}
+              onPress={() => {
+                update(draft.split ? endSplit(draft) : startSplit(draft));
+              }}
+            >
+              Split
+            </OptionPill>
+          </div>
+
+          {showDate ? (
+            <TextField
+              label="Date"
+              type="date"
+              min={min}
+              max={max}
+              value={draft.date}
+              onChange={(date) => {
+                update({ date });
+              }}
+              {...(errors.date ? { errorMessage: errors.date } : {})}
+            />
+          ) : errors.date ? (
+            <p className="text-sm text-danger">{errors.date}</p>
           ) : null}
-        </div>
-      ) : (
-        <fieldset className="flex flex-col gap-2" data-testid="split-editor">
-          <legend className="mb-2 text-sm font-medium text-fg">
-            Split between categories
-          </legend>
-          {draft.rows.map((row, i) => (
-            <div key={row.key} className="flex items-start gap-2">
-              <CategorySelect
-                label={`Category ${String(i + 1)}`}
-                categories={ordered}
-                value={row.categoryId}
-                error={errors.rows[i]?.category}
-                onChange={(categoryId) => {
-                  update({
-                    rows: draft.rows.map((r, j) =>
-                      j === i ? { ...r, categoryId } : r,
-                    ),
-                  });
+          {showNote ? (
+            <>
+              <TextField
+                label="Payee"
+                description="Optional, e.g. the shop's name."
+                maxLength={100}
+                value={draft.payee}
+                onChange={(payee) => {
+                  update({ payee });
                 }}
+                {...(errors.payee ? { errorMessage: errors.payee } : {})}
               />
-              <AmountField
-                label={`Amount ${String(i + 1)}${row.categoryId ? `, ${categoryName(row.categoryId)}` : ""}`}
-                hideLabel
-                className="w-32"
-                value={row.text}
-                onChange={(text) => {
-                  update({
-                    rows: draft.rows.map((r, j) =>
-                      j === i ? { ...r, text } : r,
-                    ),
-                  });
+              <TextField
+                label="Memo"
+                maxLength={500}
+                value={draft.memo}
+                onChange={(memo) => {
+                  update({ memo });
                 }}
-                errorMessage={errors.rows[i]?.amount}
+                {...(errors.memo ? { errorMessage: errors.memo } : {})}
               />
+            </>
+          ) : null}
+
+          {server?.form.length ? (
+            <Alert tone="danger">{server.form.join(" ")}</Alert>
+          ) : null}
+          {failure && !reused ? <FormError error={failure} /> : null}
+          {reused ? (
+            <div
+              role="alert"
+              className="flex flex-col gap-2 rounded-md bg-warning-soft p-3 text-sm"
+            >
+              <p className="font-medium text-fg">
+                Your first save went through, but these later changes weren't
+                saved.
+              </p>
               <Button
-                variant="quiet"
-                size="icon"
-                aria-label={`Remove ${row.categoryId ? categoryName(row.categoryId) : `line ${String(i + 1)}`}`}
+                variant="secondary"
+                size="sm"
                 onPress={() => {
-                  const rows = draft.rows.filter((_, j) => j !== i);
-                  update(
-                    rows.length === 1 ? endSplit({ ...draft, rows }) : { rows },
-                  );
+                  keyRef.current = newIdempotencyKey();
+                  void save(false);
                 }}
               >
-                <Icon name="trash" />
+                Save this as a new transaction
               </Button>
             </div>
-          ))}
-          {draft.rows.length < MAX_SPLITS ? (
-            <Button
-              variant="ghost"
-              size="md"
-              className="self-start"
-              onPress={() => {
-                update({ rows: [...draft.rows, newRow()] });
-              }}
-            >
-              <Icon name="plus" /> Add category
-            </Button>
           ) : null}
-          <div aria-live="polite" data-testid="split-left-to-assign">
-            {balance?.kind === "under" ? (
-              <Alert tone="warning">
-                <Money cents={balance.leftCents} /> left to assign
-              </Alert>
-            ) : balance?.kind === "over" ? (
-              <Alert tone="danger">
-                Splits are <Money cents={balance.overCents} /> more than the
-                total
-              </Alert>
-            ) : balance?.kind === "balanced" ? (
-              <Alert tone="success">Fully assigned</Alert>
-            ) : null}
+
+          {confirmDelete ? (
+            <div
+              ref={confirmRef}
+              tabIndex={-1}
+              role="group"
+              aria-label="Confirm delete"
+              className="flex flex-col gap-2 rounded-md bg-danger-soft p-3"
+            >
+              <p className="text-sm font-medium text-fg">
+                Delete this transaction? Totals update straight away.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onPress={() => {
+                    setConfirmDelete(false);
+                  }}
+                >
+                  Keep it
+                </Button>
+                <Button
+                  variant="danger"
+                  className="flex-1"
+                  isPending={remove.isPending}
+                  onPress={() => void doDelete()}
+                  data-testid="confirm-delete"
+                >
+                  Delete
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          <p
+            role="status"
+            className="text-sm font-medium text-success empty:hidden"
+            data-testid="sheet-status"
+          >
+            {savedNote}
+          </p>
+          <div className="flex gap-2 pt-1">
+            {editing ? (
+              <Button
+                variant="secondary"
+                size="lg"
+                className="flex-1"
+                isDisabled={busy}
+                onPress={() => {
+                  setConfirmDelete(true);
+                }}
+                data-testid="delete-transaction"
+              >
+                Delete
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="lg"
+                className="flex-1"
+                isPending={create.isPending}
+                onPress={() => void save(true)}
+                data-testid="quick-add-save-new"
+              >
+                Save &amp; new
+              </Button>
+            )}
+            <Button
+              type="submit"
+              size="lg"
+              className="flex-[1.4]"
+              isPending={create.isPending || replace.isPending}
+              data-testid="quick-add-save"
+            >
+              {failure && !reused ? "Retry" : "Save"}
+            </Button>
           </div>
-          {rest !== null && balance?.kind === "under" && lastCategory ? (
-            <Button
-              variant="secondary"
-              onPress={() => {
-                update({
-                  rows: draft.rows.map((r, j) =>
-                    j === lastIndex
-                      ? { ...r, text: centsToInputString(rest) }
-                      : r,
-                  ),
-                });
-              }}
-            >
-              Put the rest on {categoryName(lastCategory)}
-            </Button>
-          ) : null}
-          {errors.split && balance?.kind !== "under" ? (
-            <p className="text-sm text-danger">{errors.split}</p>
-          ) : null}
-        </fieldset>
-      )}
-
-      <div className="flex gap-2">
-        <OptionPill
-          icon="calendar"
-          pressed={showDate}
-          label={`Date: ${dayLabel(draft.date, budget.today)}`}
-          onPress={() => {
-            setShowDate((v) => !v);
-          }}
-        >
-          {dayLabel(draft.date, budget.today)}
-        </OptionPill>
-        <OptionPill
-          icon="note"
-          pressed={showNote}
-          onPress={() => {
-            setShowNote((v) => !v);
-          }}
-        >
-          Note
-        </OptionPill>
-        <OptionPill
-          icon="split"
-          pressed={draft.split}
-          label={draft.split ? "Split, on" : "Split"}
-          onPress={() => {
-            update(draft.split ? endSplit(draft) : startSplit(draft));
-          }}
-        >
-          Split
-        </OptionPill>
-      </div>
-
-      {showDate ? (
-        <TextField
-          label="Date"
-          type="date"
-          min={min}
-          max={max}
-          value={draft.date}
-          onChange={(date) => {
-            update({ date });
-          }}
-          {...(errors.date ? { errorMessage: errors.date } : {})}
-        />
-      ) : errors.date ? (
-        <p className="text-sm text-danger">{errors.date}</p>
-      ) : null}
-      {showNote ? (
-        <>
-          <TextField
-            label="Payee"
-            description="Optional, e.g. the shop's name."
-            maxLength={100}
-            value={draft.payee}
-            onChange={(payee) => {
-              update({ payee });
-            }}
-            {...(errors.payee ? { errorMessage: errors.payee } : {})}
-          />
-          <TextField
-            label="Memo"
-            maxLength={500}
-            value={draft.memo}
-            onChange={(memo) => {
-              update({ memo });
-            }}
-            {...(errors.memo ? { errorMessage: errors.memo } : {})}
-          />
         </>
-      ) : null}
-
-      {server?.form.length ? (
-        <Alert tone="danger">{server.form.join(" ")}</Alert>
-      ) : null}
-      {failure && !reused ? <FormError error={failure} /> : null}
-      {reused ? (
-        <div
-          role="alert"
-          className="flex flex-col gap-2 rounded-md bg-warning-soft p-3 text-sm"
-        >
-          <p className="font-medium text-fg">
-            Your first save went through, but these later changes weren't saved.
-          </p>
-          <Button
-            variant="secondary"
-            size="sm"
-            onPress={() => {
-              keyRef.current = newIdempotencyKey();
-              void save(false);
-            }}
-          >
-            Save this as a new transaction
-          </Button>
-        </div>
-      ) : null}
-
-      {confirmDelete ? (
-        <div
-          ref={confirmRef}
-          tabIndex={-1}
-          role="group"
-          aria-label="Confirm delete"
-          className="flex flex-col gap-2 rounded-md bg-danger-soft p-3"
-        >
-          <p className="text-sm font-medium text-fg">
-            Delete this transaction? Totals update straight away.
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="secondary"
-              className="flex-1"
-              onPress={() => {
-                setConfirmDelete(false);
-              }}
-            >
-              Keep it
-            </Button>
-            <Button
-              variant="danger"
-              className="flex-1"
-              isPending={remove.isPending}
-              onPress={() => void doDelete()}
-              data-testid="confirm-delete"
-            >
-              Delete
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      <p
-        role="status"
-        className="text-sm font-medium text-success empty:hidden"
-        data-testid="sheet-status"
-      >
-        {savedNote}
-      </p>
-      <div className="flex gap-2 pt-1">
-        {editing ? (
-          <Button
-            variant="secondary"
-            size="lg"
-            className="flex-1"
-            isDisabled={busy}
-            onPress={() => {
-              setConfirmDelete(true);
-            }}
-            data-testid="delete-transaction"
-          >
-            Delete
-          </Button>
-        ) : (
-          <Button
-            variant="secondary"
-            size="lg"
-            className="flex-1"
-            isPending={create.isPending}
-            onPress={() => void save(true)}
-            data-testid="quick-add-save-new"
-          >
-            Save &amp; new
-          </Button>
-        )}
-        <Button
-          type="submit"
-          size="lg"
-          className="flex-[1.4]"
-          isPending={create.isPending || replace.isPending}
-          data-testid="quick-add-save"
-        >
-          {failure && !reused ? "Retry" : "Save"}
-        </Button>
-      </div>
+      ) : (
+        <SheetPending
+          offline={
+            (budget === undefined && budgetPaused) ||
+            (categoriesQuery.isPending && categoriesQuery.isPaused)
+          }
+          budgetError={budgetError}
+          onRetryBudget={onRetryBudget}
+          categoriesError={categoriesQuery.data ? null : categoriesQuery.error}
+          onRetryCategories={() => void categoriesQuery.refetch()}
+        />
+      )}
     </form>
   );
 }
 
 export function TransactionSheet({
+  budgetId,
   budget,
+  budgetError = null,
+  budgetPaused = false,
+  onRetryBudget,
   mode,
   onClose,
 }: {
-  budget: Budget;
+  budgetId: string;
+  /** Undefined while the budget loads: the sheet opens anyway. */
+  budget: Budget | undefined;
+  /** Why the budget couldn't load (BudgetLayout handles 404 itself). */
+  budgetError?: unknown;
+  /** The budget read is paused offline (nothing cached). */
+  budgetPaused?: boolean;
+  onRetryBudget?: () => void;
   mode: SheetMode | null;
   onClose: () => void;
 }) {
@@ -803,7 +924,17 @@ export function TransactionSheet({
       }}
       data-testid="quick-add-sheet"
     >
-      {mode ? <Editor budget={budget} mode={mode} onClose={onClose} /> : null}
+      {mode ? (
+        <Editor
+          budgetId={budgetId}
+          budget={budget}
+          budgetError={budgetError}
+          budgetPaused={budgetPaused}
+          onRetryBudget={onRetryBudget}
+          mode={mode}
+          onClose={onClose}
+        />
+      ) : null}
     </Sheet>
   );
 }

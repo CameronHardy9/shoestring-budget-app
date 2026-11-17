@@ -27,7 +27,7 @@ import { Section } from "../../components/Section.tsx";
 import {
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
 import { setLastBudgetId } from "../../lib/preferences.ts";
@@ -139,7 +139,17 @@ function Invitations({ budgetId }: { budgetId: string }) {
   const client = useQueryClient();
   const invitations = useBudgetInvitations(budgetId, true);
   const action = useAction();
-  if (invitations.isPending) return <LoadingState rows={1} />;
+  // Rendered only once the sections below are shown (MembersScreen), so a
+  // pending list here is paused offline or resuming after a reconnect.
+  if (invitations.isPending)
+    return (
+      <PendingSlot
+        paused={invitations.isPaused}
+        rowsBelowShown
+        rows={1}
+        offlineMessage="You're offline. Invitations will appear when you reconnect."
+      />
+    );
   if (invitations.isError)
     return (
       <ErrorState
@@ -284,6 +294,22 @@ export default function MembersScreen() {
   const [pending, setPending] = useState<Pending>(null);
   const action = useAction();
   const isOwner = budget.myRole === "owner";
+  // Same query as <Invitations>; read here only to know when it has settled.
+  const invitations = useBudgetInvitations(budget.id, isOwner);
+  // The sections below the member list (and, for the owner, below the
+  // invitation list) appear only once both lists have their final length, so
+  // the invite field, rename and Delete never move under a finger. A read
+  // paused offline (nothing cached) counts as settled, or they'd never appear.
+  // Latched, so they stay while a paused read resumes after a reconnect.
+  const [settled, setSettled] = useState(false);
+  const listSettled = (q: { isPending: boolean; isPaused: boolean }) =>
+    !q.isPending || q.isPaused;
+  if (
+    !settled &&
+    listSettled(members) &&
+    (!isOwner || listSettled(invitations))
+  )
+    setSettled(true);
 
   const leaveBudget = async () => {
     setLastBudgetId(null);
@@ -382,7 +408,12 @@ export default function MembersScreen() {
       </div>
       <Section title="Members" id="members-heading">
         {members.isPending ? (
-          <LoadingState rows={2} />
+          <PendingSlot
+            paused={members.isPaused}
+            rowsBelowShown={settled}
+            rows={2}
+            offlineMessage="You're offline. Members will appear when you reconnect."
+          />
         ) : members.isError ? (
           <ErrorState
             error={members.error}
@@ -457,7 +488,7 @@ export default function MembersScreen() {
         )}
       </Section>
 
-      {isOwner ? (
+      {!settled ? null : isOwner ? (
         <>
           <Section title="Invite someone" id="invite-heading">
             <InviteForm budgetId={budget.id} />

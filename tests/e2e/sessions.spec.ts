@@ -17,7 +17,7 @@ import {
   signInAs,
   test,
 } from "./fixtures.ts";
-import { openMoreSettled, signOutThenBack } from "./sign-out-back.ts";
+import { signOutThenBack } from "./sign-out-back.ts";
 
 const ALLOWED_LOCAL_STORAGE = new Set([
   "shoestring.theme",
@@ -79,7 +79,7 @@ test.describe("sign-out and back-forward cache (C3.5, F-32)", () => {
   }) => {
     const user = await createUser({ prefix: "unplugged" });
     await signInAs(page, user.email);
-    await openMoreSettled(page);
+    await page.goto("/more");
     const cookie = (await page.context().cookies()).find(
       (c) => c.name === COOKIE_NAME,
     );

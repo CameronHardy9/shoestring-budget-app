@@ -281,6 +281,22 @@ export function orderCategories(
     });
 }
 
+/**
+ * Chip order frozen for one sheet session: categories that existed when the
+ * order was captured keep their relative order; ones added since go last, so
+ * no existing chip moves. Removed or archived ones simply drop out (a chip
+ * that no longer exists can't be tapped).
+ */
+export function keepKnownFirst(
+  ordered: readonly Category[],
+  known: ReadonlySet<string>,
+): Category[] {
+  return [
+    ...ordered.filter((c) => known.has(c.id)),
+    ...ordered.filter((c) => !known.has(c.id)),
+  ];
+}
+
 /** Category IDs in order of most recent use, from newest-first transactions. */
 export function recentCategoryIds(
   transactions: readonly Transaction[],

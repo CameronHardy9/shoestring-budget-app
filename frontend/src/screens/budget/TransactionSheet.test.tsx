@@ -7,10 +7,13 @@ import {
   budget,
   BUDGET_ID,
   categories,
+  category,
   transaction,
   uuid,
 } from "../../test/fixtures.ts";
+import { deferred, tappableAfter } from "../../test/layout.ts";
 import { renderWithApp } from "../../test/render.tsx";
+import { keys } from "../../app/data.ts";
 import { TransactionSheet, type SheetMode } from "./TransactionSheet.tsx";
 
 const TX = `/budgets/${BUDGET_ID}/transactions`;
@@ -23,6 +26,7 @@ function open(mode: SheetMode = { kind: "create" }) {
   let closed = 0;
   const view = renderWithApp(
     <TransactionSheet
+      budgetId={BUDGET_ID}
       budget={budget}
       mode={mode}
       onClose={() => (closed += 1)}
@@ -60,6 +64,56 @@ describe("quick-add", () => {
     expect(
       await screen.findByText("Saved $42.50 to Groceries"),
     ).toBeInTheDocument();
+  });
+
+  it("holds the chips until recent use has ordered them, so none moves under a tap", async () => {
+    const recent = deferred<ReturnType<typeof json>>();
+    mockApi({
+      ...base,
+      [`GET ${TX}`]: () => recent.promise,
+    });
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    expect(amount).toHaveFocus();
+    const loading = await within(sheet()).findByTestId("loading");
+    expect(tappableAfter(loading, sheet())).toEqual([]);
+    expect(within(sheet()).queryByText("Groceries")).toBeNull();
+    // Transport was used most recently, so it comes first once known.
+    recent.resolve(
+      json(200, {
+        items: [
+          transaction(1, {
+            splits: [{ categoryId: uuid(3), amountCents: 1250 }],
+          }),
+        ],
+        nextCursor: null,
+      }),
+    );
+    const group = await within(sheet()).findByRole("radiogroup", {
+      name: "Category",
+    });
+    const chips = within(group).getAllByRole("radio");
+    expect(chips[0]).toHaveAccessibleName("Transport");
+  });
+
+  it("puts a category added while the sheet is open last, moving no chip", async () => {
+    mockApi(base);
+    const view = open();
+    const group = await within(sheet()).findByRole("radiogroup", {
+      name: "Category",
+    });
+    const names = () =>
+      within(group)
+        .getAllByRole("radio")
+        .map((r) => r.closest("label")?.textContent ?? "");
+    const before = names();
+    // Another member adds "Pets", which would sort first on its own.
+    view.client.setQueryData(keys.categories(BUDGET_ID), {
+      items: [{ ...category(9, "Pets"), sortOrder: 0 }, ...categories],
+    });
+    await waitFor(() => {
+      expect(names()).toEqual([...before, "Pets"]);
+    });
   });
 
   it("keeps everything on a network failure and retries with the same key", async () => {

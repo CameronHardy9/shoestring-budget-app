@@ -11,10 +11,19 @@ import {
 import { ApiError } from "../../api/errors.ts";
 import type { Budget, Transaction } from "../../api/types.ts";
 import { useMe } from "../../app/auth.tsx";
-import { useBudget, useCategories } from "../../app/data.ts";
+import {
+  PAGE_SIZE,
+  useBudget,
+  useCategories,
+  useTransactions,
+} from "../../app/data.ts";
 import { takeStashedDraft } from "../../app/draft-stash.ts";
 import { AppShell, type NavId } from "../../components/AppShell.tsx";
-import { ErrorState, LoadingState } from "../../components/States.tsx";
+import {
+  ErrorState,
+  LoadingState,
+  OfflineState,
+} from "../../components/States.tsx";
 import { setLastBudgetId } from "../../lib/preferences.ts";
 import { NotFoundScreen } from "../NotFoundScreen.tsx";
 import { TransactionSheet, type SheetMode } from "./TransactionSheet.tsx";
@@ -44,8 +53,17 @@ export function BudgetLayout({
 }) {
   const me = useMe();
   const budget = useBudget(budgetId);
-  // Warm the categories cache so the sheet opens ready.
+  // Warm what quick-add needs so the sheet usually opens with its chips
+  // ready: the categories, and this month's recent transactions that order
+  // them (the sheet's own query and key, so it is one cached request). Neither
+  // holds up the page; if the recent list fails, chips use the default order.
   useCategories(budgetId);
+  useTransactions(
+    budgetId,
+    { month: budget.data?.currentMonth ?? "", categoryId: null },
+    PAGE_SIZE,
+    budget.data !== undefined,
+  );
   const [mode, setMode] = useState<SheetMode | null>(() => {
     const draft = takeStashedDraft(budgetId, me.id);
     return draft ? { kind: "create", draft } : null;
@@ -65,23 +83,29 @@ export function BudgetLayout({
       active={active}
       budgetId={budgetId}
       budgetName={budget.data?.name ?? null}
+      // Never ignored: before the budget arrives the sheet opens anyway, with
+      // the amount field ready, and shows its own loading or error state.
       onAdd={() => {
-        if (budget.data) setMode({ kind: "create" });
+        setMode({ kind: "create" });
       }}
     >
       {content}
     </AppShell>
   );
 
+  let page: ReactNode;
   if (budget.isPending) {
-    return shell(
+    page = shell(
       <div className="mx-auto max-w-5xl px-4 pt-6">
-        <LoadingState label="Loading your budget…" />
+        {budget.isPaused ? (
+          <OfflineState message="You're offline. This budget will appear when you reconnect." />
+        ) : (
+          <LoadingState label="Loading your budget…" />
+        )}
       </div>,
     );
-  }
-  if (budget.isError) {
-    return shell(
+  } else if (budget.isError) {
+    page = shell(
       <div className="mx-auto max-w-5xl px-4 pt-6">
         <h1 className="mb-4 text-2xl font-semibold text-fg">Budget</h1>
         <ErrorState
@@ -90,28 +114,41 @@ export function BudgetLayout({
         />
       </div>,
     );
+  } else {
+    const value: BudgetContextValue = {
+      budget: budget.data,
+      openQuickAdd: () => {
+        setMode({ kind: "create" });
+      },
+      openEdit: (transaction) => {
+        setMode({ kind: "edit", transaction });
+      },
+    };
+    page = (
+      <BudgetContext.Provider value={value}>
+        {shell(children)}
+      </BudgetContext.Provider>
+    );
   }
 
-  const value: BudgetContextValue = {
-    budget: budget.data,
-    openQuickAdd: () => {
-      setMode({ kind: "create" });
-    },
-    openEdit: (transaction) => {
-      setMode({ kind: "edit", transaction });
-    },
-  };
+  // The sheet keeps its place in the tree whatever the page shows, so a sheet
+  // opened while loading stays mounted (with what was typed, and focus) when
+  // the budget arrives.
   return (
-    <BudgetContext.Provider value={value}>
-      {shell(children)}
+    <>
+      {page}
       <TransactionSheet
+        budgetId={budgetId}
         budget={budget.data}
+        budgetError={budget.data ? null : budget.error}
+        budgetPaused={budget.isPaused}
+        onRetryBudget={() => void budget.refetch()}
         mode={mode}
         onClose={() => {
           setMode(null);
         }}
       />
-    </BudgetContext.Provider>
+    </>
   );
 }
 

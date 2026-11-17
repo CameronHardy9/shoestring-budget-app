@@ -45,9 +45,6 @@ async function quickAdd(
   amount: string,
   category: string,
 ): Promise<void> {
-  // The + is inert until the budget has loaded (BudgetLayout), so a tap right
-  // after navigation can be dropped (seen once on iphone-webkit, 2026-11-16).
-  await expect(page.getByTestId("total-remaining")).toBeVisible();
   await quickAddOpener(page).click();
   const sheet = page.getByTestId("quick-add-sheet");
   await expect(sheet).toBeVisible();

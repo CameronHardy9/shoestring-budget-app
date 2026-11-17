@@ -1,11 +1,19 @@
 // /more: switch budget, settings, sign out.
+//
+// The budget list's length is unknown until it loads (no persisted cache,
+// ADR-0002, and long names wrap), so no skeleton can reserve its height. The
+// rows below it (settings, theme, Sign out) appear only once the list has
+// settled, so nothing tappable is ever on screen and then pushed down.
+// Offline with nothing cached the read is paused, never failed: that counts as
+// settled too (an offline message instead of the list), so Sign out and its
+// "check your connection" path (F-51) stay reachable.
 import { useState } from "react";
 import { Link } from "react-aria-components";
 import { useMe } from "../app/auth.tsx";
 import { useBudgets } from "../app/data.ts";
 import { AppShell } from "../components/AppShell.tsx";
 import { Icon, type IconName } from "../components/Icon.tsx";
-import { ErrorState, LoadingState } from "../components/States.tsx";
+import { ErrorState, PendingSlot } from "../components/States.tsx";
 import { SegmentedControl } from "../components/SegmentedControl.tsx";
 import { SignOutButton } from "../components/SignOutButton.tsx";
 import {
@@ -50,6 +58,11 @@ export default function MoreScreen() {
   const budgets = useBudgets();
   const last = getLastBudgetId();
   const [theme, setTheme] = useState<ThemePreference>(getThemePreference);
+  // Latched: once the rows below are shown they stay, while a paused read
+  // resumes after a reconnect.
+  const [rowsShown, setRowsShown] = useState(false);
+  if (!rowsShown && (!budgets.isPending || budgets.isPaused))
+    setRowsShown(true);
   return (
     <AppShell active="more" budgetId={last}>
       <div className="mx-auto flex max-w-2xl flex-col gap-5 px-4 pt-6 lg:px-8 lg:pt-8">
@@ -70,7 +83,12 @@ export default function MoreScreen() {
             Budgets
           </h2>
           {budgets.isPending ? (
-            <LoadingState rows={1} />
+            <PendingSlot
+              paused={budgets.isPaused}
+              rowsBelowShown={rowsShown}
+              rows={2}
+              offlineMessage="You're offline. Your budgets will appear when you reconnect."
+            />
           ) : budgets.isError ? (
             <ErrorState
               error={budgets.error}
@@ -93,76 +111,84 @@ export default function MoreScreen() {
             </ul>
           )}
         </section>
-        <section
-          aria-labelledby="settings-heading"
-          className="flex flex-col gap-2"
-        >
-          <h2
-            id="settings-heading"
-            className="px-1 text-sm font-semibold text-fg"
-          >
-            Settings
-          </h2>
-          <ul className="divide-y divide-line overflow-hidden rounded-lg bg-surface shadow-1">
-            <Row
-              href="/settings/account"
-              icon="user"
-              label="Account"
-              detail="Name, email, password, export, delete"
-            />
-            <Row
-              href="/settings/security"
-              icon="shield"
-              label="Security"
-              detail={
-                me.mfa.enabled
-                  ? "Two-step verification on"
-                  : "Two-step verification off"
-              }
-            />
-            <Row
-              href="/settings/sessions"
-              icon="user"
-              label="Signed-in devices"
-            />
-            <Row href="/invitations" icon="user" label="Budget invitations" />
-            <Row
-              href="/settings/deleted-budgets"
-              icon="trash"
-              label="Deleted budgets"
-            />
-          </ul>
-        </section>
-        <section
-          aria-labelledby="appearance-heading"
-          className="flex flex-col gap-2"
-        >
-          <h2
-            id="appearance-heading"
-            className="px-1 text-sm font-semibold text-fg"
-          >
-            Appearance
-          </h2>
-          <div className="rounded-lg bg-surface p-4 shadow-1">
-            <SegmentedControl
-              label="Theme"
-              value={theme}
-              onChange={(next) => {
-                setTheme(next);
-                setThemePreference(next);
-              }}
-              options={[
-                { id: "system", label: "Automatic" },
-                { id: "light", label: "Light" },
-                { id: "dark", label: "Dark" },
-              ]}
-            />
-            <p className="mt-2 text-sm text-fg-muted">
-              Automatic follows your phone's setting.
-            </p>
-          </div>
-        </section>
-        <SignOutButton />
+        {!rowsShown ? null : (
+          <>
+            <section
+              aria-labelledby="settings-heading"
+              className="flex flex-col gap-2"
+            >
+              <h2
+                id="settings-heading"
+                className="px-1 text-sm font-semibold text-fg"
+              >
+                Settings
+              </h2>
+              <ul className="divide-y divide-line overflow-hidden rounded-lg bg-surface shadow-1">
+                <Row
+                  href="/settings/account"
+                  icon="user"
+                  label="Account"
+                  detail="Name, email, password, export, delete"
+                />
+                <Row
+                  href="/settings/security"
+                  icon="shield"
+                  label="Security"
+                  detail={
+                    me.mfa.enabled
+                      ? "Two-step verification on"
+                      : "Two-step verification off"
+                  }
+                />
+                <Row
+                  href="/settings/sessions"
+                  icon="user"
+                  label="Signed-in devices"
+                />
+                <Row
+                  href="/invitations"
+                  icon="user"
+                  label="Budget invitations"
+                />
+                <Row
+                  href="/settings/deleted-budgets"
+                  icon="trash"
+                  label="Deleted budgets"
+                />
+              </ul>
+            </section>
+            <section
+              aria-labelledby="appearance-heading"
+              className="flex flex-col gap-2"
+            >
+              <h2
+                id="appearance-heading"
+                className="px-1 text-sm font-semibold text-fg"
+              >
+                Appearance
+              </h2>
+              <div className="rounded-lg bg-surface p-4 shadow-1">
+                <SegmentedControl
+                  label="Theme"
+                  value={theme}
+                  onChange={(next) => {
+                    setTheme(next);
+                    setThemePreference(next);
+                  }}
+                  options={[
+                    { id: "system", label: "Automatic" },
+                    { id: "light", label: "Light" },
+                    { id: "dark", label: "Dark" },
+                  ]}
+                />
+                <p className="mt-2 text-sm text-fg-muted">
+                  Automatic follows your phone's setting.
+                </p>
+              </div>
+            </section>
+            <SignOutButton />
+          </>
+        )}
       </div>
     </AppShell>
   );
