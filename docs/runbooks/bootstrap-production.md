@@ -99,14 +99,25 @@ gcloud iam workload-identity-pools providers create-oidc github-oidc --project "
   --workload-identity-pool github \
   --issuer-uri "https://token.actions.githubusercontent.com" \
   --attribute-mapping "google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.repository_owner_id=assertion.repository_owner_id,attribute.ref=assertion.ref,attribute.environment=assertion.environment" \
-  --attribute-condition "assertion.repository_id=='$GH_REPO_ID' && assertion.repository_owner_id=='$GH_OWNER_ID' && assertion.ref=='refs/heads/main'"
+  --attribute-condition "assertion.repository_id=='$GH_REPO_ID' && assertion.repository_owner_id=='$GH_OWNER_ID' && assertion.ref=='refs/heads/main' && assertion.environment=='production'"
 
+# The repo issues IMMUTABLE OIDC subjects (F-66): sub = repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:production
+gh api "repos/$GH_REPO/actions/oidc/customization/sub" --jq '{use_immutable_subject, sub_claim_prefix}'   # expect true + the prefix
+SUB_PREFIX=$(gh api "repos/$GH_REPO/actions/oidc/customization/sub" --jq '.sub_claim_prefix // empty')
+case "$SUB_PREFIX" in
+  "repo:"*"@$GH_OWNER_ID/"*"@$GH_REPO_ID") echo "subject prefix OK: $SUB_PREFIX" ;;
+  *) echo "STOP: unexpected subject prefix '$SUB_PREFIX'; do not bind, tell the tech lead" ;;
+esac
 POOL="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github"
 gcloud iam service-accounts add-iam-policy-binding "$(SA deployer)" --project "$PROJECT" \
   --role roles/iam.workloadIdentityUser \
-  --member "principal://iam.googleapis.com/$POOL/subject/repo:$GH_REPO:environment:production"
+  --member "principal://iam.googleapis.com/$POOL/subject/$SUB_PREFIX:environment:production"
 ```
-This is the **only** WIF binding: there is no GitHub backup identity. **Verify:** `gcloud iam workload-identity-pools providers describe github-oidc --workload-identity-pool github --location global --project "$PROJECT" --format="yaml(attributeCondition,state)"` shows the condition and `ACTIVE`. **Back out:** `gcloud iam workload-identity-pools providers update-oidc github-oidc ... --disabled` (verify flag).
+This is the **only** WIF binding: there is no GitHub backup identity. If `use_immutable_subject` ever prints `false`, the subject is `repo:$GH_REPO:environment:production` instead: stop and tell the tech lead before binding.
+- **Never widen the binding to a `principalSet`** (`…/attribute.repository_id/…`, `…/attribute.ref/…` or any other attribute). That would hand the deployer to CI's `publish` job and every future main-branch job with `id-token: write`. If deploy authentication fails, stop and tell the tech lead.
+- **First deploy-job token:** `.github/workflows/deploy.yml` doesn't exist yet; the owner deploys by the manual path for now. When it does, its first run confirms the subject: auth succeeds only if the token's `sub` is exactly `$SUB_PREFIX:environment:production`. If it fails, compare the subject in the auth error with that value; never "fix" it by widening.
+
+**Verify:** `gcloud iam workload-identity-pools providers describe github-oidc --workload-identity-pool github --location global --project "$PROJECT" --format="yaml(attributeCondition,state)"` shows the condition (including `environment=='production'`) and `ACTIVE`. `gcloud iam service-accounts get-iam-policy "$(SA deployer)" --project "$PROJECT"` shows exactly one `workloadIdentityUser` member, the `principal://…/subject/$SUB_PREFIX:environment:production` above, and no `principalSet`. **Back out:** `gcloud iam workload-identity-pools providers update-oidc github-oidc ... --disabled` (verify flag).
 
 ## 7. Backup project: bucket, write-only grant, `age` key (OD-4, F-17)
 Run **billing-protection.md §7** (create the bucket: us-east1, soft delete off, 34-day lifecycle). Then give the prod project's backup job identity **create-only** access to that one bucket:
@@ -135,7 +146,7 @@ pbcopy < /dev/null
    ```sh
    git fetch origin main && git status --porcelain db/roles.sql    # must print NOTHING: no local edits (F-64)
    git diff --quiet origin/main -- db/roles.sql && echo "roles.sql matches origin/main"   # must print that line
-   read -rs OWNER_URL; export OWNER_URL      # Neon → Connect → role neondb_owner, DIRECT, append ?sslmode=verify-full&sslrootcert=system
+   read -rs OWNER_URL                          # not exported (F-64 nit); Neon → Connect → role neondb_owner, DIRECT, append ?sslmode=verify-full&sslrootcert=system
    psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f db/roles.sql     # creates app, migrator, backup; database grants; F-44 revokes
    psql "$OWNER_URL"
    ```
@@ -374,18 +385,21 @@ Two images per commit, both built by CI (linux/amd64 only; never push a build fr
 - **App** `ghcr.io/$GH_REPO_LC:sha-<sha>` → AR `…/shoestring/app`: the service and the purge, admin and rewrap-mfa jobs.
 - **Migrate** `ghcr.io/$GH_REPO_LC-migrate:sha-<sha>` → AR `…/shoestring/migrate`: the `shoestring-migrate` job only. It holds the compiled migrate CLI, dbmate, `db/migrations` and `db/roles.sql`; the app image holds nothing of `db/`.
 - GHCR paths are lowercase (`$GH_REPO_LC`, step 0); the GitHub repo slug has capitals.
-- Until ci-engineer's publish workflow exists, CI builds but doesn't push these images, so this step waits for it.
-- The three GHCR packages (app, migrate, backup) are **public** (owner ruling 2026-11-17; GHCR's free private storage is only 500 MB), so `crane digest` and `crane copy` read them **without any GitHub credential**: no `crane auth login ghcr.io`, no `read:packages` token. Only the AR side needs `gcloud auth configure-docker`. If GHCR answers `UNAUTHORIZED` or `DENIED`, a package has gone private: don't log crane in with a token; tell the tech lead (ci-engineer sets package visibility).
+- CI's `publish` job pushes all three images on every push to `main`, after check, e2e, audit and the image smoke pass, so an image exists only for a green main commit. It also attests each digest. **Verifying the attestation is mandatory** before every copy (F-67): copy by `@$DIGEST`, never by tag, and STOP if `gh attestation verify` fails (the `&&` below skips the copy).
+- The three GHCR packages (app, migrate, backup) are **public** (owner ruling 2026-11-17; GHCR's free private storage is only 500 MB), so `crane digest` and `crane copy` read them **without any GitHub credential**: no `crane auth login ghcr.io`, no `read:packages` token. Only the AR side needs `gcloud auth configure-docker`. If GHCR answers `UNAUTHORIZED` or `DENIED`, a package has gone private: don't log crane in with a token; make it public again (owner only: `https://github.com/users/<owner>/packages/container/<package>/settings` → Danger Zone → Change visibility → Public) and tell the tech lead.
 ```sh
 export SHA="<full git sha of a green main build>"
 export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
 gcloud auth configure-docker "$REGION-docker.pkg.dev"
+ATTEST_FLAGS=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$SHA" --deny-self-hosted-runners)   # --source-digest: built from exactly $SHA (F-67 re-check)
 DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC:sha-$SHA")
-crane copy "ghcr.io/$GH_REPO_LC:sha-$SHA" "$AR_REPO:sha-$SHA"
+gh attestation verify "oci://ghcr.io/$GH_REPO_LC@$DIGEST" "${ATTEST_FLAGS[@]}" \
+  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "$AR_REPO:sha-$SHA"
 export IMAGE="$AR_REPO@$DIGEST"
 MIGRATE_DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC-migrate:sha-$SHA")
-crane copy "ghcr.io/$GH_REPO_LC-migrate:sha-$SHA" "$MIGRATE_AR_REPO:sha-$SHA"
+gh attestation verify "oci://ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${ATTEST_FLAGS[@]}" \
+  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "$MIGRATE_AR_REPO:sha-$SHA"
 export MIGRATE_IMAGE="$MIGRATE_AR_REPO@$MIGRATE_DIGEST"
 crane config "$IMAGE" | jq -r '.architecture'; crane config "$MIGRATE_IMAGE" | jq -r '.architecture'   # both: amd64
 : "${SENTRY_DSN_API:?run step 11b S5 first}"     # shoestring-api DSN (not secret); purge needs it for the cron check-in
@@ -484,10 +498,12 @@ After two deploys, switch the AR cleanup policy from dry-run to live (billing-pr
 ### 12g. Nightly backup job [needs only the backup image, not the app]
 This can run as soon as ci-engineer publishes the backup image (`Dockerfile.backup`) and step 13's heartbeat exists. Run it before any real user data exists, so the restore drill has something to restore.
 ```sh
-export BACKUP_SHA="<full git sha of the backup image build>"
+export BACKUP_SHA="<full git sha of any green main build; publish pushes the backup image on every main commit>"
 export BK_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/backup"
 BK_DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC-backup:sha-$BACKUP_SHA")
-crane copy "ghcr.io/$GH_REPO_LC-backup:sha-$BACKUP_SHA" "$BK_REPO:sha-$BACKUP_SHA"
+gh attestation verify "oci://ghcr.io/$GH_REPO_LC-backup@$BK_DIGEST" --repo "$GH_REPO" \
+  --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$BACKUP_SHA" --deny-self-hosted-runners \
+  && crane copy "ghcr.io/$GH_REPO_LC-backup@$BK_DIGEST" "$BK_REPO:sha-$BACKUP_SHA"   # mandatory (F-67); STOP on failure
 gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "$BK_REPO:prod-backup"     # protected by the prod- keep rule
 export AGE_PUBLIC_KEY="<age1... public key from step 7>"      # not secret
 export HEARTBEAT_URL="<Better Stack heartbeat URL from step 13>"  # plain config, see infra/CLAUDE.md
@@ -510,6 +526,16 @@ gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/"
 ```
 **Verify:** one `daily/shoestring-<timestamp>.dump.age` object exists, and the heartbeat turns green. The job log shows only the object name and byte count. `gcloud scheduler jobs list --location "$REGION" --project "$PROJECT"` shows exactly 2 jobs. Then run the **restore drill** (restore.md path C) against this dump.
 **Back out:** `gcloud scheduler jobs pause shoestring-backup-nightly ...` (a missed backup alerts within 26 h).
+
+**Rolling the backup image (F-68).** The backup job is **not** redeployed with app releases, so its digest only changes here. Roll it when the image scan or Dependabot flags the backup image's base (`Dockerfile.backup`) or its apk packages (openssl, libpq, curl, musl), once a green main build contains the fix; also roll it whenever `deploy/backup/` changes. Use the same `BACKUP_SHA`, `BK_DIGEST`, verify and copy lines as above, then:
+```sh
+PREV_BK_IMAGE=$(gcloud run jobs describe shoestring-backup --project "$PROJECT" --region "$REGION" \
+  --format='value(spec.template.spec.template.spec.containers[0].image)'); echo "previous: $PREV_BK_IMAGE"   # record it
+gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "$BK_REPO:prod-backup"
+gcloud run jobs update shoestring-backup --project "$PROJECT" --region "$REGION" --image "$BK_REPO@$BK_DIGEST"
+gcloud run jobs execute shoestring-backup --project "$PROJECT" --region "$REGION" --wait
+```
+**Verify:** a new `daily/` object and a green heartbeat, as above. **Back out:** `gcloud run jobs update shoestring-backup --project "$PROJECT" --region "$REGION" --image "$PREV_BK_IMAGE"`, and move `prod-backup` back with `gcloud artifacts docker tags add "$PREV_BK_IMAGE" "$BK_REPO:prod-backup"`.
 
 ## 13. Monitoring [needs app for A3 and A6]
 Better Stack: follow **observability/README.md** "Better Stack Uptime":

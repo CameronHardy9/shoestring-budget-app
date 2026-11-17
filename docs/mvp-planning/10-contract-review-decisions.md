@@ -144,3 +144,6 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Topic | Decision |
 |---|---|
 | GHCR package visibility (free private storage is 500 MB; ~129 MB per commit for the app + migrate images) | **Public packages** for app, migrate and backup. Free and unlimited; the repo is already public and no secrets are baked into images. crane needs no GHCR credentials. |
+| Path to the first test user (cheapest) | **Publish PR next** (main-only GHCR push of app, migrate and backup images, plus `Dockerfile.backup`); no `deploy.yml` yet (manual deploy path). Owner runs bootstrap. |
+| F-63 | **Finished and parked** as draft PR #23; security review and e2e after the first tester is in. |
+| Architect integration review | **After the first tester, scoped** to how well the contracts match the code since the last review, plus the deploy path. |

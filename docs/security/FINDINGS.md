@@ -1536,3 +1536,100 @@ Scope: ci-engineer's split into the migrate image and app image and its smoke ch
 - **Lockfile:** the `@shoestring/db` move is consistent with backend/package.json.
 - **Bootstrap 12 Verify:** now runs `shoestring-admin` and `shoestring-rewrap-mfa` with their default dry runs. Both are read-only.
 - **Restore "After any restore" step 0** (the migrate job): it runs against the re-pinned migrator secret from step 9 and is fail-closed. Ops note: after a rollback, this applies the bad release's expand-only migrations to the restored database. That is correct for the job's image, but sre may want to say so in the text.
+
+## Image publish review (2026-11-17, `feat/image-publish`, uncommitted tree stacked on `chore/pre-deploy`)
+Scope: `git diff chore/pre-deploy`. That covers ci-engineer's `publish` job, the image-job handoff (`image-save.sh` plus a 1-day artifact), `--provenance=false --sbom=false` on every build, `Dockerfile.backup`, `make image-backup` and its smoke checks, and the bootstrap runbook text. `make audit` passed: gitleaks clean (57 commits plus the working tree), Semgrep 2 known WARNINGs, osv the two known moderates (picomatch ignore active until 2026-12-17), and zizmor v1.32.0 reported **no findings**. I checked the action pins against upstream tags: attest v4.2.2 `1e69f48…`, upload-artifact v7.0.2 `cf430e0…` and download-artifact v8.0.2 `9000827…` all match. The publish job has never run, because it runs only on main.
+
+### The criteria I set in advance: all met
+- **Main only:** `push` + `refs/heads/main` + not a fork, on both the save step and the job. `workflow_dispatch`, `pull_request` and tags are all excluded.
+- **`packages: write` only on publish:** the workflow default is `permissions: {}`. Publish is the only job with any write permission and the only one with `id-token: write` (also true across codeql.yml).
+- **No secret build args:** the args are `APP_RELEASE` and `VITE_SENTRY_DSN` (public), plus `APP_RELEASE` for the backup image. `--provenance=false` means no BuildKit attestation exists that could record them. The GitHub attestation records the workflow, ref, SHA and run, not build args.
+- **Attestations:** yes, all three digests, signed by Sigstore. With no predicate input, actions/attest v4 generates build provenance by default. Verifying them is still optional in the runbooks (F-67).
+- **zizmor:** clean.
+- **Publish runs no repository code:** no checkout. Only pinned, GitHub-owned actions and inline shell from the workflow file run. Every `${{ }}` in the `run:` blocks goes through `env:`. The docker login uses `--password-stdin` and is logged out by an EXIT trap before the attest steps.
+
+### Artifact handoff (poisoning / TOCTOU): sound
+- **The trust anchor is the job outputs, not the artifact.** `app_id`, `migrate_id` and `backup_id` are written by the image job's own step after `make image-smoke`, and no other job can set them.
+  - The image ID is the config digest, and the config lists every layer's diff_id.
+  - `docker load` checks each layer against those diff_ids. So once the loaded ref's ID equals the output, layer contents are fixed too: you would need a SHA-256 collision to swap anything.
+- **Poisoning path:** a compromised npm dependency in `check`/`e2e` on the same main run could read `ACTIONS_RUNTIME_TOKEN` from runner memory (hosted runners have passwordless sudo). It could then create or replace an artifact in this run.
+  - If it uploads first, the name collision makes the image job's upload fail, so nothing is published (DoS only).
+  - If it deletes and re-uploads the artifact, the publish ID check refuses the result.
+  - Residual (Info): the attacker's archive is parsed by `dockerd` on the publish runner *before* the ID check. Exploiting that needs a daemon tar-handling CVE. It is out of scope for a Low.
+- **TOCTOU in the image job:** smoke, save and the ID read run in order in one job, against the same tag. image-smoke rebuilds only when a tag is missing, so the ID that gets saved is the one that was smoked. `image-save.sh` refuses a dirty tree, `HEAD != GITHUB_SHA` and a wrong revision label, so a `-dirty` build can't be handed on.
+- **Pull-back check:** checking the image ID again after pulling by digest is close to a tautology. The digest is content-addressed, and the layers are already in the local store. Its real value is proving the image can be read anonymously and that tag → digest holds. That's fine; leave it.
+- **Public artifact (1 day):** it holds the same bytes as the public packages. The image job has no secrets. No exposure, and consistent with the owner's public-packages ruling.
+
+### WIF: the deployer binding refuses publish's token (with a caveat, F-66)
+- Publish's OIDC `sub` has no `environment` part. This repository uses **immutable subject claims**: `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` returns `use_immutable_subject: true` and `sub_claim_prefix: repo:<owner>@<owner_id>/<repo>@<repo_id>`.
+  - So publish's `sub` is `<prefix>:ref:refs/heads/main`. That matches neither the step 6 binding (`repo:$GH_REPO:environment:production`) nor its immutable equivalent. Impersonating the deployer is **refused**.
+- **But the provider's attribute condition admits it.** The condition is repo ID + owner ID + `ref=='refs/heads/main'`, so STS will exchange publish's token for a federated token. That token has no grants today. See F-66.
+
+### Rekor disclosure: Info, nothing new
+- For a public repository, actions/attest writes to public-good Sigstore. The Fulcio certificate and the Rekor entry are permanent and can't be deleted. They hold: repository and owner names and numeric IDs, the workflow path and ref, the commit SHA, the run ID and attempt, the trigger event, `github-hosted`, and the three image digests.
+- All of that is already public through the repo, its Actions runs and the public packages. The entries stay even if the repository later goes private or is renamed. Accepted as Info.
+
+### Backup image OS CVE scan: **follow-up, not a launch blocker** (F-68)
+- **Why not a blocker:**
+  - The job has no listener. It runs once a night as a Cloud Run job.
+  - It talks only to Neon (`verify-full` TLS), the metadata server and GCS. Its input is pg_dump of our own database.
+  - Exploiting an OS CVE would need a malicious or impersonated TLS peer.
+  - The apk packages come from Alpine's signed repositories, fresh on every CI build: the runners are fresh and the build uses `--pull`. The base is pinned by digest and Dependabot bumps it.
+- **The real gap is staleness:** the *deployed* backup digest changes only when the owner runs bootstrap 12g, and nothing scans any of the three images for OS packages.
+- Unpinned apk versions are accepted: the deploy is by digest and the repositories are signed.
+
+### F-66 Low (new, sre): WIF step 6, the subject format and the attribute condition. **Fixed and verified 2026-11-17**
+- **Location:** docs/runbooks/bootstrap-production.md:102 and :107; infra/CLAUDE.md:77.
+- **Scenario:**
+  1. The repository issues immutable subjects, so the legitimate deploy job's `sub` is `<prefix>:environment:production`, not `repo:<owner>/<repo>:environment:production`. The binding as written fails closed and deploy authentication will not work.
+  2. The plausible failure mode is an operator, mid-deploy, "fixing" this by binding `principalSet://…/attribute.repository_id/<id>` or `…/attribute.ref/refs/heads/main`. That would hand the deployer to publish, the first main job that can mint an OIDC token. It would also reach any future main job with `id-token: write`.
+  3. Separately, the attribute condition accepts any main-branch token from this repo. Publish's token now gets a federated token with no grants: harmless today, one stray `principalSet` grant away from a problem.
+- **Recommended fix (sre):**
+  - Build the member from the API value:
+    ```sh
+    SUB_PREFIX=$(gh api "repos/$GH_REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)
+    # --member "principal://iam.googleapis.com/$POOL/subject/$SUB_PREFIX:environment:production"
+    ```
+    If `use_immutable_subject` is false, keep `repo:$GH_REPO`.
+  - Add `&& assertion.environment=='production'` to the attribute condition, so STS refuses non-environment tokens outright.
+  - Update infra/CLAUDE.md:77 to say "exact subject, immutable form".
+  - Add a runbook line: if deploy auth fails, never widen to a `principalSet`; stop and tell the tech lead.
+- **Owner:** sre. Fix before bootstrap step 6 runs; it blocks the first deploy anyway.
+
+### F-67 Low (new, sre): the deploy copies by tag, and attestation verification is optional. **Fixed and verified 2026-11-17**
+- **Location:** docs/runbooks/deploy.md:38–42; bootstrap-production.md:377 and :384–388; bootstrap 12g (backup image).
+- **Scenario:** `DIGEST=$(crane digest TAG)` is followed by `crane copy TAG …`, so a re-pointed `sha-<sha>` tag between the two commands (or before both) goes to production unnoticed.
+  - Only publish (main code) and the owner's credentials can write the packages, so this needs a repo-write or owner-token compromise. That's defense in depth, hence Low.
+  - The attestation exists to catch exactly this, but the runbook marks checking it "optional".
+- **Recommended fix (sre):** for each of app, migrate and backup:
+  ```sh
+  DIGEST=$(crane digest "$GHCR_IMAGE")
+  gh attestation verify "oci://${GHCR_IMAGE%:*}@$DIGEST" --repo "$GH_REPO" \
+    --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --deny-self-hosted-runners
+  crane copy "${GHCR_IMAGE%:*}@$DIGEST" "$AR_REPO:sha-$SHA"
+  ```
+  Make the verification mandatory: STOP on failure.
+- **Owner:** sre. Before the first deploy (it's cheap), but not a security launch gate.
+
+### F-68 Low (new, ci-engineer; sre for the deployed digest): no OS-package scan of the published images. **sre half done 2026-11-17; the ci-engineer scan is still open (follow-up)**
+- **Location:** .github/workflows/ci.yml `image` job; Dockerfile.backup:18.
+- **Scenario:** a known CVE in alpine's openssl, libpq, curl or musl (backup image), or in the distroless base (app and migrate), ships and stays deployed without anyone noticing. For the backup image this is mostly a staleness problem, because it isn't redeployed with app releases.
+- **Recommended fix:**
+  - ci-engineer: add a free image scan in the image job before `image-save.sh`, failing on High+ with a fixed version available. `osv-scanner scan image <tag>` (already in the toolchain) or grype/trivy, pinned by digest.
+  - sre: in the deploy runbook, add a rule to roll the backup job's digest when the scan or Dependabot flags its base or packages.
+- **Owner:** ci-engineer (scan), sre (rollout rule). **Follow-up**, after the first tester.
+
+### Other checks: no issue
+- **Backup smoke:** the throwaway password goes through `ALTER ROLE` on stdin, and the URL reaches the container by env name, not argv. The age key is generated inside the container. `metadata.google.internal` is mapped to 127.0.0.1, so no runner metadata is reached. `no_secrets_in` covers both runs, and the round trip proves the read-only `backup` role can dump every public table.
+- **Dockerfile.backup:** the build context is `deploy/backup/` only. `backup.sh` is root-owned 0755 and its sha256 is checked against the repo. The image runs as user 10001 with an exact entrypoint check and no CMD. It holds no keys; the recipient and URL arrive at runtime.
+- **Process note:** this diff edits docs/runbooks/bootstrap-production.md, which sre owns. The content is accurate, apart from the "optional" wording in F-67.
+
+### Re-check 2026-11-17 (sre fixes): F-66 and F-67 verified
+- **F-66:** the bootstrap step 6 condition now adds `assertion.environment=='production'`. The binding uses `$SUB_PREFIX:environment:production`, taken from the API, with a `case` check on the owner and repo IDs. The "never widen to a `principalSet`" rule is in step 6, deploy.md and infra/CLAUDE.md:77. Verify now expects exactly one member and no `principalSet`.
+  - Info: the `case` prints STOP but doesn't halt the paste. With a bad prefix, the binding names a subject no token carries, so it fails closed.
+- **F-67:** every GHCR→AR copy is now `crane digest`, then `gh attestation verify oci://…@$DIGEST` (`--repo`, `--signer-workflow …/ci.yml`, `--source-ref refs/heads/main`, `--deny-self-hosted-runners`), then `&& crane copy …@$DIGEST`. That covers deploy.md step 1, bootstrap step 12 and 12g, and README.
+  - An unattested digest is never copied, so the later `$AR_REPO@$DIGEST` deploy fails closed.
+- **F-68 (sre half):** done, in "Rolling the backup image".
+- **sre's question, binding to the commit:** the flags prove "built on main by ci.yml", not "built from `$SHA`". So someone with package write could re-point `sha-<X>` to an *older* attested main digest: a downgrade to a release with a known flaw, or app and migrate from different commits. That's the same precondition as F-67, so it is not a launch blocker.
+  - But the fix is one flag: `gh` 2.97 supports `--source-digest`. **Recommended now, folded into F-67:** add `--source-digest "$SHA"` (`"$BACKUP_SHA"` in 12g, and the same in the future deploy.yml) to every verify.
+  - That also binds app and migrate to the same commit. I'm not reopening F-67 for it.

@@ -73,8 +73,8 @@ There is **no** GitHub `backup` environment: backups run in GCP.
 | Owner's Google account | Human | Project owner on both projects; the only identity that can read backups. Phishing-resistant MFA required (F-03). |
 
 **WIF (F-16):** pool `github`, provider `github-oidc`.
-- The provider condition pins the numeric `repository_id`, the `repository_owner_id` and `ref == refs/heads/main`.
-- The deployer SA binding is to the exact subject `repo:<owner>/<repo>:environment:production`. It is the only WIF binding.
+- The provider condition pins the numeric `repository_id`, the `repository_owner_id`, `ref == refs/heads/main` and `environment == production` (F-66).
+- The deployer SA binding is to the exact subject, immutable form: `repo:<owner>@<owner_id>/<repo>@<repo_id>:environment:production`, built from `gh api repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix` (the repo has `use_immutable_subject: true`). It is the only WIF binding. **Never widen it to a `principalSet`**; if deploy auth fails, stop and tell the tech lead.
 - The deploy job runs no `pnpm install`.
 
 ## Secrets (by name only; values never in the repo, logs or runbooks)

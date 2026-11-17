@@ -210,10 +210,11 @@ ensure_local_env() {
 }
 
 # Production image release and tag for the current checkout (make image,
-# make image-migrate, make image-smoke). Release: git SHA (+ -dirty-<hash>)
+# make image-migrate, make image-backup, make image-smoke). Release: git SHA (+ -dirty-<hash>)
 # unless APP_RELEASE is set.
-# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty-<hash>], and for the
-# migrate job image <MIGRATE_IMAGE_NAME or shoestring-migrate>:<same>.
+# Tag: <IMAGE_NAME or shoestring>:<12-char sha>[-dirty-<hash>], for the
+# migrate job image <MIGRATE_IMAGE_NAME or shoestring-migrate>:<same>, and for
+# the backup job image <BACKUP_IMAGE_NAME or shoestring-backup>:<same>.
 # <hash> is 12 hex characters of a SHA-256 over the uncommitted changes (staged,
 # unstaged and deletions as a binary diff against HEAD, plus the name and
 # content hash of every untracked, not-ignored file), so two different dirty
@@ -247,6 +248,22 @@ migrate_image_tag() {
   sha="$(_git_sha)"
   echo "${MIGRATE_IMAGE_NAME:-shoestring-migrate}:${sha:0:12}$(_git_dirty)"
 }
+backup_image_tag() {
+  local sha
+  sha="$(_git_sha)"
+  echo "${BACKUP_IMAGE_NAME:-shoestring-backup}:${sha:0:12}$(_git_dirty)"
+}
+
+# Flags for every image build (make image, image-migrate, image-backup): a plain
+# single-platform image manifest, with no BuildKit provenance or SBOM attestation
+# attached. Whether BuildKit attaches them by default depends on the Docker image
+# store (containerd store: yes; the classic store on GitHub's runners: no), and an
+# attached attestation turns the pushed artifact into an index, which the
+# bootstrap's `crane config | jq .architecture` check does not expect. Signed
+# provenance comes from the publish job's GitHub attestation instead, which
+# records no build arguments.
+# shellcheck disable=SC2034 # read by image.sh, image-migrate.sh, image-backup.sh
+IMAGE_PLAIN=(--provenance=false --sbom=false)
 
 # Build arguments shared by make image and make sourcemaps-upload, so the second
 # build is a cache hit and its source maps belong to the image's exact bundle.

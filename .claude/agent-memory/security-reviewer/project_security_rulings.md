@@ -95,5 +95,9 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
 - **Pre-deploy pass 2026-11-17 (`chore/pre-deploy`): approve.** F-43 closed, F-47 still closed (checked on the built images). New Lows F-64 (restore roles.sql SHA provenance) and F-65 (V26 must measure both public paths), both for sre.
   - **Owner ruling: the GHCR packages (app, migrate, backup) are public.** I ruled it adds no exposure: no secret build args, and the backend maps are public code and never served. Re-check when the publish workflow lands (main only, scoped `packages: write`, no secret build args because of `provenance: mode=max`, attestations preferred).
   - The separate migrate image is accepted as a least-privilege improvement. Admin job default args `purge,--dry-run` are read-only (the transaction rolls back), so that is fine.
+- **Image publish review 2026-11-17 (`feat/image-publish`): approve.** All my pre-set criteria were met, and zizmor is clean. New Lows: F-66 (WIF subject format and condition, sre), F-67 (copy by digest and make `gh attestation verify` mandatory, sre) and F-68 (OS image scan; **follow-up, not a launch blocker**).
+  - Ruled: the artifact handoff is sound, because the image IDs come from job outputs and `docker load` checks diff_ids; artifact poisoning is DoS only. The Rekor disclosure is Info. Unpinned apk versions are accepted (signed repos, deploy by digest).
+  - Same day: F-66 and F-67 verified after sre's fixes, and the F-68 sre half is done. Ruled that `--source-digest "$SHA"` is recommended now (one flag) but doesn't reopen F-67.
+  - **The repo uses immutable OIDC subjects** (`sub_claim_prefix` `repo:<owner>@<id>/<repo>@<id>`), so any `repo:<owner>/<repo>:…` binding fails closed.
 
 Related: [[project-review-hotspots]]

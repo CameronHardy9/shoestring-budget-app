@@ -43,7 +43,8 @@ updates:
     commit-message:
       prefix: "chore(ci)"
 
-  # Dockerfile, Dockerfile.dev and the pinned tool images in .github/tools/Dockerfile.
+  # Dockerfile, Dockerfile.dev, Dockerfile.backup (alpine) and the pinned tool
+  # images in .github/tools/Dockerfile.
   - package-ecosystem: docker
     directories:
       - /

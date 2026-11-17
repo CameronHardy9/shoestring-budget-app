@@ -1,0 +1,35 @@
+# Backup image: the Cloud Run job shoestring-backup (docs/runbooks/README.md
+# "Backup design", infra/CLAUDE.md "Backup"). Nightly pg_dump | age, then a
+# create-only upload to Cloud Storage. Its own small image, never the app image:
+# pg_dump and age do not belong in the internet-facing service, and backups do
+# not depend on app releases.
+#
+# Build with `make image-backup`. The build context is deploy/backup/ (only
+# backup.sh), so nothing else from the repository can reach this image; the root
+# .dockerignore does not apply to that context.
+#   docker build -f Dockerfile.backup deploy/backup
+# make image-smoke checks it: non-root, the tools, pg_dump major >= 17, the
+# fail-fast refusals, and a real pg_dump | age round trip with the read-only
+# backup role against a throwaway Postgres.
+
+# Pinned by digest; Dependabot (docker ecosystem, directory /) proposes updates.
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+
+# pg_dump's major must be >= the server's (Neon and local Postgres are 17).
+# ca-certificates: libpq's sslrootcert=system and curl verify TLS against it.
+RUN apk add --no-cache bash postgresql17-client age curl ca-certificates \
+ && addgroup -g 10001 backup \
+ && adduser -D -H -h /nonexistent -s /sbin/nologin -u 10001 -G backup backup
+
+# Owned by root, read and execute only for the job user.
+COPY --chmod=0755 backup.sh /usr/local/bin/backup.sh
+
+ARG APP_RELEASE=dev
+LABEL org.opencontainers.image.title="shoestring-backup" \
+      org.opencontainers.image.description="Shoestring nightly encrypted pg_dump job" \
+      org.opencontainers.image.source="https://github.com/CameronHardy9/shoestring-budget-app" \
+      org.opencontainers.image.revision=$APP_RELEASE
+
+USER 10001:10001
+# The job runs with no command or args. Setting ENTRYPOINT clears alpine's CMD.
+ENTRYPOINT ["/usr/local/bin/backup.sh"]

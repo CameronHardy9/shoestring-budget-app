@@ -91,6 +91,13 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - **Hop counts apply to every public path.** `run.app` and the domain mapping both reach the service, so V26 must measure both and they must match (F-65).
     - Inspect images, not scripts: `docker image inspect` (Env, Labels), `docker history --no-trunc`, and a node file walk with `--network none`. Check that the image's build time is after the last Dockerfile edit.
 
+19. **Publish / OIDC review (2026-11-17).**
+    - **Check the actual OIDC `sub` format** with `gh api repos/<r>/actions/oidc/customization/sub` before trusting any WIF subject. Immutable subjects change the string. When a binding fails closed, operators tend to widen it to a `principalSet`, so the runbook must forbid that (F-66).
+    - **The first job with `id-token: write` on main** makes every WIF attribute condition that lacks an `environment` check reachable. Re-check this whenever a new job gets id-token.
+    - **"Digest then copy tag" is a TOCTOU.** Copy `@digest` and verify the attestation on that same digest (F-67).
+    - **`--signer-workflow` + `--source-ref` prove "built on main", not "built from this commit".** An older green digest passes them, which allows a downgrade or an app/migrate commit mismatch. Add `--source-digest "$SHA"`; `gh` 2.97 has it.
+    - **Artifact handoffs between jobs:** trust job outputs (the image ID), never the artifact. Other jobs in the same run can reach the artifact API through `ACTIONS_RUNTIME_TOKEN` taken from runner memory.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]
