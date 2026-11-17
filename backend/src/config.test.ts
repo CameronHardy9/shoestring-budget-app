@@ -60,6 +60,27 @@ describe("loadConfig (fail closed)", () => {
     expect(() => loadConfig(prod(extra))).toThrow(msg);
   });
 
+  it("SENTRY_DSN is optional, and refused (without echoing it) when malformed", () => {
+    expect(loadConfig(prod()).sentryDsn).toBeNull();
+    expect(loadConfig(prod({ SENTRY_DSN: "" })).sentryDsn).toBeNull();
+    const dsn = "https://abc123@o1.ingest.us.sentry.io/456";
+    expect(loadConfig(prod({ SENTRY_DSN: dsn })).sentryDsn).toBe(dsn);
+    for (const bad of [
+      "http://abc123@o1.ingest.us.sentry.io/456",
+      "https://o1.ingest.us.sentry.io/456",
+      "https://abc123@o1.ingest.us.sentry.io/not-a-project",
+      "not a url secretvalue",
+    ]) {
+      expect(() => loadConfig(prod({ SENTRY_DSN: bad }))).toThrow(/SENTRY_DSN/);
+      try {
+        loadConfig(prod({ SENTRY_DSN: bad }));
+      } catch (e) {
+        expect((e as Error).message).not.toContain("secretvalue");
+        expect((e as Error).message).not.toContain("abc123");
+      }
+    }
+  });
+
   it("WEBAUTHN_RP_ID must be APP_ORIGIN's host; the RP ID defaults to it", () => {
     expect(loadConfig(prod()).webauthn).toEqual({ rpId: "shoestring.example.com", rpName: "Shoestring" });
     expect(() => loadConfig(prod({ WEBAUTHN_RP_ID: "example.com" }))).toThrow(/WEBAUTHN_RP_ID/);

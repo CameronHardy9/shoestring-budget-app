@@ -78,7 +78,7 @@ Encryption at rest: Neon's disk encryption (provider), Cloud Storage's default e
 ## Runbook index
 | Runbook | Purpose | Status |
 |---|---|---|
-| [bootstrap-production.md](bootstrap-production.md) | One-time setup: operator MFA (F-03), projects, IAM, WIF, Neon, secrets, GitHub environments, email + DMARC, first deploy, hop-count probe (F-08), domain mapping on Cloudflare, launch checks | Draft. Steps 1–11 runnable now; 12+ need the app |
+| [bootstrap-production.md](bootstrap-production.md) | One-time setup: operator MFA (F-03), projects, IAM, WIF, Neon, secrets, GitHub environments, email + DMARC, Sentry (11b), first deploy, monitoring (13), hop-count probe (F-08), domain mapping on Cloudflare, launch checks | Draft. Steps 1–11b runnable now; 12+ need the app |
 | [billing-protection.md](billing-protection.md) | Budgets, spend cap (kill switch fallback), quotas, registry cleanup, log limits, Neon limits, monthly free-tier check | Draft, run inside bootstrap |
 | [deploy.md](deploy.md) | Deploy a release (migrate → no-traffic revision → readiness and F-10 gate → shift traffic) | Draft, pending first deploy |
 | [rollback.md](rollback.md) | Move traffic back to the previous revision in one command | Draft, rehearse after the second deploy |
@@ -90,7 +90,8 @@ Encryption at rest: Neon's disk encryption (provider), Cloud Storage's default e
 | [purge-failed.md](purge-failed.md) | Alert A3: purge cron monitor missed or failed | Draft |
 | [backup-missed.md](backup-missed.md) | Alert A4: `shoestring-backup` job heartbeat missing or failed | Draft |
 | [billing-alert.md](billing-alert.md) | Alert A5: budget threshold crossed or spend cap reached | Draft |
-| [email-quota.md](email-quota.md) | Alert A6: daily email sends at 80% / 100% of quota (F-09) | Draft, needs backend counter |
+| [email-quota.md](email-quota.md) | Alert A6: daily email sends at 80% / 100% of quota (F-09) | Draft, needs backend quota events |
+| [sentry-data-check.md](sentry-data-check.md) | Check that nothing sensitive reached Sentry, prove the scrubber with a synthetic canary (deploy/scripts/sentry-canary.sh), and purge leaked data | Draft, run at bootstrap step 11b |
 | breach-response.md | Outline for suspected data exposure (with security-reviewer) | Planned |
 | phone-debugging.md | Safari Web Inspector / chrome://inspect against `make dev` (test hooks off on the LAN, F-30) | Planned, after ci-engineer's LAN binding |
 

@@ -3,6 +3,7 @@
 import { buildApp, createDeps } from "./app.ts";
 import { ConfigError, loadConfig } from "./config.ts";
 import { createLogger } from "./logging.ts";
+import { initErrorTracker } from "./observability/error-tracker.ts";
 
 function fatal(message: string): never {
   process.stderr.write(
@@ -19,10 +20,18 @@ async function main(): Promise<void> {
     fatal(e instanceof ConfigError ? e.message : "invalid configuration");
   }
   const logger = createLogger(config);
-  const deps = createDeps(config, logger);
+  // A no-op unless SENTRY_DSN is set (then @sentry/node is loaded).
+  const errors = await initErrorTracker({
+    dsn: config.sentryDsn,
+    release: config.release,
+    environment: config.nodeEnv,
+    captureUncaught: true,
+  });
+  const deps = createDeps(config, logger, { errors });
   const app = await buildApp(deps);
   const shutdown = async (): Promise<void> => {
     await app.close();
+    await errors.flush(2000); // in-flight 5xx events and quota alerts
     await deps.dal.close();
     process.exit(0);
   };

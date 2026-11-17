@@ -34,8 +34,14 @@ COPY . .
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm install --frozen-lockfile --offline --filter "{./backend}..." --filter "{./frontend}..."
 ARG APP_RELEASE=dev
+# The SPA's Sentry DSN (public by design: it ships in the bundle). Empty means
+# the SPA reports nothing. Baked in at build time, so one image serves one Sentry
+# project; set by make image from VITE_SENTRY_DSN (CI: the SENTRY_DSN_WEB
+# repository variable on main). Build stage only: not in the runtime image.
+ARG VITE_SENTRY_DSN=""
 ENV APP_RELEASE=$APP_RELEASE \
-    VITE_APP_RELEASE=$APP_RELEASE
+    VITE_APP_RELEASE=$APP_RELEASE \
+    VITE_SENTRY_DSN=$VITE_SENTRY_DSN
 # Until frontend/ exists the image is API-only (no SPA): fine for the smoke job,
 # not a releasable artifact (make image says so).
 RUN if [ -f frontend/package.json ]; then pnpm --filter ./frontend run build; \
@@ -66,13 +72,22 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     pnpm --filter ./backend deploy --prod --offline --config.inject-workspace-packages=true /deploy \
  && mkdir /out \
  && mv /deploy/package.json /deploy/dist /deploy/node_modules /out/
-# Public SPA without source maps; the maps go to the `sourcemaps` stage for a
-# private upload to Sentry, never to users.
+# Public SPA without source maps. Each map moves to /sourcemaps together with a
+# COPY of the minified file it belongs to (Sentry needs both to resolve a stack
+# trace), for the private upload by make sourcemaps-upload. Maps never reach
+# /app/public, so they cannot be served (make image-smoke asserts 404). The JS
+# carries no sourceMappingURL comment (Vite `sourcemap: "hidden"`).
 RUN mkdir -p /public /sourcemaps \
  && if [ -d frontend/dist ]; then cp -R frontend/dist/. /public/; fi \
- && (cd /public && find . -name '*.map' -exec sh -c 'mkdir -p "/sourcemaps/$(dirname "$1")" && mv "$1" "/sourcemaps/$1"' _ {} \;)
+ && (cd /public && find . -name '*.map' -exec sh -c ' \
+      m="$1"; f="${m%.map}"; mkdir -p "/sourcemaps/$(dirname "$m")" && mv "$m" "/sourcemaps/$m" \
+      && if [ -f "$f" ]; then cp "$f" "/sourcemaps/$f"; fi' _ {} \;) \
+ && if find /public -name '*.map' | grep -q .; then echo "error: source maps left in /public" >&2; exit 1; fi
 
-# ---- sourcemaps: `docker build --target sourcemaps --output type=local,dest=.sourcemaps .`
+# ---- sourcemaps: the SPA's maps and their minified files, never in the image.
+# `docker build --target sourcemaps --output type=local,dest=.sourcemaps .`
+# (make sourcemaps-upload; same build arguments as make image, so the build
+# stage comes from the cache and the files match the image byte for byte).
 FROM scratch AS sourcemaps
 COPY --from=build /sourcemaps/ /
 

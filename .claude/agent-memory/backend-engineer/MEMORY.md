@@ -1,2 +1,2 @@
-- [Backend gotchas](gotchas.md) — formatter un-escapes \u in writes, fetch can't set Host, Semgrep string matches, safe deps (rolldown, @node-rs/argon2)
-- [Backend status](phase-a-status.md) — all 63 ops; F-45–F-48 fixed 2026-11-14; what's still open
+- [Backend gotchas](gotchas.md) — formatter \u, fetch Host, Semgrep strings, safe deps, Sentry v11 (no sendDefaultPii, permissive dataCollection)
+- [Backend status](phase-a-status.md) — all ops; reserve-first limits, F-58, Sentry wiring (2026-11-16); what's still open

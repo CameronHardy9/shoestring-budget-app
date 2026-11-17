@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { localDatabaseUrl } from "./db-env.ts";
 import {
+  fakeSentryDsn,
   loopbackOrigin,
   resolveStackSource,
   StackEnvError,
@@ -121,6 +122,14 @@ describe("which variables are used (F-56: no silent shell overrides)", () => {
     expect(s.DATABASE_URL).toBe(db("127.0.0.1:5433"));
   });
 
+  it("names with digits are read too (E2E_SENTRY_DSN)", () => {
+    const dsn = "https://e2e@o0.ingest.sentry.test/1";
+    expect(
+      resolveStackSource({}, `${stackFile}\nE2E_SENTRY_DSN=${dsn}`)
+        .E2E_SENTRY_DSN,
+    ).toBe(dsn);
+  });
+
   it("Vitest's own BASE_URL=/ is not a stack variable", () => {
     expect(resolveStackSource({ BASE_URL: "/" }, stackFile).BASE_URL).toBe(
       "http://localhost:5173",
@@ -152,5 +161,40 @@ describe("which variables are used (F-56: no silent shell overrides)", () => {
     expect(resolveStackSource({ DATABASE_URL: "x" }, null)).toEqual({
       DATABASE_URL: "x",
     });
+  });
+});
+
+describe("E2E_SENTRY_DSN must be a fake DSN on a reserved .test host", () => {
+  // Built at run time: 32 hex characters, like a real public key.
+  const key = Array.from({ length: 32 }, (_, i) => (i % 16).toString(16)).join(
+    "",
+  );
+
+  it("splits a well-formed fake DSN into the parts the suites derive values from", () => {
+    expect(fakeSentryDsn(`https://${key}@o0.ingest.sentry.test/1`)).toEqual({
+      dsn: `https://${key}@o0.ingest.sentry.test/1`,
+      ingestOrigin: "https://o0.ingest.sentry.test",
+      publicKey: key,
+      projectId: "1",
+    });
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["empty", ""],
+    ["not a URL", "nope"],
+    ["a real Sentry host", `https://${key}@o1.ingest.us.sentry.io/1`],
+    ["a .test look-alike", `https://${key}@o0.ingest.sentry.test.example/1`],
+    ["plain http", `http://${key}@o0.ingest.sentry.test/1`],
+    ["a non-hex key", `https://${"z".repeat(32)}@o0.ingest.sentry.test/1`],
+    ["a secret part", `https://${key}:x@o0.ingest.sentry.test/1`],
+    ["a non-numeric project", `https://${key}@o0.ingest.sentry.test/p`],
+    ["a port", `https://${key}@o0.ingest.sentry.test:8443/1`],
+    ["a query", `https://${key}@o0.ingest.sentry.test/1?x=1`],
+  ])("refuses %s, naming the variable but not the value", (_, value) => {
+    const e = errorOf(() => fakeSentryDsn(value));
+    expect(e).toBeInstanceOf(StackEnvError);
+    expect(e.message).toContain("E2E_SENTRY_DSN");
+    if (value) expect(e.message).not.toContain(value);
   });
 });

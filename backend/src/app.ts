@@ -28,6 +28,8 @@ import type { Route } from "./http/routes.ts";
 import { registerRoutes } from "./http/routes.ts";
 import { registerStatic, sendIndex, wantsSpaFallback } from "./http/static.ts";
 import type { Logger } from "./logging.ts";
+import { NO_TRACKING } from "./observability/error-tracker.ts";
+import type { ErrorTracker } from "./observability/error-tracker.ts";
 import { accountRoutes } from "./routes/account.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { budgetRoutes } from "./routes/budgets.ts";
@@ -60,6 +62,8 @@ export interface DepsOverrides {
   wallNow?: () => number;
   sleep?: (ms: number) => Promise<void>;
   fetch?: typeof fetch;
+  /** Built by the entry points (server.ts); default NO_TRACKING, so tests and the dev entry never start Sentry. */
+  errors?: ErrorTracker;
 }
 
 /** Wires real dependencies from config (overridable for tests and the dev entry). */
@@ -76,6 +80,7 @@ export function createDeps(
       clock: () => clock.now(),
     });
   const throttles = new Throttles(dal, config.keyring, clock);
+  const errors = o.errors ?? NO_TRACKING;
   const transport: EmailTransport =
     o.transport ??
     (config.email.transport === "provider"
@@ -109,8 +114,10 @@ export function createDeps(
       clock,
       logger,
       dailyQuota: config.email.dailyQuota,
+      alerts: errors,
     }),
     notifications: new Notifications(config.appOrigin),
+    errors,
     cursors: new CursorCodec(config.keyring),
     responseValidator:
       config.nodeEnv === "production" ? null : new ResponseValidator(),

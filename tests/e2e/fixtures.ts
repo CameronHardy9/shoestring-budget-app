@@ -5,7 +5,8 @@
 //     script on, into a Node-side list that survives navigations (F-55); any
 //     violation on ANY document the test visited fails it (C3.1). Only the
 //     production build sends a CSP (csp-prod projects, visual suite); the Vite
-//     dev server sends none. Uncaught page errors fail the test too;
+//     dev server sends none. Uncaught page errors fail the test too, except
+//     those a test throws on purpose and claims (`pageErrors.take`);
 //   - after every test: every captured email must follow auth.md §15.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -79,11 +80,27 @@ export async function flushCspViolations(page: Page): Promise<void> {
 const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
 
+/**
+ * Uncaught errors of every document of the test's page (`pageerror`). The
+ * teardown fails on any left; a test that throws one on purpose (the Sentry
+ * checks) claims exactly that one with take().
+ */
+export class PageErrors {
+  readonly list: string[] = [];
+  take(match: (message: string) => boolean): string[] {
+    const taken = this.list.filter(match);
+    for (const m of taken) this.list.splice(this.list.indexOf(m), 1);
+    return taken;
+  }
+}
+
 interface Fixtures {
   /** Tap counter for this test's device (touch or mouse). */
   taps: Taps;
   /** CSP violations of every document of `page` (asserted empty at teardown). */
   cspViolations: CspViolations;
+  /** Uncaught page errors (asserted empty at teardown). */
+  pageErrors: PageErrors;
 }
 
 export const test = base.extend<Fixtures, { dalLifecycle: undefined }>({
@@ -103,10 +120,13 @@ export const test = base.extend<Fixtures, { dalLifecycle: undefined }>({
   cspViolations: async ({}, use) => {
     await use(new CspViolations());
   },
-  page: async ({ page, cspViolations }, use, testInfo) => {
+  // eslint-disable-next-line no-empty-pattern
+  pageErrors: async ({}, use) => {
+    await use(new PageErrors());
+  },
+  page: async ({ page, cspViolations, pageErrors }, use, testInfo) => {
     await resetStack();
-    const pageErrors: string[] = [];
-    page.on("pageerror", (e) => pageErrors.push(e.message));
+    page.on("pageerror", (e) => pageErrors.list.push(e.message));
     await page.exposeBinding("__cspViolation", (_source, v: CspViolation) => {
       cspViolations.list.push(v);
     });
@@ -132,7 +152,7 @@ export const test = base.extend<Fixtures, { dalLifecycle: undefined }>({
     if (testInfo.status !== testInfo.expectedStatus) return; // keep the first failure readable
     await flushCspViolations(page);
     expectNoCspViolations(cspViolations);
-    expect(pageErrors, "uncaught errors in the page").toEqual([]);
+    expect(pageErrors.list, "uncaught errors in the page").toEqual([]);
     const problems = (await emails()).flatMap(emailProblems);
     expect(problems, "captured emails must follow auth.md §15").toEqual([]);
   },

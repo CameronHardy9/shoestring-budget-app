@@ -2,11 +2,15 @@
 // (auth.md §14 F-22, deviation 1), under the app-wide daily budget (F-09):
 // past 60% of EMAIL_DAILY_QUOTA only priority mail goes out; at 100% nothing.
 // Never throws: a failed or dropped send is logged with counts only.
+// A6 (observability/README.md): a Sentry `warning` at 80% and an `error` at
+// 100% of the quota, once per UTC day each (one-shot reservations).
 import type { AppClock } from "../clock.ts";
 import { sha256 } from "../crypto/keyring.ts";
 import type { Logger } from "../logging.ts";
 import type { Throttles } from "../http/rate-limit.ts";
 import { DAY } from "../http/rate-limit.ts";
+import { ALERTS } from "../observability/error-tracker.ts";
+import type { Alert, ErrorTracker } from "../observability/error-tracker.ts";
 import { EmailSendError } from "./transports.ts";
 import type { EmailTransport, OutgoingEmail } from "./transports.ts";
 
@@ -19,14 +23,24 @@ export interface MailerOptions {
   logger: Logger;
   dailyQuota: number;
   timeoutMs?: number;
+  /** A6 quota alerts (Sentry). Absent or disabled: no alert and no one-shot slot spent. */
+  alerts?: Pick<ErrorTracker, "enabled" | "alert">;
 }
+
+/** Constant, PII-free keys like email:daily (no keyring HMAC needed). */
+const QUOTA_ALERTS: readonly {
+  scope: string;
+  share: number;
+  alert: Alert;
+}[] = [
+  { scope: "email:quota_warning", share: 0.8, alert: ALERTS.emailQuotaWarning },
+  { scope: "email:quota_error", share: 1, alert: ALERTS.emailQuotaReached },
+];
 
 export class Mailer {
   private warnedDay: number | null = null;
   private readonly o: MailerOptions;
-  constructor(
-    o: MailerOptions,
-  ) {
+  constructor(o: MailerOptions) {
     this.o = o;
   }
 
@@ -51,6 +65,7 @@ export class Mailer {
     // Over the limit for this message once `used` sends are already counted.
     const over = (used: number) =>
       used >= quota || (!message.priority && used >= softLimit);
+    let sentToday: number;
     try {
       const used = await this.o.throttles.count(key, DAY);
       if (used >= softLimit) this.warnOnce();
@@ -60,6 +75,7 @@ export class Mailer {
         await this.o.throttles.release(slot);
         return this.dropped(message);
       }
+      sentToday = slot.count;
     } catch {
       this.o.logger.error(
         { email: undefined, kind: message.kind, outcome: "failed" },
@@ -67,19 +83,44 @@ export class Mailer {
       );
       return "failed";
     }
+    let outcome: SendOutcome;
     try {
       await this.o.transport.send(
         message,
         AbortSignal.timeout(this.o.timeoutMs ?? 700),
       );
-      return "sent";
+      outcome = "sent";
     } catch (e) {
       const status = e instanceof EmailSendError ? e.status : null;
       this.o.logger.warn(
         { kind: message.kind, outcome: "failed", providerStatus: status },
         "email send failed",
       );
-      return "failed";
+      outcome = "failed";
+    }
+    // A failed send keeps its slot, so it counts toward the thresholds too.
+    await this.quotaAlerts(sentToday);
+    return outcome;
+  }
+
+  /**
+   * A6: once the day's kept sends reach 80% (and 100%) of the quota, the
+   * first send to see it wins a one-shot reservation and raises the alert.
+   * `>=` plus the reservation means concurrent sends can neither skip the
+   * threshold nor raise it twice.
+   */
+  private async quotaAlerts(sentToday: number): Promise<void> {
+    const alerts = this.o.alerts;
+    if (!alerts?.enabled) return;
+    for (const q of QUOTA_ALERTS) {
+      if (sentToday < Math.ceil(this.o.dailyQuota * q.share)) continue;
+      try {
+        const key = { scope: q.scope, keyHash: sha256(`${q.scope}\0app`) };
+        const once = await this.o.throttles.reserve(key, DAY);
+        if (once.count === 1) alerts.alert(q.alert);
+      } catch {
+        this.o.logger.warn({ alert: q.scope }, "email quota alert unavailable");
+      }
     }
   }
 
@@ -100,7 +141,9 @@ export class Mailer {
     const day = Math.floor(this.o.clock.now().getTime() / DAY);
     if (this.warnedDay === day) return;
     this.warnedDay = day;
-    // Warning level: Sentry alerts the owner (F-09).
+    // Log only (once per day per instance): 60% is the bulk cutoff (auth.md
+    // §14), from here only priority mail goes out. The Sentry alerts (A6) are
+    // separate: a warning at 80% and an error at 100% (quotaAlerts below).
     this.o.logger.warn(
       { alert: "email_budget_60pct" },
       "email budget: 60% of the daily quota used",

@@ -4,6 +4,7 @@
 import { DatabaseUrlError, assertSecureDatabaseUrl } from "@shoestring/db";
 import { z } from "zod";
 import { parseKeyring } from "./crypto/keyring.ts";
+import { sentryEndpoints } from "./http/security-headers.ts";
 import type { Keyring } from "./crypto/keyring.ts";
 
 export type NodeEnv = "development" | "test" | "production";
@@ -175,6 +176,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new ConfigError("APP_KEYRING is invalid");
   }
 
+  // Fail closed: a malformed DSN would silently disable error tracking and
+  // the CSP report endpoint (both derive from it).
+  if (e.SENTRY_DSN !== undefined && !sentryEndpoints(e.SENTRY_DSN))
+    throw new ConfigError(
+      "SENTRY_DSN is invalid (expected https://<key>@<host>/<project id>)",
+    );
   return {
     nodeEnv: e.NODE_ENV,
     host: e.HOST,

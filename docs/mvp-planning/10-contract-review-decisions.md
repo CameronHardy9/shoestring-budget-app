@@ -123,3 +123,13 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Recent-transactions query that sets chip order | **Prefetch it in BudgetLayout** so chips are usually ready when + is tapped (one extra small request per budget page; $0). |
 | Saving while the phone knows it's offline | **Fail fast** ("online to save"): Save fails at once with the offline message, the sheet keeps the entry, and the person saves again when back online. Separate frontend PR. |
 | Other screens showing an endless loader offline with nothing cached (Overview summary, Transactions, Categories, Sessions, Deleted budgets, Invitations, Security) | **Fix in the same offline PR**, so offline is handled consistently. |
+
+## Build round 8: Sentry integration (2026-11-16)
+| Topic | Decision |
+|---|---|
+| Phone push for alerts A2 (error spike), A3 (purge), A6 (email quota) | **Gmail push.** Sentry emails the alerts; a Gmail filter plus Gmail app notifications push them, the same path as the GCP budget alerts. (Sentry's mobile app is unavailable in the US App Store; Slack/webhooks are paid.) |
+| Per-key (DSN) rate limit, paid-only on Sentry | **Spike protection only**, plus the hard 5,000 errors/month free quota. No SDK-side cap. Exhausting the quota can't cost money; Sentry is blind until the 1st. |
+| Usage budget | **One local `make e2e` per PR**, CI for the rest unless there is a concrete reason; **fresh specialist agents per PR** with a context handoff. |
+| Browser error messages sent to Sentry | **Allowlist known-safe message patterns** (owner overrode the "strip all" recommendation). Everything not matching a reviewed safe pattern is still dropped; the patterns need security-reviewer sign-off because a wrong pattern could leak data quoted from the API. |
+| F-60 (no owner alert at the 60% cutoff where password-reset and invitation mail stops) | **Move the Sentry email-quota warning to 60%** (error stays at 100%). Follow-up PR before launch. |
+| F-59, F-60, F-61 (Lows from the Sentry review) | **Small follow-up PR** right after the Sentry PR, before launch. |

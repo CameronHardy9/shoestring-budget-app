@@ -6,7 +6,7 @@ SCRIPTS := .github/scripts
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
-        lint typecheck test check e2e e2e-up e2e-down audit image image-smoke
+        lint typecheck test check e2e e2e-up e2e-down audit image image-smoke sourcemaps-upload
 
 help: ## Show targets and the phone-testing recipe
 	@echo "Shoestring: canonical commands"
@@ -78,3 +78,6 @@ image: ## Build the production image (skips until backend/ exists; API-only unti
 
 image-smoke: ## Run the production image against a throwaway Postgres and probe it (ADR-0009)
 	@bash $(SCRIPTS)/image-smoke.sh
+
+sourcemaps-upload: ## Upload the SPA's source maps privately to Sentry (CI on main; skips without SENTRY_AUTH_TOKEN)
+	@bash $(SCRIPTS)/sourcemaps-upload.sh

@@ -39,7 +39,7 @@ Each of these accounts is equivalent to full control of the app or its data. Use
 | ☐ | Cloudflare (DNS) | Security key / passkey 2FA; no API tokens unless needed; registrar or transfer lock on | | |
 | ☐ | Domain registrar (if not Cloudflare) | Strongest MFA available; transfer lock on | | |
 | ☐ | Neon | Sign in **with Google or GitHub only** | | |
-| ☐ | Sentry | Google/GitHub sign-in or WebAuthn 2FA; org setting "Require Two-Factor Authentication" on | | |
+| ☐ | Sentry | Passkey or security key as 2FA (Sentry calls it "U2F"); recovery codes offline; org setting "Require Two-Factor Authentication" on. Done in step 11b, S1 (V37) | | |
 | ☐ | Resend | Google/GitHub sign-in, or its 2FA | | |
 | ☐ | Better Stack | Google sign-in, or its 2FA | | |
 | ☐ | Password manager | Strong master password + 2FA; it holds the `age` key, DB passwords and the MFA-key escrow | | |
@@ -195,7 +195,7 @@ gh variable set GCP_WIF_PROVIDER --env production --repo "$GH_REPO" --body "$WIF
 gh variable set GCP_DEPLOY_SA    --env production --repo "$GH_REPO" --body "$(SA deployer)"
 gh variable set GCP_PROJECT      --env production --repo "$GH_REPO" --body "$PROJECT"
 ```
-**Verify:** `gh api "repos/$GH_REPO/environments" --jq '.environments[] | {name, protection_rules}'` shows only `production`. `gh secret list --repo "$GH_REPO"` and `gh secret list --env production --repo "$GH_REPO"` show no database or backup secret.
+**Verify:** `gh api "repos/$GH_REPO/environments" --jq '.environments[] | {name, protection_rules}'` shows only `production` (and, after step 11b, `sentry`). `gh secret list --repo "$GH_REPO"` and `gh secret list --env production --repo "$GH_REPO"` show no database or backup secret.
 
 ## 11. Email: Resend on `mail.<domain>`, DNS on Cloudflare
 1. Resend → **Domains → Add domain** `mail.<domain>`, region **us-east-1**.
@@ -216,6 +216,126 @@ gh variable set GCP_PROJECT      --env production --repo "$GH_REPO" --body "$PRO
    - After ≥ 7 more clean days, **before launch**: `v=DMARC1; p=reject; adkim=s; aspf=r; pct=100` (end state)
    Check each stage with `dig +short TXT "_dmarc.mail.$DOMAIN"` and a fresh test send (step 6).
 
+## 11b. Sentry: account, projects, privacy settings and keys (F-03, F-06, F-07)
+Do this **before step 12**. The first deploy needs the API DSN, and CI needs the web DSN to build a releasable image. Alert rules and the cron monitor come later, in step 13.
+
+Plan facts (sentry.io/pricing and docs.sentry.io/pricing, checked 2026-11-16, V18):
+- The free **Developer** plan has 1 user, 5,000 errors a month, 1 cron monitor, a 30-day lookback, and alerts **by email only**.
+- It has **no pay-as-you-go budget**, so it can't bill. Data over the quota is dropped.
+- **New organizations start on a 14-day Business trial** and become Developer automatically at the end. **Don't add a card. Don't upgrade.** During the trial, Spike Protection is inactive and Business-only settings are visible: per-key rate limits, release and error-message inbound filters, Delete & Discard. **Don't set any of them**, because they stop applying once the trial ends.
+
+**S1. Account and MFA**
+1. Open `https://sentry.io/signup/`. Sign up with your email and a new password from your password manager, saved there first.
+2. Create the organization:
+   - **Data Storage Location: United States.** This can't be changed later.
+   - Name `Shoestring`. Note the org **slug** that Sentry shows, for example `shoestring-ab12`.
+   - Skip "invite your team".
+3. Avatar (bottom left) → **User Settings → Security → Two-Factor Authentication** → **U2F (Universal 2nd Factor)** → **Add** → register your passkey or security key, named for example `mac passkey`.
+   - Then **Recovery Codes** → **Download** → store them offline (printed, or in the password manager vault, not the Downloads folder).
+   - If Sentry requires an authenticator app before it accepts a key, add TOTP first, then the key, and note "TOTP + key" in the step 1 table (V37).
+4. **Org Settings → General Settings** → "Security & Privacy" section:
+   - **Require Two-Factor Authentication**: on → Confirm.
+   - **Enhanced Privacy**: on. Alert emails then leave out event details and source code.
+   - **Allow Shared Issues**: off. Shared issue links are public.
+   - **Allow JavaScript source fetching**: off (if shown here; otherwise per project in S4). Source maps come only from CI's private upload.
+   - **Allow join requests**: off.
+5. Write the trial end date in the Record table at the bottom of this runbook. After that date, **Org Settings → Subscription** must show **Developer** (V41).
+
+**S2. Organization privacy settings (F-07).** Org Settings → **Security & Privacy**:
+| Setting | Value |
+|---|---|
+| Require Data Scrubber | **on** |
+| Require Using Default Scrubbers | **on** |
+| Prevent Storing of IP Addresses | **on** |
+| Global Sensitive Fields (one per line) | `token`, `password`, `code`, `email`, `payee`, `memo`, `amount`, `cookie`, `authorization`, `x-csrf-token`, `session` |
+| Global Safe Fields | *(empty)* |
+
+- **What the sensitive fields do.** Each word removes any field whose **key** contains it, and also any **value** that contains it, in Sentry's PII fields: extra, user, request query, headers and cookies, breadcrumbs, frame variables. For example, a breadcrumb for `/api/auth/sessions` shows as `[Filtered]`. That is intended: it fails closed.
+- **Advanced Data Scrubbing** (same page) → **Add Rule**, four times. Use the Source box's autocomplete, and if the syntax is rejected, send the error to the tech lead.
+  | Method | Data type | Source | Why |
+  |---|---|---|---|
+  | Remove | Anything | `$user.geo.**` | Sentry derives a city and region from the IP **even when IP storage is off** (docs.sentry.io "Server-Side Data Scrubbing" → Geographic Information) |
+  | Replace | Email Addresses | `**` | Backstop for every default PII field |
+  | Replace | Email Addresses | `$error.value \|\| $message` | Exception and log messages are not default PII fields |
+  | Replace | IP Addresses | `$error.value \|\| $message` | Same |
+
+**S3. Projects.** **Projects → Create Project**, twice. In both, choose "I'll create my own alerts later", and skip the SDK setup wizard: backend and frontend already contain the SDK.
+| Platform | Project name | Used by |
+|---|---|---|
+| **Node.js** | `shoestring-api` | the service and the migrate, purge, admin and rewrap-mfa jobs; also receives the browser's CSP reports (backend derives `Reporting-Endpoints` from this DSN) |
+| **Browser JavaScript** | `shoestring-web` | the SPA |
+
+**S4. Per-project settings** (do each one in both projects unless marked):
+- **Settings → Security & Privacy:** the S2 values show as set by the organization (greyed out or "enforced").
+- **Settings → Inbound Filters:**
+  - on: "Filter out events coming from localhost"
+  - on: "Filter out known errors from browser extensions"
+  - on: "Filter out known errors from legacy browsers" (all listed browsers)
+  - on: "Filter out known web crawlers"
+  - Leave the IP field empty. "Releases" and "Error Message" filters are Business-only; leave them empty.
+- **Settings → General → Client Security** (`shoestring-web`):
+  - "Enable JavaScript source fetching": **off**.
+  - Leave "Allowed Domains" at `*` until the canary in S9 has passed, then do S10.
+- **Settings → Security Headers** (`shoestring-api`, which receives the CSP reports): "Use default ignored sources" **on**. It drops browser-extension noise, which would otherwise use up the error quota (V43).
+- **Settings → Client Keys (DSN):** keep the single default key and copy its **DSN** (it isn't secret). **Per-key rate limits are Business-only** (docs.sentry.io "Manage Your Error Quota" → Rate Limiting, checked 2026-11-16), so there is nothing to set. The backstops are below and in observability/README.md.
+- **Org Settings → Spike Protection** → **Enable All**. Then expand each project → **Add Action** → **Sentry Notification**. It is inactive during the trial. Check that it is still on after the trial (V38).
+
+**S5. Check the DSNs** (they aren't secret; they ship in the SPA bundle):
+```sh
+export SENTRY_DSN_API="<shoestring-api DSN>"     # also used in step 12
+export SENTRY_DSN_WEB="<shoestring-web DSN>"
+for d in "$SENTRY_DSN_API" "$SENTRY_DSN_WEB"; do printf '%s\n' "$d" | sed -E 's#^https://[^@]+@([^/]+)/([0-9]+)$#host=\1 project=\2#'; done
+```
+**Pass:** both lines show the **same** host, `o<digits>.ingest.us.sentry.io`. The backend derives the CSP `connect-src` from the API DSN, so the SPA's events go to an allowed host only if both hosts match. Add both `export` lines to `~/shoestring-prod.env`.
+
+**S6. Auth token for the private source-map upload.** **Org Settings → Developer Settings → Organization Tokens** → **Create New Token**, name `shoestring-ci-sourcemaps` → **Create**.
+- Organization tokens have one fixed, CI-only scope (`org:ci`: releases and source-map upload). That is the **minimum Sentry offers**: it can't read events, change settings or manage members (docs.sentry.io "Auth Tokens", checked 2026-11-16).
+- **Don't** use a personal token or an internal integration.
+- The token is shown **once**. Store it straight in GitHub (the paste goes into a hidden prompt, never a command line), and don't keep another copy. If you lose it, revoke it and create a new one.
+- **Where it lives:** an **environment secret** on the GitHub environment **`sentry`**, which only `main` can use. **Never a repository-wide secret.** ci-engineer's CI job declares `environment: sentry` and runs `make sourcemaps-upload` on `main` only. The environment adds a server-side guarantee that no other branch's workflow can read the token. While the secret doesn't exist, the upload skips cleanly.
+```sh
+gh api -X PUT "repos/$GH_REPO/environments/sentry"   -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST "repos/$GH_REPO/environments/sentry/deployment-branch-policies" -f name=main -f type=branch
+gh secret set SENTRY_AUTH_TOKEN --env sentry --repo "$GH_REPO"     # paste at the prompt
+pbcopy < /dev/null
+```
+Sentry emails you that a token was created; that is expected. The environment has no required reviewers: it gates by branch, not by approval, so every main build can upload its maps.
+
+**S7. GitHub repository variables (not secret).** These are exactly the three CI reads (`.github/workflows/ci.yml`): `SENTRY_DSN_WEB`, `SENTRY_ORG` and `SENTRY_PROJECT_WEB`.
+```sh
+gh variable set SENTRY_DSN_WEB --repo "$GH_REPO" --body "$SENTRY_DSN_WEB"            # build arg VITE_SENTRY_DSN (Dockerfile)
+gh variable set SENTRY_ORG     --repo "$GH_REPO" --body "<org slug from S1>"          # sentry-cli upload
+gh variable set SENTRY_PROJECT_WEB --repo "$GH_REPO" --body "shoestring-web"          # sentry-cli upload
+```
+
+**S8. Where each value goes**
+| Value | Secret? | Goes to | Set in |
+|---|---|---|---|
+| `shoestring-api` DSN | no | Cloud Run plain env `SENTRY_DSN` on the service and on the migrate, purge, admin and rewrap-mfa jobs (`COMMON_ENV` in step 12). **Not** on `shoestring-backup`, which has no Sentry SDK and reports through its heartbeat. | step 12 (from `$SENTRY_DSN_API`) |
+| `shoestring-web` DSN | no (public in the bundle) | GitHub repository variable `SENTRY_DSN_WEB` → Docker build arg `VITE_SENTRY_DSN` → baked into the SPA | S7 |
+| Release | no | The full git SHA. CI passes it as the build arg `APP_RELEASE`, so the image has `APP_RELEASE` and `VITE_APP_RELEASE`. Cloud Run gets `APP_RELEASE=$SHA` (step 12 and deploy.md step 4). The source-map upload uses the same SHA (ci-engineer). | automatic |
+| Org auth token | **yes** | GitHub environment secret `SENTRY_AUTH_TOKEN` on environment `sentry` (`main` only) (S6). It is never in Cloud Run, Secret Manager, the image or the repo. | S6 |
+| Org slug, project names | no | GitHub variables `SENTRY_ORG`, `SENTRY_PROJECT_WEB` | S7 |
+| Environment | no | The SDKs report `production` in production (backend and frontend). The alert rules in step 13 filter on it. | code |
+Secret Manager still holds 5 secrets: neither DSN is a secret.
+
+**S9. Verify**
+```sh
+gh variable list --repo "$GH_REPO" | grep -E '^SENTRY_'
+gh secret list --env sentry --repo "$GH_REPO"         # SENTRY_AUTH_TOKEN only
+gh secret list --env production --repo "$GH_REPO"            # nothing Sentry-related, no database or backup secret
+gh secret list --repo "$GH_REPO" | grep -c SENTRY || true     # must print 0: no repository-wide Sentry secret
+gh api "repos/$GH_REPO/environments/sentry/deployment-branch-policies" --jq '[.branch_policies[].name]'   # ["main"]
+```
+- Run the **canary** in docs/runbooks/sentry-data-check.md step 2 for **both** DSNs. It must pass before step 12. It proves the S2 settings remove every synthetic sensitive value, plus the IP and geo data.
+- Org Settings → **Audit Log** shows the token creation and the settings changes, and no other member.
+
+**S10. Lock the web DSN to the site** (after S9 passes). `shoestring-web` → Settings → General → Client Security → **Allowed Domains**: replace `*` with `shoestring.<domain>`. Sentry then rejects browser events from other origins (for example, someone reusing the public DSN).
+- Leave `shoestring-api` at `*`: server events and CSP reports carry no page origin.
+- If a later canary run against the web DSN returns 403, that's this setting working. Re-run the canary with `*` set temporarily, then set it back (V42).
+
+**Back out:** the projects can be removed and recreated (Project → Settings → General → Remove Project). Revoke the token on the Organization Tokens page, and delete the secret with `gh secret delete SENTRY_AUTH_TOKEN --env sentry --repo "$GH_REPO"`.
+
 ## 12. First deploy [needs app: image, `/api/healthz`, `/api/readyz`, migrate entrypoint, per-command config]
 Replaced by deploy/cloudrun/*.yaml once that exists. The flags here are the spec.
 ```sh
@@ -224,7 +344,7 @@ export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 gcloud auth configure-docker "$REGION-docker.pkg.dev"
 DIGEST=$(crane digest "ghcr.io/$GH_REPO:sha-$SHA"); crane copy "ghcr.io/$GH_REPO:sha-$SHA" "$AR_REPO:sha-$SHA"
 export IMAGE="$AR_REPO@$DIGEST"
-export SENTRY_DSN_API="<DSN of the shoestring-api Sentry project (not secret)>"
+: "${SENTRY_DSN_API:?run step 11b S5 first}"     # shoestring-api DSN (not secret); purge needs it for the cron check-in
 COMMON_ENV="NODE_ENV=production;APP_ORIGIN=https://shoestring.$DOMAIN;LOG_LEVEL=info;APP_RELEASE=$SHA;SENTRY_DSN=$SENTRY_DSN_API"
 EMAIL_ENV="EMAIL_TRANSPORT=provider;EMAIL_FROM=Shoestring <no-reply@mail.$DOMAIN>;EMAIL_DAILY_QUOTA=100"
 
@@ -324,14 +444,64 @@ curl -fsS "$URL/api/healthz"; echo; curl -fsS "$URL/api/readyz"; echo
 curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL/api/_test/reset"      # must be 404 (F-10)
 gcloud scheduler jobs run shoestring-purge-daily --project "$PROJECT" --location "$REGION"   # one manual trigger; check the execution succeeds
 ```
+Then run the **Sentry smoke check** in deploy.md "Verify → Sentry" (the purge check-in, the release in the bundle, and the CSP host). Do it after step 13, so the `purge` monitor exists to receive the check-in.
+
 After two deploys, switch the AR cleanup policy from dry-run to live (billing-protection.md §5).
 
 ## 13. Monitoring [needs app for A3 and A6]
-Follow **observability/README.md**:
-- Sentry: two projects, the Security & Privacy settings (F-07), `error-spike` and `email-quota` alert rules, `purge` cron monitor, mobile app push.
-- Better Stack: `shoestring-healthz` monitor (after step 15), `shoestring-backup` heartbeat (its URL becomes `BACKUP_HEARTBEAT_URL` on the backup job, step 12g), mobile app push.
+Better Stack: follow **observability/README.md** "Better Stack Uptime":
+- the `shoestring-healthz` monitor (after step 15)
+- the `shoestring-backup` heartbeat (its URL becomes `BACKUP_HEARTBEAT_URL` on the backup job, step 12g)
+- mobile app push
 
-**Verify:** Better Stack "Send test alert" and a Sentry test notification both reach your phone as push **and** email.
+Sentry: the steps below. They need step 11b. The UI paths follow Sentry's current "Monitors and Alerts" layout (docs.sentry.io, checked 2026-11-16). If a label differs, keep the values and tell the tech lead, so this runbook can be corrected.
+
+**13A. How alerts reach your phone.** The Developer plan sends alerts **by email only**. Slack, Discord and webhooks are Team-plan features, and Sentry's own mobile app is unmaintained and not in the US App Store (checked 2026-11-16). Phone push therefore comes from your mail app, the same way the GCP budget alerts do:
+1. Avatar → **User Settings → Notifications**: **Issue Alerts** = on, delivery **Email**. **Spike Protection** = on (email).
+2. After the first test notification in 13C arrives, open it in Gmail on the web → ⋮ → **Filter messages like this**. The "From" box is prefilled with Sentry's sender (note it here: ______, V40) → **Create filter**, then tick:
+   - **Apply the label** `Shoestring alerts` (new label)
+   - **Never send it to Spam**
+   - **Always mark it as important**
+3. Gmail app on the phone → Settings → your account → **Notifications** → **All** (or **High priority only**, which includes "important"). Allow notifications for Gmail in the phone's settings.
+
+**13B. Cron monitor `purge` (alert A3).** **Monitors → Crons** (older menus: **Crons** in the sidebar) → **Add Monitor** (or **Create Monitor**). Choose the manual setup, not an SDK snippet:
+| Field | Value |
+|---|---|
+| Project | `shoestring-api` |
+| Name / Slug | `purge` / `purge` (the slug must match the backend's check-in exactly) |
+| Schedule | Crontab `0 8 * * *`, timezone **UTC** |
+| Grace period (check-in margin) | **60** minutes |
+| Max runtime | **15** minutes (the job's task timeout is 10 min) |
+| Failure tolerance (consecutive failed or missed check-ins before an issue) | **1** |
+| Recovery tolerance | **1** |
+| Owner | you |
+| Environment | the backend sends `production`; leave the monitor's environment selection at its default |
+- The Developer plan includes **exactly 1** cron monitor. Never create a second one. A typo in the backend's slug would make it auto-create another monitor, which can't be activated after the trial: check that **Monitors → Crons lists exactly one monitor**.
+- If the form has a "Notify" or "Alerts" section, use it for the alert below instead of creating a separate one.
+
+**13C. Alert rules.** **Monitors → Alerts → Create Alert** (older menus: **Alerts → Create Alert → Issues**). After each one, open its If/Then block and click **Send Test Notification**, and check that the email and phone push arrive.
+| Name | Alert | Source | Environment | When (any) | If (**all**) | Then | Throttle |
+|---|---|---|---|---|---|---|---|
+| `error-new` | A2 | All issues in selected projects: `shoestring-api`, `shoestring-web` | `production` | A new issue is created · A resolved issue regresses · An issue escalates | Issue category **equal to** `error` | Notify on preferred channel → **Member: you** | **30 minutes** |
+| `error-spike` | A2 | same | `production` | An event or issue activity is captured | Issue category **equal to** `error` · Number of events **more than 10 in 15 minutes** · Event attribute `message` **does not contain** `email_quota_threshold` | Member: you | **30 minutes** |
+| `purge-cron` | A3 | Alert on specific monitors → **Connect Monitors** → `purge` | `production` | A new issue is created · A resolved issue regresses | *(none)* | Member: you | Get notified on every trigger |
+| `email-quota-warning` | A6 | `shoestring-api` | `production` | An event or issue activity is captured | Event attribute `message` **contains** `email_quota_threshold` · Event level **equal to** `warning` | Member: you | **12 hours** |
+| `email-quota-exhausted` | A6 | `shoestring-api` | `production` | An event or issue activity is captured | Event attribute `message` **contains** `email_quota_threshold` · Event level **greater than or equal to** `error` | Member: you | **12 hours** |
+- **Why this shape (Sentry's alert builder):**
+  - Frequency windows are 5 min, 15 min, 1 h and so on; there is no 10-minute window, so A2 uses 15 minutes.
+  - Throttle options don't include 6 hours.
+  - Fingerprints can't be filtered, so A6 matches the fixed message prefix `email_quota_threshold:` (underscores; backend `ALERTS` in backend/src/observability/error-tracker.ts). The fingerprint `email-quota-threshold` (hyphens) only groups the events into one issue.
+  - Throttling applies per alert and per issue, so the 80% warning and the 100% error are separate alerts. That way the error isn't silenced by the warning sent earlier the same day.
+  - `error-spike` excludes the quota events. `error-new` can't: Sentry applies event-attribute filters only to the "new issue" and "event captured" triggers.
+    - So the **first** quota event of each kind, and any later one after you resolve its issue, also sends an `error-new` email.
+    - That is expected, and rare. email-quota.md says to leave those issues unresolved.
+- **If the "Number of events" filter isn't offered** (the pricing table lists "Additional Alert Types" for Team and above, V39): skip `error-spike`. `error-new` with "An issue escalates" (Sentry's own spike detection) then covers A2. Record that in observability/README.md.
+
+**Verify:**
+- Better Stack "Send test alert" and every Sentry "Send Test Notification" arrive as email **and** as a phone notification.
+- Monitors → Alerts lists the 5 rules above.
+- Monitors → Crons lists exactly 1 monitor (`purge`).
+- After step 12's manual purge trigger, `purge` shows a green check-in.
 
 ## 14. Measure the proxy hop count (F-08, V26)
 A throwaway echo service shows exactly what the app will see in `X-Forwarded-For`. It's a third-party Docker Hub image, so replace `:latest` with the digest you see on Docker Hub (`@sha256:…`) before running. It runs as a service account with no permissions, is private (you call it with your identity token), and is deleted straight after.
@@ -402,6 +572,7 @@ curl -sSI "https://shoestring.$DOMAIN/api/healthz" | grep -i 'cache-control'    
 | 3–7 GCP setup | | |
 | 8 Neon (`version()` result) | | |
 | 9–11 Secrets, GitHub, email | | |
+| 11b Sentry (org slug; trial end date; plan shown after the trial; canary result) | | |
 | 12–13 First deploy, monitoring | | |
 | 14 Hop count | | |
 | 15 Domain | | |

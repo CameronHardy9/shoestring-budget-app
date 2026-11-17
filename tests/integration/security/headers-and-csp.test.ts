@@ -2,7 +2,9 @@
 // C3.1-C3.3).
 //   - CSP drift contract test: the backend's style-src is exactly
 //     "style-src " + the frontend's STYLE_SRC, and the whole policy matches
-//     ARCHITECTURE.md directive by directive (Sentry parts only with SENTRY_DSN).
+//     ARCHITECTURE.md directive by directive; the Sentry host (connect-src),
+//     report-to and Reporting-Endpoints are derived from the stack's fake
+//     SENTRY_DSN (E2E_SENTRY_DSN).
 //   - C3.2: every route class the e2e stack's backend serves carries every header.
 //     The SPA document, static files and the SPA fallback are served by the
 //     backend only from a production build (STATIC_DIR); the e2e stack serves
@@ -16,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { STYLE_SRC } from "../../../frontend/src/security/csp.ts";
 import { createUserWithTotp, passwordLogin } from "../../support/auth.ts";
+import { e2eSentry } from "../../support/env.ts";
 import { ApiClient, COOKIE_NAME } from "../../support/http.ts";
 import type { ApiResponse } from "../../support/http.ts";
 import { seedWorld } from "../../support/world.ts";
@@ -62,6 +65,11 @@ function expectSecurityHeaders(res: ApiResponse): void {
   const csp = res.header("content-security-policy");
   expect(csp, `CSP on ${res.describe}`).toBeDefined();
   expect(parseCsp(csp!).get("frame-ancestors"), res.describe).toBe("'none'");
+  const sentry = e2eSentry();
+  expect(parseCsp(csp!).get("report-to"), res.describe).toBe("csp");
+  expect(res.header("reporting-endpoints"), `reporting-endpoints on ${res.describe}`).toBe(
+    `csp="${sentry.ingestOrigin}/api/${sentry.projectId}/security/?sentry_key=${sentry.publicKey}"`,
+  );
 }
 
 describe("CSP drift contract test (C3.1, ARCHITECTURE 'Drift rule')", () => {
@@ -75,14 +83,35 @@ describe("CSP drift contract test (C3.1, ARCHITECTURE 'Drift rule')", () => {
     expect(directive).toBe(`style-src ${STYLE_SRC}`);
   });
 
-  it("the whole policy matches ARCHITECTURE.md (Sentry host and report-to appear only with SENTRY_DSN)", async () => {
+  it("the whole policy matches ARCHITECTURE.md, with the Sentry ingest host and report URL derived from the stack's SENTRY_DSN", async () => {
+    // The e2e backend runs with SENTRY_DSN = E2E_SENTRY_DSN (a fake .test
+    // DSN; docker-compose.test.yml). ARCHITECTURE.md shows a placeholder
+    // host; everything else must match it directive by directive.
+    const sentry = e2eSentry();
     const res = await new ApiClient("anonymous").get("/healthz");
     const actual = parseCsp(res.header("content-security-policy")!);
     const documented = documentedCsp();
-    documented.set("connect-src", "'self'"); // no SENTRY_DSN in the e2e stack
-    documented.delete("report-to");
+    expect(documented.get("connect-src")).toMatch(
+      /^'self' https:\/\/o<id>\.ingest\.us\.sentry\.io$/,
+    );
+    expect(documented.get("report-to")).toBe("csp");
+    documented.set("connect-src", `'self' ${sentry.ingestOrigin}`);
     expect(Object.fromEntries(actual)).toEqual(Object.fromEntries(documented));
-    expect(res.header("reporting-endpoints")).toBeUndefined();
+    // Sentry's CSP report endpoint for the DSN's project and public key
+    // (ARCHITECTURE: Reporting-Endpoints: csp="<Sentry CSP report URL>").
+    expect(res.header("reporting-endpoints")).toBe(
+      `csp="${sentry.ingestOrigin}/api/${sentry.projectId}/security/?sentry_key=${sentry.publicKey}"`,
+    );
+  });
+
+  it("connect-src names exactly one third-party origin, the DSN's ingest host, and nothing broader", async () => {
+    const sentry = e2eSentry();
+    const res = await new ApiClient("anonymous").get("/healthz");
+    const sources = parseCsp(res.header("content-security-policy")!)
+      .get("connect-src")!
+      .split(" ");
+    expect(sources).toEqual(["'self'", sentry.ingestOrigin]);
+    expect(sources.join(" ")).not.toMatch(/\*|https?:(\s|$)/);
   });
 
   it("no unsafe-inline, unsafe-eval, unsafe-hashes, nonce or strict-dynamic anywhere; hashes only in style-src", async () => {

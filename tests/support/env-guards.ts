@@ -35,7 +35,7 @@ export type Source = Readonly<Record<string, string | undefined>>;
 export function parseStackFile(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of text.split("\n")) {
-    const m = /^([A-Z_]+)=(.*)$/.exec(line.trim());
+    const m = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line.trim());
     if (!m?.[1]) continue;
     out[m[1]] = (m[2] ?? "").replace(/^'(.*)'$/, "$1");
   }
@@ -80,6 +80,58 @@ export function stackSource(): Source {
     existsSync(STACK_FILE) ? readFileSync(STACK_FILE, "utf8") : null,
   );
   return memo;
+}
+
+/** The parts of the e2e stack's fake Sentry DSN that the suites derive values from. */
+export interface FakeSentryDsn {
+  dsn: string;
+  /** https://<host>, the origin the browser posts envelopes to. */
+  ingestOrigin: string;
+  /** The DSN's public key (its user part). */
+  publicKey: string;
+  /** The numeric project ID (its path). */
+  projectId: string;
+}
+
+/**
+ * E2E_SENTRY_DSN, which `make e2e` and `make e2e-up` export
+ * (.github/scripts/lib.sh). It must be shaped like a real DSN but live on a
+ * reserved `.test` host (RFC 6761), which never resolves: the production
+ * bundle the suites build sends events there, and the browser tests intercept
+ * them, so a real DSN here would ship test events (and anything a scrubbing
+ * bug lets through) to a real Sentry project.
+ */
+export function fakeSentryDsn(value: string | undefined): FakeSentryDsn {
+  if (!value)
+    throw new StackEnvError(
+      "E2E_SENTRY_DSN is not set. `make e2e` exports it and `make e2e-up` writes it to tests/.env.stack; start the stack through one of them",
+    );
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    throw new StackEnvError("E2E_SENTRY_DSN is not a valid URL");
+  }
+  const projectId = u.pathname.replace(/^\//, "");
+  if (
+    u.protocol !== "https:" ||
+    !u.hostname.endsWith(".test") ||
+    u.port !== "" ||
+    !/^[0-9a-f]{32}$/.test(u.username) ||
+    u.password !== "" ||
+    !/^\d+$/.test(projectId) ||
+    u.search !== "" ||
+    u.hash !== ""
+  )
+    throw new StackEnvError(
+      "E2E_SENTRY_DSN must be https://<32 hex key>@<host>.test/<project number>: a fake DSN on a reserved .test host, so no test event can reach a real Sentry",
+    );
+  return {
+    dsn: value,
+    ingestOrigin: u.origin,
+    publicKey: u.username,
+    projectId,
+  };
 }
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);

@@ -240,7 +240,7 @@ Neon's free plan has no billing attached, so it cannot charge you. Its limits ca
 | Service | Check |
 |---|---|
 | GitHub | Settings → Billing → Actions and Packages spending limit **$0** (ci-engineer checklist). GHCR packages for the public repo are free. |
-| Sentry | Developer (free) plan; Settings → Subscription: pay-as-you-go / on-demand budget **$0**. `tracesSampleRate: 0`. |
+| Sentry | Developer (free) plan, no card. The plan has no pay-as-you-go budget, so it can't bill (checked 2026-11-16, V18). New orgs start a 14-day Business trial: after its end date, Settings → Subscription must show **Developer** (V41). Never add a card or upgrade. Exactly 1 cron monitor. `tracesSampleRate: 0`. |
 | Better Stack, Resend | Free plans, no card on file. Resend: click and open tracking **off** (F-06). |
 | Cloudflare | Free plan. No paid add-ons (Argo, Load Balancing, paid Workers, Advanced Certificate Manager). The `shoestring` CNAME stays **DNS only** unless the §3a fallback is active, which happens **only after a security-reviewer review and sign-off** (owner ruling 2026-11-13). |
 | DNS and domain | Your existing provider; no new paid add-ons (DNSSEC or proxying are free on most providers). |
@@ -261,7 +261,7 @@ Do this in the first week of each month for the **previous** month. Record a row
 | 9 | Backup bucket size and age | `gcloud storage du --summarize "gs://$BACKUP_BUCKET"`; `gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/" \| head -3` | < 1 GB; oldest ≤ 35 days | oldest > 35 days |
 | 10 | Neon usage | Neon Console → Usage: CU-hours, storage, egress | < 70% | ≥ 70% |
 | 11 | Backups ran every night | `gcloud run jobs executions list --job shoestring-backup --region us-east1 --project "$PROJECT" --limit 31`; `gcloud scheduler jobs list --location us-east1 --project "$PROJECT"` | ~30 succeeded; 2 scheduler jobs, both `ENABLED` | failures, gaps or a paused scheduler |
-| 12 | Sentry quota | Sentry → Settings → Subscription → Usage | < 50% of errors | > 70% |
+| 12 | Sentry quota | Sentry → Org Settings → **Stats → Usage** (errors accepted vs 5,000; dropped). Monitors → Crons lists exactly 1 monitor. Also run docs/runbooks/sentry-data-check.md step 1 on the top 5 issues per project. | < 50% of errors; 1 monitor; no leak | > 70%; 2+ monitors; any leak |
 | 13 | Resend usage | Resend dashboard | < 1,000/month | > 2,000 |
 | 14 | Free-tier terms unchanged | Skim the pricing pages in infra/hosting-evaluation.md "What to verify" (quarterly is enough) | unchanged | changed: tell sre |
 | 15 | Cloudflare records | Cloudflare → DNS: `shoestring` CNAME is **DNS only**; `_dmarc.mail` at the current ramp stage (`p=reject` once launched) | as configured | proxied without a security-reviewer sign-off; DMARC weaker than the ramp stage |

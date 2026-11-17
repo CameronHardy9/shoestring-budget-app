@@ -29,9 +29,12 @@ export default function SignupScreen() {
   const { applyAuthState } = useAuth();
   const [token] = useState(() => peekLinkToken("/signup"));
   const preview = useQuery({
-    queryKey: ["signup-preview", token],
+    // A fixed key: the token stays in one place (F-50), never in the query
+    // cache. gcTime 0 drops the result as soon as the screen unmounts.
+    queryKey: ["signup-preview"],
     enabled: token !== null,
     staleTime: Infinity,
+    gcTime: 0,
     retry: shouldRetry,
     queryFn: () =>
       unwrap(

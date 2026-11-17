@@ -13,5 +13,7 @@ metadata:
 - Backend unit tests may NOT import `@shoestring/db/testing` (Semgrep allowlist), so they use the strict fake DAL in `src/test-support/harness.ts`; real-DB checks are manual smoke or tests/.
 - Supply chain (strictDepBuilds, 7-day age): esbuild has a postinstall (blocked); rolldown and `@node-rs/argon2` have none. `@node-rs/argon2`'s `Algorithm` is a const enum (unusable with isolatedModules): check the `$argon2id$` PHC prefix instead.
 - Fastify 5.12: `trustProxy` typed without `number` (use a `(addr, hop) => hop < n` function); `disableRequestLogging`/`requestIdLogLabel` are deprecated in favour of `logController: new LogController({...})`.
+- **Sentry v11 (`@sentry/node` 11.10.0, 2026-11-16):** `sendDefaultPii` no longer exists; `dataCollection` replaced it and its defaults are PERMISSIVE (headers, cookies, bodies, userInfo, frame vars all on), so every field is set off explicitly. `beforeSendTransaction` is ignored (spans stream) and warns. There is no `@sentry/node-core` in v11. `@sentry/node` depends on `@sentry/bundler-plugins` (15 MB `sentry` CLI, oxc-parser, glob@13 with moderate CVEs), so it is a **devDependency bundled by rolldown into a lazy chunk** (build-options externalizes only `dependencies`); scripts/build.test.ts runs the bundled SDK under `node --enable-source-maps`.
+- Sentry tests: assert on the wire via `Sentry.createTransport(options, req => record(req.body))`; envelope `sent_at` contains today's date, so never use the current month as a "must not leak" fixture.
 
 Related: [[phase-a-status]]

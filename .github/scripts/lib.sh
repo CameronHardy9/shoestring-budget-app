@@ -241,6 +241,37 @@ image_tag() {
   echo "${IMAGE_NAME:-shoestring}:${sha:0:12}$(_git_dirty)"
 }
 
+# Build arguments shared by make image and make sourcemaps-upload, so the second
+# build is a cache hit and its source maps belong to the image's exact bundle.
+# image_build_args <release>: sets IMAGE_BUILD_ARGS. VITE_SENTRY_DSN is
+# optional and public (it ships in the SPA); a malformed one stops the build,
+# because the SDK would drop every event and the CSP's connect-src host (from
+# the backend's SENTRY_DSN) could never match it.
+IMAGE_BUILD_ARGS=()
+image_build_args() {
+  local dsn="${VITE_SENTRY_DSN:-}"
+  if [ -n "$dsn" ] && ! printf '%s' "$dsn" | grep -Eq '^https://[A-Za-z0-9]+@[A-Za-z0-9.-]+/[0-9]+$'; then
+    die "VITE_SENTRY_DSN is not a Sentry DSN (https://<public key>@<ingest host>/<project id>)"
+  fi
+  # shellcheck disable=SC2034 # read by image.sh and sourcemaps-upload.sh
+  IMAGE_BUILD_ARGS=(--build-arg "APP_RELEASE=$1" --build-arg "VITE_SENTRY_DSN=$dsn")
+}
+
+# dsn_summary <dsn>: "none" or the DSN's host, for log lines.
+dsn_summary() {
+  if [ -z "$1" ]; then echo none; else printf '%s' "$1" | sed -E 's#^https://[^@]*@([^/]*)/.*#\1#'; fi
+}
+
+# The fake DSN of the e2e stack, shaped like a real one (32-hex public key,
+# o<digits>.ingest host, numeric project) but on a reserved .test host (RFC
+# 6761) that never resolves, so nothing can leave the machine. Exported by
+# make e2e / e2e-up as E2E_SENTRY_DSN: the e2e backend takes it as SENTRY_DSN
+# (CSP connect-src and Reporting-Endpoints only; its dev entry never starts
+# Sentry), and tests/ builds the production SPA with VITE_SENTRY_DSN set to it
+# and intercepts requests to its host in the browser.
+# shellcheck disable=SC2034 # exported by e2e.sh
+E2E_SENTRY_DSN="https://e2e00000000000000000000000000000@o0.ingest.sentry.test/1"
+
 # Workspace packages that exist (for log messages).
 workspace_pkgs_text() {
   local out="" a

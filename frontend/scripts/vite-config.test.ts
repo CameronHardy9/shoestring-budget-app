@@ -35,9 +35,12 @@ describe("dev proxy", () => {
 });
 
 describe("production build", () => {
-  it("has index.html as its only entry, so the dev preview is never built", () => {
+  it("has index.html and the boot script as its only entries, so the dev preview is never built", () => {
     const input = buildConfig({}).build?.rolldownOptions?.input;
-    expect(Object.keys(input as Record<string, string>)).toEqual(["index"]);
+    expect(Object.keys(input as Record<string, string>)).toEqual([
+      "index",
+      "boot",
+    ]);
     expect(String((input as Record<string, string>).index)).toMatch(
       /frontend\/index\.html$/,
     );

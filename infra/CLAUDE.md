@@ -39,8 +39,9 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
 | (support) | GCP project `shoestring-backup-<suffix>`: backup bucket only | — |
 Record the chosen suffix here once picked: `<suffix>` = ______.
 
-No staging (owner decision). One GitHub environment:
+No staging (owner decision). GitHub environments:
 - `production`: deploy only. Required reviewer = owner, branch `main` only, admins cannot bypass.
+- `sentry`: holds only `SENTRY_AUTH_TOKEN` for the private source-map upload (CI job `environment: sentry`). Branch `main` only, no reviewer (bootstrap step 11b, S6).
 
 There is **no** GitHub `backup` environment: backups run in GCP.
 
@@ -91,7 +92,7 @@ Secret Manager, prod project, single location us-east1. **5 secrets × 1 active 
 | GitHub environment `production` | Kind | Purpose |
 |---|---|---|
 | `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, `GCP_PROJECT` | variables | not secret |
-GitHub holds **no** production or backup secret at all.
+GitHub holds **no** production or backup secret at all. The one GitHub secret is `SENTRY_AUTH_TOKEN`: a Sentry organization token (`org:ci` scope: releases and source-map upload only), stored as an **environment** secret on the `main`-only environment `sentry`, never repository-wide (bootstrap step 11b, S6). Not secret: the repository variables `SENTRY_DSN_WEB`, `SENTRY_ORG` and `SENTRY_PROJECT_WEB` (ci.yml).
 
 Backup job plain env vars (not secret): `BACKUP_BUCKET`, `BACKUP_AGE_RECIPIENT` (`age` **public** key), `BACKUP_HEARTBEAT_URL`.
 - **Owner-confirmed (2026-11-13):** the heartbeat URL stays plain config, keeping the last free Secret Manager slot spare. Only the owner can read the backup job's config now that the deployer is scoped away from it (F-39). The worst case is a fake "success" ping, which can't read or change backups.
@@ -105,11 +106,12 @@ Non-secret runtime config (plain env vars on the service): `NODE_ENV=production`
 | Alert | Tool (free) | Channel | Runbook |
 |---|---|---|---|
 | Site down: `/api/healthz` via the custom domain every 5 min, 2 failures | Better Stack Uptime | email + Better Stack app push | site-down.md |
-| Error spike (backend + SPA) | Sentry issue alert | email + Sentry app push | error-spike.md |
-| Purge missed or failed | Sentry cron monitor `purge` | email + Sentry app push | purge-failed.md |
+| Error spike (backend + SPA) | Sentry alerts `error-new`, `error-spike` | email (Gmail push) | error-spike.md |
+| Purge missed or failed | Sentry cron monitor `purge` + alert `purge-cron` | email (Gmail push) | purge-failed.md |
 | Backup missed or failed (`shoestring-backup` job) | Better Stack heartbeat, 24 h + 2 h grace | email + Better Stack app push | backup-missed.md |
 | Any spend, or cap reached | GCP budget at $0.01 / $0.50 / $1 | email (Gmail push) | billing-alert.md |
-| Email quota at 80% of the daily limit (F-09) | Sentry warning event from the email adapter | email + Sentry app push | email-quota.md |
+| Email quota at 80% / 100% of the daily limit (F-09) | Sentry `warning` / `error` events, fingerprint `email-quota-threshold`; alerts `email-quota-warning`, `email-quota-exhausted` | email (Gmail push) | email-quota.md |
+- **Sentry free (Developer) plan** (checked 2026-11-16, V18): 1 user, 5,000 errors/month, exactly 1 cron monitor, email-only alerts, no pay-as-you-go (can't bill). There is no per-key rate limit (Business only). The Sentry mobile app is unmaintained, so push goes through Gmail. Setup: bootstrap-production.md step 11b and step 13. Leak check and canary: docs/runbooks/sentry-data-check.md.
 
 - **Logs:** Cloud Logging `_Default` with 30-day retention, JSON from pino. Cloud Run platform request logs are **excluded** (they contain IPs and user agents).
 - **Metrics:** Cloud Run built-in metrics, for viewing only, with no Cloud Monitoring alert policies.

@@ -1,0 +1,325 @@
+// What may leave the browser for Sentry (ARCHITECTURE "Error tracking", F-06,
+// F-07). An allowlist, not a denylist: every event is rebuilt from scratch with
+// only these fields, so anything the SDK or a future integration adds is
+// dropped unless it is listed here.
+//
+//   kept: error type names and stack frames (file URL without ?/#, function,
+//         line, column), mechanism, level, release, environment, timestamp,
+//         event ID, SDK name, the route TEMPLATE (/budgets/:budgetId), the
+//         opaque user ID, the failing API response's requestId, the browser
+//         (User-Agent), and breadcrumbs reduced to fetch (method, path, status)
+//         and navigation (route templates).
+//         Error messages only when the whole message matches a reviewed
+//         SAFE_MESSAGES pattern (below); any other message becomes REDACTED.
+//   never: free-text error messages (they can quote API data: JSON.parse and
+//          React errors include input text), URLs with query or fragment, page
+//          paths, emails, names, amounts, payees, memos, request or response
+//          bodies, headers other than User-Agent, extra, contexts, other tags.
+//
+// Pure functions with type-only Sentry imports, so they are tested without
+// the SDK (observability/scrub.test.ts) and the main bundle never loads it.
+import type { Breadcrumb, ErrorEvent, EventHint } from "@sentry/browser";
+import { ERROR_COPY } from "../api/messages.ts";
+
+/** Maps a pathname to its route template, e.g. "/budgets/:budgetId". */
+export type RouteOf = (pathname: string) => string;
+
+export interface ScrubContext {
+  routeOf: RouteOf;
+  /** The page's pathname when the event was captured. */
+  pathname: string;
+  /** Opaque user ID while signed in. */
+  userId: string | null;
+  userAgent: string;
+  /** The page's own origin (location.origin), for own-asset messages. */
+  origin: string;
+}
+
+/** Cuts a URL at the first "?" or "#" (F-06: tokens travel in fragments). */
+export function stripUrl(url: string): string {
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url : url.slice(0, cut);
+}
+
+/** The path of a URL (absolute or relative), without origin, query or fragment. */
+export function pathOf(url: string): string {
+  const bare = stripUrl(url);
+  const match = /^[a-z][a-z0-9+.-]*:\/\/[^/]*(\/.*)?$/i.exec(bare);
+  if (match) return match[1] ?? "/";
+  return bare.startsWith("/") ? bare : "/";
+}
+
+const IDENTIFIER = /^[A-Za-z_$][\w$.]{0,63}$/;
+/** Stack-frame function names: code identifiers ("Object.save", "<anonymous>"). */
+const FUNCTION_NAME = /^[\w$.<>[\] ]{1,128}$/;
+/**
+ * A known-safe error message (owner ruling, docs/mvp-planning/10 round 8).
+ * Rules, enforced by patternProblems() and its test:
+ * - anchored ^…$, no flags except "u" (no m: line anchors; no g/y: stateful);
+ * - no free text: no ".", no negated class "[^…]", no \S \W \D, no unbounded
+ *   "*", "+" or "{n,}", no top-level "|";
+ * - every variable part bounded to tokens that cannot carry user or API data
+ *   (digits, the app's own hashed asset path), with the reason in a comment.
+ * Adding or widening an entry needs security-reviewer sign-off.
+ */
+export interface SafeMessage {
+  re: RegExp;
+  /** Extra check on the match; false drops the message. */
+  check?: (match: RegExpExecArray, ctx: ScrubContext) => boolean;
+}
+
+/** An own-origin, content-hashed JS chunk: assets/<chunk name>-<8 hex>.js. */
+const OWN_ASSET =
+  "(https?://[a-z0-9.-]{1,253}(?::\\d{1,5})?)/assets/[A-Za-z0-9_-]{1,64}-[0-9a-f]{8}\\.js";
+const ownOrigin = (match: RegExpExecArray, ctx: ScrubContext) =>
+  match[1] === ctx.origin;
+
+export const SAFE_MESSAGES: readonly SafeMessage[] = [
+  // UnexpectedResponseError (api/errors.ts): built from the status code only.
+  { re: /^Unexpected response \(HTTP \d{3}\)$/ },
+  // App errors whose message is a fixed string with no interpolation:
+  // NetworkError (api/errors.ts), SignOutError and the provider guards
+  // (app/auth.tsx), ReauthCancelled (app/reauth.tsx), useToast
+  // (app/toast.tsx), useCurrentBudget (BudgetLayout.tsx), the money guards
+  // (lib/money.ts, lib/splits.ts; they never quote the amount), the #root
+  // guard (main.tsx) and report.ts's "Script error" stand-in (also the
+  // browser's own text for a cross-origin script error).
+  {
+    re: /^(?:Network request failed|Sign-out failed|Re-authentication cancelled|useAuth outside AuthProvider|useMe needs a signed-in user|useReauth outside ReauthProvider|useToast outside ToastProvider|useCurrentBudget outside BudgetLayout|Money amounts must be integer cents\.|missing #root|Script error\.?)$/,
+  },
+  // React production errors: fixed text plus the error number. React puts
+  // values in the decoder URL's ?args[]=…; stripReactArgs() removes them
+  // before matching, and \1 pins the URL to the same number.
+  {
+    re: /^Minified React error #(\d{1,4}); visit https:\/\/react\.dev\/errors\/\1 for the full message or use the non-minified dev environment for full errors and additional helpful warnings\.$/,
+  },
+  // A lazy chunk failed to load (deploy skew, offline). Chrome and Firefox
+  // name the module URL, which must be one of this app's own hashed chunks on
+  // this origin (path only: no query or fragment can match); Safari names
+  // nothing.
+  {
+    re: new RegExp(
+      `^(?:Failed to fetch|error loading) dynamically imported module: ${OWN_ASSET}$`,
+    ),
+    check: ownOrigin,
+  },
+  { re: /^Importing a module script failed\.$/ },
+  // The browsers' own fetch() network TypeErrors (Chrome, Safari, Firefox):
+  // fixed strings, no URL.
+  {
+    re: /^(?:Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.)$/,
+  },
+  // Benign layout warnings (Chrome, older Chrome): fixed strings.
+  {
+    re: /^ResizeObserver loop (?:completed with undelivered notifications\.|limit exceeded)$/,
+  },
+];
+
+/**
+ * Why `re` breaks the SafeMessage rules, or [] if it doesn't. A lexical check
+ * of the pattern source, deliberately strict: when in doubt it complains.
+ */
+export function patternProblems(re: RegExp): string[] {
+  const problems: string[] = [];
+  const src = re.source;
+  if (!/^u?$/.test(re.flags)) problems.push(`flags "${re.flags}"`);
+  if (!src.startsWith("^")) problems.push("not anchored at the start");
+  let endAnchored = false;
+  let depth = 0;
+  let inClass = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      const next = src[i + 1] ?? "";
+      if ("SWD".includes(next)) problems.push(`catch-all \\${next}`);
+      i++;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+      continue;
+    }
+    if (c === "[") {
+      inClass = true;
+      if (src[i + 1] === "^") problems.push("negated class [^…]");
+    } else if (c === "(") depth++;
+    else if (c === ")") depth--;
+    else if (c === "|" && depth === 0) problems.push("top-level |");
+    else if (c === ".") problems.push("wildcard .");
+    else if (c === "*" || c === "+") problems.push(`unbounded ${c}`);
+    else if (c === "{" && /^\{\d*,\}/.test(src.slice(i)))
+      problems.push("unbounded {n,}");
+    else if (c === "^" && i > 0) problems.push("^ after the start");
+    else if (c === "$") {
+      if (i === src.length - 1) endAnchored = true;
+      else problems.push("$ before the end");
+    }
+  }
+  if (!endAnchored) problems.push("not anchored at the end");
+  return problems;
+}
+
+/** Removes the values React puts in its error-decoder URL (?args[]=…). */
+export function stripReactArgs(message: string): string {
+  // encodeURIComponent leaves no whitespace, so the args end at the next space.
+  return message.replace(
+    /(https:\/\/react\.dev\/errors\/\d{1,4})[?#]\S*/g,
+    "$1",
+  );
+}
+
+export const REDACTED = "[message removed]";
+
+/**
+ * The message if it is a contract error code (ApiError's message) or wholly
+ * matches a SAFE_MESSAGES pattern; otherwise REDACTED.
+ */
+export function safeMessage(
+  value: unknown,
+  ctx: ScrubContext,
+  patterns: readonly SafeMessage[] = SAFE_MESSAGES,
+): string {
+  if (typeof value !== "string") return REDACTED;
+  // ApiError's message is its contract code; only codes errors.md defines.
+  if (Object.hasOwn(ERROR_COPY, value)) return value;
+  const message = stripReactArgs(value);
+  for (const { re, check } of patterns) {
+    const match = re.exec(message);
+    // Whole-string match, even if a pattern's anchoring were ever broken.
+    if (
+      match?.index === 0 &&
+      match[0].length === message.length &&
+      (check?.(match, ctx) ?? true)
+    )
+      return message;
+  }
+  return REDACTED;
+}
+
+function safeType(type: unknown): string {
+  return typeof type === "string" && IDENTIFIER.test(type) ? type : "Error";
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The requestId of a failed API response (ApiError, UnexpectedResponseError). */
+export function requestIdOf(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const id = (error as { requestId?: unknown }).requestId;
+  // The contract RequestId pattern; anything else is not sent.
+  return typeof id === "string" && /^[A-Za-z0-9-]{8,64}$/.test(id) ? id : null;
+}
+
+function num(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/**
+ * Reduces a breadcrumb to what may be sent, or null to drop it. Only fetch/xhr
+ * (method, path, status) and navigation (route templates) survive.
+ */
+export function scrubBreadcrumb(
+  crumb: Breadcrumb,
+  routeOf: RouteOf,
+): Breadcrumb | null {
+  const data = (crumb.data ?? {}) as Record<string, unknown>;
+  const base = {
+    category: crumb.category ?? "",
+    ...(crumb.type ? { type: crumb.type } : {}),
+    ...(crumb.level ? { level: crumb.level } : {}),
+    ...(crumb.timestamp !== undefined ? { timestamp: crumb.timestamp } : {}),
+  };
+  if (crumb.category === "fetch" || crumb.category === "xhr") {
+    const method =
+      typeof data.method === "string" && /^[A-Z]{3,7}$/.test(data.method)
+        ? data.method
+        : undefined;
+    const status = num(data.status_code);
+    return {
+      ...base,
+      data: {
+        ...(method ? { method } : {}),
+        url: typeof data.url === "string" ? pathOf(data.url) : "/",
+        ...(status !== undefined ? { status_code: status } : {}),
+      },
+    };
+  }
+  if (crumb.category === "navigation") {
+    const route = (v: unknown) =>
+      typeof v === "string" ? routeOf(pathOf(v)) : undefined;
+    const from = route(data.from);
+    const to = route(data.to);
+    return {
+      ...base,
+      data: { ...(from ? { from } : {}), ...(to ? { to } : {}) },
+    };
+  }
+  return null;
+}
+
+/** Rebuilds an event from the allowlist above (Sentry `beforeSend`). */
+export function scrubEvent(
+  event: ErrorEvent,
+  hint: EventHint,
+  ctx: ScrubContext,
+): ErrorEvent {
+  const route = ctx.routeOf(pathOf(ctx.pathname));
+  const requestId = requestIdOf(hint.originalException);
+  const values = (event.exception?.values ?? []).map((v) => ({
+    type: safeType(v.type),
+    value: safeMessage(v.value, ctx),
+    ...(v.mechanism
+      ? {
+          mechanism: {
+            type: safeType(v.mechanism.type),
+            ...(typeof v.mechanism.handled === "boolean"
+              ? { handled: v.mechanism.handled }
+              : {}),
+          },
+        }
+      : {}),
+    ...(v.stacktrace?.frames
+      ? {
+          stacktrace: {
+            frames: v.stacktrace.frames.map((f) => ({
+              ...(typeof f.filename === "string"
+                ? { filename: stripUrl(f.filename) }
+                : {}),
+              ...(typeof f.function === "string" &&
+              FUNCTION_NAME.test(f.function)
+                ? { function: f.function }
+                : {}),
+              ...(num(f.lineno) !== undefined ? { lineno: f.lineno } : {}),
+              ...(num(f.colno) !== undefined ? { colno: f.colno } : {}),
+              ...(typeof f.in_app === "boolean" ? { in_app: f.in_app } : {}),
+            })),
+          },
+        }
+      : {}),
+  }));
+  const breadcrumbs = (event.breadcrumbs ?? [])
+    .map((b) => scrubBreadcrumb(b, ctx.routeOf))
+    .filter((b): b is Breadcrumb => b !== null);
+  return {
+    type: undefined,
+    ...(event.event_id ? { event_id: event.event_id } : {}),
+    ...(event.timestamp !== undefined ? { timestamp: event.timestamp } : {}),
+    ...(event.platform ? { platform: event.platform } : {}),
+    ...(event.level ? { level: event.level } : {}),
+    ...(event.release ? { release: event.release } : {}),
+    ...(event.environment ? { environment: event.environment } : {}),
+    ...(event.sdk?.name && event.sdk.version
+      ? { sdk: { name: event.sdk.name, version: event.sdk.version } }
+      : {}),
+    ...(values.length > 0 ? { exception: { values } } : {}),
+    transaction: route,
+    tags: { route, ...(requestId ? { requestId } : {}) },
+    ...(ctx.userId && UUID.test(ctx.userId)
+      ? { user: { id: ctx.userId } }
+      : {}),
+    request: { headers: { "User-Agent": ctx.userAgent } },
+    ...(breadcrumbs.length > 0 ? { breadcrumbs } : {}),
+  };
+}

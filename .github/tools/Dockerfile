@@ -21,3 +21,6 @@ FROM ghcr.io/zizmorcore/zizmor:1.32.0@sha256:3014cc8f68f663935f69b3c3e0e41f5ce10
 # Visual screenshots (make e2e). The version MUST equal @playwright/test in
 # tests/package.json; make e2e fails with a clear message if they differ.
 FROM mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe AS playwright
+
+# Private source-map upload to Sentry (make sourcemaps-upload, CI on main only)
+FROM getsentry/sentry-cli:3.8.2@sha256:633122f5fbd774716a0ebbcd7ece9c0584aa781cc61a84e7ce57964c635d6559 AS sentry-cli

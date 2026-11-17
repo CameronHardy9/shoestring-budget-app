@@ -33,3 +33,10 @@ Learned building Phase A (2026-11-14/16):
 - **WebKit screenshots inject `<style>body {}</style>`** (inPagePrepareForScreenshots, sync animations). The violation has an empty `sample` (no 'report-sample' in the CSP) and the event target is the document, so it can only be identified by line/column in the evaluated helper (5:30 in 1.65). Chromium injects nothing. Caret hiding uses inline style via CSSOM, which CSP allows.
 - `exposeBinding` survives navigations; use it for anything collected from the page across documents.
 - **Building RegExps from strings (2026-11-16):** CodeQL `js/incomplete-sanitization` fails PRs on partial escaping, and Semgrep's `detect-non-literal-regexp` taints every function parameter that reaches `new RegExp`, ignoring escaping. Use `support/regex.ts` (`escapeRegExp`, `openApiPathRegex`, `templateRegex`, `endsWithRegex`); its private `compile()` holds the one justified nosemgrep. `RegExp.escape` exists in Node 24 but the tests tsconfig lib is ES2024, so it isn't typed.
+
+Learned on the Sentry PR (2026-11-17):
+- **parseStackFile only read `[A-Z_]+` keys**, so `E2E_SENTRY_DSN` (digits) in tests/.env.stack was silently ignored; fixed to `[A-Z][A-Z0-9_]*`. Any new stack variable with a digit was invisible before.
+- **WebKit mutes errors thrown from Playwright init scripts** (ErrorEvent.error null → report.ts sends "Script error"); promise rejections are not muted. Use a rejection when the test needs the real message on WebKit.
+- **At addInitScript time `document.documentElement` can be null**: `MutationObserver.observe(document.documentElement)` throws and silently kills the rest of the init script. Observe `document` with subtree.
+- Sentry envelopes: the SDK adds `sdk.integrations/packages/settings{infer_ip:"never"}` AFTER beforeSend; Sentry's fetch transport sends Referer origin-only (strict-origin). Probe real envelopes with a throwaway spec before writing allowlists.
+- Service workers DO run under Playwright on both csp-prod engines (localhost is a secure context; prod-server serves /sw.js). Only sw-first-visit.spec.ts allows them.

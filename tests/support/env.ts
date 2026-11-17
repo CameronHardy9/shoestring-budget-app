@@ -9,7 +9,13 @@
 // proxy at BASE_URL: Vite answers OPTIONS itself (CORS preflight) and adds CORS
 // headers, so going through it would test Vite instead of the API. The Host
 // header is still set to APP_ORIGIN's host, exactly what the browser sends.
-import { loopbackOrigin, stackSource, StackEnvError } from "./env-guards.ts";
+import {
+  fakeSentryDsn,
+  loopbackOrigin,
+  stackSource,
+  StackEnvError,
+} from "./env-guards.ts";
+import type { FakeSentryDsn } from "./env-guards.ts";
 
 // Throws StackEnvError when a stack variable is exported in the shell with a
 // value other than tests/.env.stack's (F-56; env-guards.ts).
@@ -60,3 +66,13 @@ export const appHost = new URL(env.appOrigin).host;
  * and make e2e-up always provide API_URL, also to the visual container.
  */
 export const viaDevProxy = env.apiUrl === env.baseUrl;
+
+/**
+ * The e2e stack's fake Sentry DSN (E2E_SENTRY_DSN, a reserved .test host):
+ * the backend's SENTRY_DSN (CSP connect-src, Reporting-Endpoints) and the
+ * production bundle's VITE_SENTRY_DSN. A function, so suites that don't need
+ * it still load without it; a missing or real-looking DSN throws.
+ */
+export function e2eSentry(): FakeSentryDsn {
+  return fakeSentryDsn(source.E2E_SENTRY_DSN);
+}

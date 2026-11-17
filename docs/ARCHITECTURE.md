@@ -110,16 +110,20 @@ flowchart LR
   - **Error serialization (F-07)** goes through an allowlist (errors.md "Logging rules"): SQLSTATE, constraint, table and column, plus stack frames. It never includes DB `message`/`detail`/`where`/`hint`, query parameters, or zod "received" values.
   - The redaction config and its unit test, which includes a DB-error fixture, are approved by security-reviewer.
 - **Error tracking (F-06, F-07).** Sentry free tier for frontend and backend.
-  - **SDK settings:** `sendDefaultPii: false`; no session replay; `tracesSampleRate: 0`.
+  - **SDK settings:** the SDK collects no PII: Sentry v11 `dataCollection` with every category off (it replaced `sendDefaultPii`); no session replay; `tracesSampleRate: 0`.
+  - **Where it runs:** only the production server, the admin jobs and the production SPA build, and only when a DSN is set. The dev and e2e entries never start Sentry; e2e builds the SPA with a fake `.test` DSN only for the test that intercepts the ingest host.
   - **Breadcrumbs:** DOM and console breadcrumbs off; fetch breadcrumbs keep the URL path only.
   - **URL scrubbing:** `beforeSend` and `beforeBreadcrumb` strip `#…` and `?…` from every URL.
+  - **Web SDK:** lazy-loaded after the `load` event; until then at most 10 errors wait in a buffer (none without a DSN). The SPA reports only uncaught errors, unhandled rejections and API responses that are not a contract `ErrorBody`.
+  - **Browser error messages (owner ruling, round 8):** a message is kept only if the whole message is a contract error code or matches an anchored, bounded pattern in `SAFE_MESSAGES` (`frontend/src/observability/scrub.ts`); anything else becomes `[message removed]`. security-reviewer signs off on every change to the list. Server-side errors still never send `message` (errors.md "Logging rules").
   - **Server SDK:** sends no request headers, cookies or bodies.
   - **Project settings (sre):**
     - "Prevent storing of IP addresses" on
     - data scrubber on, with extra fields `token`, `password`, `code`, `email`, `payee`, `memo`
-    - inbound filters and a per-key rate limit
+    - inbound filters and spike protection
+  - **Volume (owner ruling 2026-11-16):** the hard free quota of 5,000 errors/month plus spike protection; no per-key (DSN) rate limit (paid-only) and no SDK-side cap. The quota can never cost money; the worst case is Sentry going blind until the 1st.
   - **Event contents:** requestId, opaque user ID, route, browser and release (`APP_RELEASE`) only.
-  - **Source maps:** uploaded privately by CI.
+  - **Source maps:** Vite builds `hidden` maps (no `sourceMappingURL`). A main-only CI job (`sourcemaps`, GitHub environment `sentry`, a Sentry organization auth token) uploads them for the release; they are never served or kept as GitHub artifacts (image-smoke asserts no `.map` in the image and 404 for `<script>.map`). Backend maps are not uploaded: the server runs with `--enable-source-maps`, so its stacks arrive mapped.
 - **Security headers (all responses, F-23).**
   - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
   - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'sha256-38RhXrc7EdReTKsOm23ZPOCUgniTUUcjky8QOOrQx6o=' 'sha256-gYiS/BvZvRcK27JIXTuwhZ3hs2+VJ1X+2gUlE+farlg='; img-src 'self' data:; font-src 'self'; connect-src 'self' https://o<id>.ingest.us.sentry.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'; report-to csp`
@@ -160,7 +164,7 @@ flowchart LR
 - **Email.** One adapter interface with three transports: console (local dev), test (in-memory outbox; test-hooks.md), and provider (Resend on `mail.<domain>`, Brevo as fallback).
   - Messages are **plain text only**, with click and open tracking disabled and links built only from `APP_ORIGIN`.
   - User text is escaped, never linkified, and length-capped (F-29). Emails never contain financial data.
-  - Sends are counted per UTC day: past 60% of `EMAIL_DAILY_QUOTA` only priority mail goes out and the owner is alerted; at 100% all mail stops (auth.md §14, F-09).
+  - Sends are counted per UTC day: past 60% of `EMAIL_DAILY_QUOTA` only priority mail goes out; at 100% all mail stops. Sentry alerts the owner at 80% (`warning`) and 100% (`error`) (auth.md §14, F-09, alert A6).
   - Provider timeout is 700 ms. Enumeration-sensitive endpoints answer at a fixed 1 s (F-22).
 - **Health (sre proposal, adopted).**
   - `GET /api/healthz`: the process is up; no DB access. This is the Cloud Run **startup probe** and the uptime monitor's target, so neither wakes Neon, and a Neon outage does not take the SPA down.
@@ -189,7 +193,7 @@ flowchart LR
 | Correctness | Totals always right: 100% branch coverage on money, split and month logic; DB-enforced split sums | coverage gate in `make check` |
 | Isolation | No cross-budget reads or writes | permission tests generated from the contract extensions; two-household DAL suite; Semgrep rules |
 | Durability | RPO 24 h (nightly encrypted dump plus any Neon restore window); backups expire within 35 days (34-day lifecycle); RTO best effort, target 4 h; one restore drill before launch, including the post-restore steps | sre runbook + drill record |
-| Availability | Best effort on free tiers; SLO "record a transaction succeeds" 99.5% / 30 days. Alerts: site down, error spike, missed backup, failed purge, billing, email budget (email, plus push via the Sentry and Better Stack apps) | Better Stack, Sentry, GCP budget alert |
+| Availability | Best effort on free tiers; SLO "record a transaction succeeds" 99.5% / 30 days. Alerts: site down, error spike, missed backup, failed purge, billing, email budget. Better Stack pushes through its app; Sentry and GCP alerts are emails, pushed to the phone by a Gmail filter plus Gmail app notifications (owner ruling 2026-11-16: Sentry's mobile app isn't available, Slack and webhooks are paid) | Better Stack, Sentry, GCP budget alert |
 | Cost | **$0/month.** Free tiers only; Cloud Billing spend cap plus a $0.01 budget alert; max 2 instances. Accepted residual: a request flood could cost up to the low tens of dollars before the cap acts (ADR-0007 R1). Any change that could incur cost needs an ADR. | sre cost sheet |
 | Data rights | CSV export; account deletion with a 30-day grace period, then purge; purged data gone from backups within 35 days | integration tests + purge job |
 

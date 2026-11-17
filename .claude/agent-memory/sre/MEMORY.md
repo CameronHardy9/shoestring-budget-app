@@ -1,2 +1,3 @@
 - [Hosting decision](project_hosting_proposal.md) — Cloud Run + Neon + Cloudflare DNS; backup job, APP_KEYRING, R-12 args; pitfalls
 - [Owner constraints](owner_constraints.md) — $0 hard, card only with caps, no staging, RPO 24h, owner runs all prod commands
+- [Sentry free plan](project_sentry_free_plan.md) — Developer limits (1 cron, no per-key limit, no push), alert-builder pitfalls, `email_quota_threshold` vs fingerprint

@@ -95,6 +95,8 @@ jobs:
   # then runs it with production-like config, no test hooks and a throwaway
   # Postgres. Skips until backend/ exists. Publishing to a registry is a later
   # release workflow.
+  # On main (push or manual run on main; never a pull request, so never a fork)
+  # the image's SPA gets its Sentry DSN.
   image:
     name: image
     permissions:
@@ -102,9 +104,44 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # Public by design (it ships in the bundle), so a variable, not a secret.
+      # Job-wide so make image and make image-smoke (which rebuilds if needed)
+      # build the same bundle.
+      VITE_SENTRY_DSN: ${{ (github.event_name != 'pull_request' && github.ref == 'refs/heads/main') && vars.SENTRY_DSN_WEB || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: make image
       - run: make image-smoke
+
+  # Private source-map upload to Sentry for this commit's release, main only.
+  # The token is an environment secret of `sentry` (deployment branches: main),
+  # so no other branch or workflow can read it; the job skips cleanly while the
+  # secret does not exist. The maps come from the Dockerfile's sourcemaps stage
+  # with the same build arguments as the image job; they go only to Sentry,
+  # never to a GitHub artifact (artifacts of this public repository are public).
+  # When a release workflow publishes the image, this upload moves into that
+  # job so the maps come from the published build itself.
+  sourcemaps:
+    name: sourcemaps
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: sentry
+    env:
+      VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN_WEB }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Upload source maps to Sentry (private)
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT_WEB: ${{ vars.SENTRY_PROJECT_WEB }}
+        run: make sourcemaps-upload

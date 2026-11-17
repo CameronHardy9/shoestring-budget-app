@@ -92,8 +92,11 @@ function RequestLink() {
 function ChooseNewPassword({ token }: { token: string }) {
   const { forget, status } = useAuth();
   const check = useQuery({
-    queryKey: ["reset-verify", token],
+    // A fixed key: the token stays in one place (F-50), never in the query
+    // cache. gcTime 0 drops the result as soon as the screen unmounts.
+    queryKey: ["reset-verify"],
     staleTime: Infinity,
+    gcTime: 0,
     retry: shouldRetry,
     queryFn: () =>
       unwrap(api.POST("/auth/password-reset/verify", { body: { token } })),

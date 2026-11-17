@@ -9,6 +9,7 @@ import type { Notifications } from "./email/notifications.ts";
 import type { MemoryLimiter, Throttles } from "./http/rate-limit.ts";
 import type { ResponseValidator } from "./http/response-validation.ts";
 import type { Logger } from "./logging.ts";
+import type { ErrorTracker } from "./observability/error-tracker.ts";
 
 export interface AppDeps {
   readonly config: Config;
@@ -20,6 +21,8 @@ export interface AppDeps {
   readonly limiter: MemoryLimiter;
   readonly mailer: Mailer;
   readonly notifications: Notifications;
+  /** Sentry (5xx and alerts) when SENTRY_DSN is set; otherwise NO_TRACKING. */
+  readonly errors: ErrorTracker;
   readonly cursors: CursorCodec;
   /** Dev/test only: checks every response against the contract (null in production). */
   readonly responseValidator: ResponseValidator | null;

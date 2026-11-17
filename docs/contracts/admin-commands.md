@@ -18,9 +18,12 @@ Owner admin powers are **CLI commands, not HTTP endpoints**. They ship in the pr
 
   | Command | Needs |
   |---|---|
-  | `purge`, `revoke-sessions`, `security-events` | `DATABASE_URL` |
-  | `create-signup-invite`, `reset-mfa` | `DATABASE_URL`, `APP_ORIGIN`, `EMAIL_*` |
-  | `rewrap-mfa` | `DATABASE_URL`, `APP_KEYRING`; with `--retire-recovery-codes` also `APP_ORIGIN`, `EMAIL_*` |
+  | `revoke-sessions`, `security-events` | `DATABASE_URL` |
+  | `purge` | `DATABASE_URL`, `SENTRY_DSN`?, `APP_RELEASE`? (cron monitor check-ins, alert A3) |
+  | `create-signup-invite`, `reset-mfa` | `DATABASE_URL`, `APP_ORIGIN`, `EMAIL_*`, `SENTRY_DSN`?, `APP_RELEASE`? (email-quota alerts, A6) |
+  | `rewrap-mfa` | `DATABASE_URL`, `APP_KEYRING`; with `--retire-recovery-codes` also `APP_ORIGIN`, `EMAIL_*`, `SENTRY_DSN`?, `APP_RELEASE`? |
+
+  `?` = optional and not a secret (plain job environment variables, not Secret Manager). Without `SENTRY_DSN` tracking is off; a malformed DSN is refused at startup like any other invalid variable. `APP_RELEASE` defaults to `dev`.
 
   No other command needs `APP_KEYRING`, and none needs `MIGRATOR_DATABASE_URL`. Recommendation to sre: `rewrap-mfa` gets its own job definition (`shoestring-rewrap-mfa`), so that `shoestring-admin` never mounts the keyring.
 - **Email arguments (F-02 note):** gcloud joins `--args` with commas, so the CLI **rejects any `--email` value that contains `,`** with exit 2 (usage error), before any database access. Emails are not unescaped or split in any other way.

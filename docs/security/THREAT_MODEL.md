@@ -1,7 +1,7 @@
 # Threat model
 Owner: security-reviewer. Updated whenever a new endpoint, data flow, integration, or role appears.
 
-- **Version:** v2.7 (2026-11-16), after the test-suite review (§5.9). Earlier: v2.6 (2026-11-14), the frontend code review (§5.8). Earlier code reviews: data layer (v2.3, §5.6) and backend (v2.4–v2.5, §5.7). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review.
+- **Version:** v3.0 (2026-11-17), after the Sentry integration review (§5.11). Earlier: v2.7 (2026-11-16), the test-suite review (§5.9). Earlier: v2.6 (2026-11-14), the frontend code review (§5.8). Earlier code reviews: data layer (v2.3, §5.6) and backend (v2.4–v2.5, §5.7). v2 was the re-review of contract revision 2; v1 (2026-11-12) the first design review.
 - **Sources reviewed:** ARCHITECTURE.md; contracts auth.md (rev 2), data-model.md, errors.md, api.openapi.yaml, admin-commands.md, test-hooks.md; ADR-0001 to ADR-0010; mvp-planning/README.md and 01–10 (10 holds the owner's rulings OD-1 to OD-8 and the hosting decision).
 - **Statuses in §5:** each row's *mitigation* reflects revision 2. Where a row cites a finding, that finding's current status (`contract-fixed`, `partially-fixed`, `open`) is in the FINDINGS.md summary table, which is the source of truth. New threats from revision 2 are T80 to T92 (§5.4).
 - **Findings:** each `F-xx` below is described in [FINDINGS.md](FINDINGS.md). The implementation checklist is in [mvp-security-checklist.md](mvp-security-checklist.md).
@@ -64,7 +64,7 @@ Classes follow data-model.md "Data classification" (PII, Sensitive, Secret, Inte
 | `DATABASE_MIGRATOR_URL` | Release/migration step **only** (F-28) | DDL, ownership of the schema |
 | `APP_KEYRING` (replaces `MFA_ENCRYPTION_KEY` and `THROTTLE_KEY`; versioned, HKDF subkeys) | Secret Manager; mounted only on the service and `shoestring-rewrap-mfa`; offline escrow in a separate vault | Combined with a DB leak: decrypts every TOTP secret, makes recovery codes brute-forceable, and makes rate-limit keys reversible |
 | `EMAIL_API_KEY` | Host secret store | Phishing from the app's own sending domain; burns the free quota |
-| Sentry auth token (source-map upload) | CI environment secret | Low (the repo is public), but it allows event tampering |
+| Sentry org auth token (`org:ci`, source-map upload) | GitHub environment secret `SENTRY_AUTH_TOKEN` on environment `sentry` (main only); passed to the digest-pinned sentry-cli container by name | Low: it can create releases and upload maps, but not read events or change settings. Forged maps could mislead triage (T130) |
 | Deploy credentials (OIDC/WIF or a token) | GitHub environment | **Code execution in production** |
 | Backup encryption private key (`age`) | Owner, offline | Decrypts every backup |
 | Owner's GitHub, host, Neon, email-provider, Sentry, DNS-registrar and domain-email accounts | Owner | **Each one is equivalent to full production compromise** (F-03) |
@@ -114,6 +114,8 @@ flowchart LR
   APP -- TB5 --> HIBP
   APP -- TB6 --> SEN
   B -- TB6 --> SEN
+  JOB -- TB6 check-ins --> SEN
+  CI -- TB6 source maps --> SEN
   CI -- TB7 OIDC/secrets --> Host
   CI -- TB7 --> BK
   OWN -- TB8 --> JOB
@@ -127,7 +129,7 @@ flowchart LR
 | TB3 | App/CLI/backup job to Postgres | All data | Separate `app`/`migrator` roles, TLS `verify-full`, strong random passwords; the DB is internet-reachable on free tiers (F-28) |
 | TB4 | App to email provider to mailbox | Email addresses, plaintext one-time links, budget and display names | No financial data; tracking off (F-06); escaped plain text (F-29); quota guard (F-09); SPF/DKIM/DMARC |
 | TB5 | App to HIBP | 5 hex characters of SHA-1(password); server IP | k-anonymity, `Add-Padding`, 2 s timeout, fallback list (F-24) |
-| TB6 | App/SPA to Sentry | Errors, stack traces, URLs, breadcrumbs | Scrubbing allowlist, no replay, IP storage off, fragment stripping (F-06, F-07) |
+| TB6 | App/SPA/admin jobs to Sentry; CI to Sentry | Server: 5xx events (error type, `code=`/`constraint=` values, frames, requestId, opaque user ID, route template), A6 quota alerts, purge cron check-ins. Browser: uncaught errors and non-contract API responses (type, `SAFE_MESSAGES`-only message, frames, route template, opaque user ID, requestId, User-Agent, fetch/navigation breadcrumbs as paths and templates). CSP reports (document URL without fragment). CI: source maps (public-repo code) | Both SDKs rebuild every event from an allowlist; v11 `dataCollection` all off; no default integrations, replay, tracing or sessions; `infer_ip: never`; browser SDK lazy, after `load` and after the boot-entry fragment capture (F-50); project settings: IP storage off, scrubber, geo removal (sre bootstrap 11b, canary). Verified 2026-11-17 (F-06, F-07, F-23, F-50); gaps F-59, F-60 |
 | TB7 | GitHub Actions to host, DB and backup storage | Deploy identity, DB creds for cron jobs, backups | Environment-scoped secrets, OIDC attribute conditions, SHA pins, no secrets on fork PRs (F-16, F-17, F-02) |
 | TB8 | Owner to admin CLI and consoles | Prod credentials, target emails | Platform-side execution, no PII in output, MFA on every operator account (F-02, F-03) |
 | TB9 | Backup storage | Full encrypted dumps | Private, write-only CI credential, expiry of 35 days or less, offline key (F-17) |
@@ -209,8 +211,8 @@ S = Spoofing, T = Tampering, R = Repudiation, I = Information disclosure, D = De
 | T70 | Email provider | Provider stores message bodies containing live one-time links; click tracking rewrites links and records full URLs including fragments | I | Short expiries, single use | **F-06** (tracking off) · **R-5** (provider sees addresses and links) |
 | T71 | Email provider | Spoofed mail from the sending subdomain used for phishing | S | SPF/DKIM/DMARC (sre) | checklist (DMARC `p=reject` on the subdomain) |
 | T72 | Email provider | Quota exhausted or account suspended (complaints), leaving no recovery channel | D | — | **F-09** |
-| T73 | Sentry | PII or Sensitive data in events (URLs with fragments, DOM breadcrumbs with labels, DB error details, client IP) | I | "Scrubbing on, no replay, no bodies" | **F-06**, **F-07** |
-| T74 | Sentry | Public DSN abused to flood the free quota and blind alerting | D | — | checklist (inbound filters, per-key rate limit) |
+| T73 | Sentry | PII or Sensitive data in events (URLs with fragments, DOM breadcrumbs with labels, DB error details, client IP) | I | Allowlist rebuild on both sides, `SAFE_MESSAGES` (signed off 2026-11-17), no DOM/console breadcrumbs, `infer_ip: never`, IP storage off | **F-06**, **F-07** verified 2026-11-17; defence in depth **F-59** |
+| T74 | Sentry | Public DSN abused to flood the free quota and blind alerting | D | Inbound filters, Allowed Domains, spike protection; the 5,000/month quota cannot bill | **Owner ruling 2026-11-16:** spike protection only (per-key limit is paid). Residual: Sentry blind until the 1st (A2, A6; A3 cron check-ins use their own quota) |
 | T75 | HIBP | Hash-prefix disclosure; response-size analysis; outage | I/D | k-anonymity; 2 s timeout; fallback list | designed; `Add-Padding` (F-24) |
 | T76 | Host | Platform request logs keep client IP, raw UA and full URL (query strings) for their default retention | I | No sensitive values in query strings by design | **R-5**; checklist (no sensitive values in URLs) |
 | T77 | Host | Spoofable proxy header; free tier without a hard billing cap (denial of wallet) | S/D | max-instances (C7), billing alerts | **F-08**, **F-15** |
@@ -325,6 +327,26 @@ No new production endpoint, role, integration or data flow.
 | T125 | e2e edge | The client-IP override (a spoofing primitive by design) or `TRUST_PROXY_HOPS=1` reaches the production image or a deployed config | S | `.github` is dockerignored, and the Dockerfile copies only `/out` and `/public`; the edge exists only in docker-compose.test.yml; the backend has no code for the header; ports bound to 127.0.0.1 | Holds (reviewed 2026-11-16) |
 | T126 | Rate limits | A concurrent burst passes read-then-increment limits (reset per address, daily email budget, invite caps, email change, login failure counters) | D/S | Reserve-first atomic upsert with refund on refusal; one-shot notices | **F-57** fixed and verified; **F-58** notice fixed and verified (one-shot per UTC day); login counter overshoot owner-deferred |
 
+### 5.11 Sentry integration (review 2026-11-17, `feat/sentry`)
+New surfaces and flows:
+- **Server SDK** (@sentry/node 11.10.0, bundled into a lazy `dist/chunks/esm-*.js`, loaded only with `SENTRY_DSN`) in the service and the admin jobs. It sends 5xx events, A6 email-quota alerts (80% and 100%, one-shot per UTC day) and A3 purge cron check-ins.
+- **Browser SDK** (@sentry/browser 11.10.0, a lazy chunk started after `load`, DSN baked in at build time on main only).
+- **CSP reports** now reach the `shoestring-api` project (`report-to csp`).
+- **Boot entry:** `boot-*.js` runs first and captures the link token (F-50).
+- **CI `sourcemaps` job:** main only, GitHub environment `sentry`, org token. Maps never ship in the image or as artifacts.
+- **Owner-run canary** (deploy/scripts/sentry-canary.sh): synthetic data only.
+
+No new API endpoint or role.
+
+| ID | Area | Threat | STRIDE | Mitigation | Status |
+|---|---|---|---|---|---|
+| T127 | Browser errors | An error message quotes API or user data (JSON.parse snippets, React args, interpolated values) and is sent | I | Message kept only for a contract code or a whole-string `SAFE_MESSAGES` match; React args stripped; everything else becomes `[message removed]` | Holds; list signed off 2026-11-17 (FINDINGS "Sentry integration review") |
+| T128 | Stack frames | Frame-shaped lines inside a multi-line message become frames whose filename or function carries the text | I | Message lines are not distinguished from frames; web `filename` unbounded | **F-59** (Low, defence in depth) |
+| T129 | Email budget | A signed-in attacker floods non-priority mail to the 60% cutoff, silently suppressing password resets for everyone until UTC midnight, below the 80% alert | D | Per-user invitation and reset caps; priority notices still go out | **F-60** (Low) |
+| T130 | CI / Sentry | The org token leaks, or a non-main workflow reads it, and forged maps or releases mislead triage | T | Environment secret limited to main; step env only; digest-pinned sentry-cli; `org:ci` scope; no artifacts | Holds (zizmor clean) |
+| T131 | Supply chain | The bundled server SDK is a devDependency, so its advisories are triaged as dev-only although it runs in production | T/I | Exact pins, 7-day release age, no install scripts, osv scans the whole lockfile | **F-61** (Low) |
+| T132 | Source maps | Maps or `sourceMappingURL` reach users (source exposure; maps would also defeat the hidden-maps design) | I | `hidden` maps; the Dockerfile moves maps out of `/public` and fails if any remain; image-smoke asserts 404 and no `sourceMappingURL` | Holds (the maps are public-repo code anyway) |
+
 ## 6. Cross-budget isolation review (every endpoint)
 Rule under test: a caller who is not a member of budget B can neither read nor modify anything in B, nor learn that B exists. Every row assumes the contract's check order (errors.md): session, then CSRF, then validation, then membership (404), then role (403), then re-auth, then sub-resource lookup within the scope.
 
@@ -389,7 +411,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | R-2 | Up to 24 hours of data can be lost in a restore (RPO 24 h on free tiers). | $0 constraint. | Nightly encrypted dumps plus any Neon restore window (V8); restore drill before launch, including the post-restore revocation steps. | Accepted, owner sign-off 2026-11-12 (mvp-planning README) |
 | R-3 | A stolen session cookie stays valid for **up to 90 days** if it is used at least once every 30 days. | Long phone sessions (owner decision). | **90-day absolute cap (OD-2)** enforced by DB `CHECK`s; device list; revoke-others; password change revokes others; owner `revoke-sessions`; new-sign-in notice (F-34). | **Reduced by OD-2 (owner, 2026-11-12):** 90-day cap on top of the 30-day sliding expiry. The residual (≤ 90 days) is inherent to the decision |
 | R-4 | Co-members are fully trusted. Any member can alter or soft-delete all transactions and plans and export everything, including other members' entries and display names. There is no per-transaction undo, and content a user entered in someone else's budget survives their own account purge. | Owner decision: "owner + equal members" (meeting 1). | `updated_by_user_id`; soft delete for 30 days; optimistic versions; budget-level self-service restore by the owner (ADR-0010). | **Accepted, owner sign-off 2026-11-12 (OD-7)** |
-| R-5 | Third parties see PII. Resend sees addresses, names in invitation emails, and live one-time links until they expire. Cloud Run request logs hold client IP, raw UA and URLs for 30 days. HIBP sees a 20-bit hash prefix and the server IP. Sentry sees opaque IDs (IP storage off). Neon holds all data. Cloudflare sees DNS only, or all traffic if the proxy fallback is used. | $0 free-tier services. | No financial data in email, logs or Sentry; short token expiries; tracking off (F-06); Sentry IP storage off (F-07); no sensitive values in URLs; Cloud Run request logs are **excluded** from `_Default` (bootstrap step 4, billing-protection §6), so client IP and raw UA are not kept by our logging. | **Accepted, owner sign-off 2026-11-12 (OD-7)**; list in the privacy notice |
+| R-5 | Third parties see PII. Resend sees addresses, names in invitation emails, and live one-time links until they expire. Cloud Run request logs hold client IP, raw UA and URLs for 30 days. HIBP sees a 20-bit hash prefix and the server IP. Sentry sees opaque user and request IDs, route templates, error types and frames, the User-Agent, and CSP report document URLs without fragments (IP storage off, `infer_ip: never`, verified 2026-11-17). Neon holds all data. Cloudflare sees DNS only, or all traffic if the proxy fallback is used. | $0 free-tier services. | No financial data in email, logs or Sentry; short token expiries; tracking off (F-06); Sentry IP storage off (F-07); no sensitive values in URLs; Cloud Run request logs are **excluded** from `_Default` (bootstrap step 4, billing-protection §6), so client IP and raw UA are not kept by our logging. | **Accepted, owner sign-off 2026-11-12 (OD-7)**; list in the privacy notice |
 | R-6 | Client IPs are retained in `security_events.ip` for 90 days, and in `security-events` command output in Cloud Logging for 30 days. | Incident response (account-takeover investigation). | PII class; purged at 90 days; deleted on account purge; command output only when the owner runs it. | **Accepted, owner sign-off 2026-11-12 (OD-7)**; covers deviation 6 |
 | R-7 | No Postgres RLS. Tenant isolation rests on `BudgetScope`, composite FKs and generated tests. | ADR-0006 (accepted by the owner 2026-11-12). | Branded scope; composite FKs; Semgrep rules; startup route check; two-household isolation suite (F-18 written into ADR-0006 and auth.md §12). Deleted-budget routes need their own scope (F-36). | Accepted with ADR-0006 (2026-11-12), **conditional on F-18 being implemented and passing in `make audit`**. Progress 2026-11-13: DAL parts done (scope assertions, composite FKs, body-ID 400, scoped replay and export, isolation suite with a coverage check, Semgrep cast bans). Still open: F-41 (scope minting and relative imports), the backend startup route check, the cursor MAC |
 | R-8 | A single human reviewer; agents carry most of the review load. | Team shape. | `make audit` in CI, branch protection, required checks, security review per diff. | **Accepted, owner sign-off 2026-11-12 (OD-7)** |
@@ -412,6 +434,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-16 | v2.7 | Test-suite review (`feat/test-suite`, 52a556a plus the Phase B tree): §5.9 T121–T124. F-01, F-18, F-23, F-33, F-34 and F-36 verified by tests. §6 plan and cursor rows resolved. T41/F-32 e2e present but the bfcache path is unproven. New F-55 and F-56 (Low). BUG-1 (GET bodies ignored) ruled not a security issue. |
 | 2026-11-16 | v2.8 | Pre-launch hardening review (`fix/pre-launch-hardening`, PR #14; follow-up: F-58 notice fixed, CodeQL #6 ruled Info): §5.10 T125–T126. F-51, F-52, F-53 and F-54 closed; F-08 (V26 still open), F-09 (app), F-21 and F-22 verified by integration tests; F-32, F-55 and F-56 verified from #13. New F-57 (Medium, fixed in the PR) and F-58 (Low; notice fixed in the PR, counters owner-deferred). TB-DEV, T20, T28, T39, T40, T41, T117–T119, T122 and T124 updated. |
 | 2026-11-16 | v2.9 | F-49 fix review (`fix/f49-restore-race`): T113 resolved; lock-order reasoning and the data-engineer's status-read sweep confirmed; `lockBudget` stale-role note (Info). |
+| 2026-11-17 | v3.0 | Sentry integration review (`feat/sentry`): §5.11 T127–T132; TB6 and the Sentry token asset rewritten; T73 and T74 updated (owner's spike-protection-only ruling); R-5 detail. F-50 closed; the Sentry halves of F-06 and F-07, the Sentry parts of F-23 and the F-09 alert code verified. `SAFE_MESSAGES` signed off. New F-59, F-60 and F-61 (Low). |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.

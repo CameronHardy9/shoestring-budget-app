@@ -3,6 +3,11 @@ import { createApiClient, onUnauthenticated, unwrap } from "./client.ts";
 import { ApiError, NetworkError, UnexpectedResponseError } from "./errors.ts";
 import { newIdempotencyKey } from "./ids.ts";
 import {
+  resetReporting,
+  startErrorTracking,
+  type Tracker,
+} from "../observability/report.ts";
+import {
   clearSessionMemory,
   getLastRequestId,
   setCsrfToken,
@@ -49,6 +54,7 @@ const errorBody = (code: string, extra: Record<string, unknown> = {}) => ({
 
 afterEach(() => {
   clearSessionMemory();
+  resetReporting();
 });
 
 describe("request headers", () => {
@@ -207,6 +213,33 @@ describe("errors", () => {
         UnexpectedResponseError,
       );
     }
+  });
+
+  it("reports unexpected responses (with their requestId) to error tracking, never ApiErrors", async () => {
+    const captured: unknown[] = [];
+    await startErrorTracking({
+      dsn: "https://k@o1.ingest.us.sentry.io/1",
+      release: "r1",
+      routeOf: () => "/",
+      load: () =>
+        Promise.resolve({
+          createTracker: (): Tracker => ({
+            capture: (error) => captured.push(error),
+          }),
+        }),
+    });
+    const { api } = setup(
+      new Response("<html>Bad gateway</html>", {
+        status: 502,
+        headers: { "X-Request-Id": "proxy-0001" },
+      }),
+      json(500, errorBody("INTERNAL")),
+      json(404, errorBody("NOT_FOUND")),
+    );
+    for (let i = 0; i < 3; i++)
+      await expect(unwrap(api.GET("/budgets"))).rejects.toBeInstanceOf(Error);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ status: 502, requestId: "proxy-0001" });
   });
 
   it("wraps fetch failures as NetworkError but lets aborts through", async () => {
