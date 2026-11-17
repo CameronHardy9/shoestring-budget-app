@@ -80,6 +80,11 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - **V8 fixes the `stack` header at the first `.stack` read.** If the message is mutated after that, any header-length logic built from the current `message` is wrong. A shorter message exposes old lines as frames. Fail closed with an exact-prefix check.
     - CodeQL's `js/insufficient-password-hash` fires on HIBP SHA-1 and on keyed HMACs (recovery codes, throttle keys) by name heuristics. These are false positives under the F-04 design.
 
+17. **Offline/F-62 review (2026-11-17).**
+    - **The SDK parses more lines than "the message tail".** It skips only lines containing `Error: `, so with a name that doesn't end in `Error` (`ReauthCancelled`) the header's first line is parsed, and so is every line of a multi-line `name` (F-63). A haystack must hold every line the parser doesn't skip.
+    - **Bounded walks must fail closed at the cap.** `reachableErrors` counted non-Error objects toward 32 and stopped quietly, so an SDK-reported child could go unchecked (F-63). Check what counts toward a cap and what happens when it is hit.
+    - Mutation `networkMode: "always"` removes queued writes; that's safer. Idempotency is `(user_id, key)` + request_hash with path params, so key reuse can't cross users or budgets.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

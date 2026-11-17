@@ -22,6 +22,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { e2eSentry } from "../../support/env.ts";
+import { findAmount } from "../../support/pii-scan.ts";
 import {
   createBudget,
   createTransaction,
@@ -254,13 +255,9 @@ interface Planted {
 }
 
 // $87.65: no ISO time (seconds < 60) or float timestamp can contain "87.65"
-// standing alone, so the amount checks below cannot false-alarm.
+// standing alone. The patterns, and the IDs and positions masked before they
+// run (a UUIDv7 can hold "-8765-"), are in support/pii-scan.ts.
 const AMOUNT_CENTS = 8_765;
-const AMOUNT_PATTERNS = [
-  /\$\s?87\.65/,
-  /(?<![\d.])87\.65(?!\d)/,
-  /(?<![\w.])8765(?![\w.])/,
-];
 
 async function plant(page: Page): Promise<Planted> {
   const user = await createUser({
@@ -342,8 +339,10 @@ async function expectNoPii(
     expect(raw, "no email address anywhere").not.toMatch(
       /[\w.+-]+@[\w-]+\.(test|example|com)\b/,
     );
-    for (const re of AMOUNT_PATTERNS)
-      expect(c.body, "no amount anywhere").not.toMatch(re);
+    expect(
+      findAmount(c.body)?.source ?? null,
+      "no amount anywhere (outside UUIDs, 32-hex IDs and stack positions)",
+    ).toBeNull();
   }
   // Numbers too, outside positions and times.
   const walk = (v: unknown, key: string): void => {

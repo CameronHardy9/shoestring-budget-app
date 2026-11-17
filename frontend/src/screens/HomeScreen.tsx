@@ -2,7 +2,7 @@
 // budget, else onboarding.
 import { useBudgets } from "../app/data.ts";
 import { Redirect } from "../app/router.tsx";
-import { ErrorState, LoadingState } from "../components/States.tsx";
+import { ErrorState, PendingSlot } from "../components/States.tsx";
 import { getLastBudgetId } from "../lib/preferences.ts";
 
 export default function HomeScreen() {
@@ -11,7 +11,11 @@ export default function HomeScreen() {
     return (
       <main className="mx-auto max-w-md p-6">
         <h1 className="sr-only">Shoestring</h1>
-        <LoadingState label="Loading your budgets…" />
+        <PendingSlot
+          paused={budgets.isPaused}
+          label="Loading your budgets…"
+          offlineMessage="You're offline. Your budgets will appear when you reconnect."
+        />
       </main>
     );
   }

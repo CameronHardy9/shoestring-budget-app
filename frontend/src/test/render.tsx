@@ -19,9 +19,11 @@ export function renderWithApp(
   window.history.replaceState(null, "", path);
   setCsrfToken(CSRF);
   const client = createQueryClient();
+  // Merged, so tests keep the app's other defaults (mutation networkMode).
+  const defaults = client.getDefaultOptions();
   client.setDefaultOptions({
-    queries: { retry: false, staleTime: Infinity },
-    mutations: { retry: false },
+    queries: { ...defaults.queries, retry: false, staleTime: Infinity },
+    mutations: { ...defaults.mutations, retry: false },
   });
   return {
     client,

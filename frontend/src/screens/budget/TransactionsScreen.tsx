@@ -12,7 +12,7 @@ import { MonthNav } from "../../components/MonthNav.tsx";
 import {
   EmptyState,
   ErrorState,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { dayLabel, monthLabel, shortDate } from "../../lib/dates.ts";
 import { sumCents } from "../../lib/splits.ts";
@@ -79,7 +79,11 @@ export default function TransactionsScreen() {
       </header>
 
       {list.isPending ? (
-        <LoadingState label="Loading transactions…" />
+        <PendingSlot
+          paused={list.isPaused}
+          label="Loading transactions…"
+          offlineMessage="You're offline. Transactions will appear when you reconnect."
+        />
       ) : list.isError && items.length === 0 ? (
         <ErrorState error={list.error} onRetry={() => void list.refetch()} />
       ) : items.length === 0 ? (

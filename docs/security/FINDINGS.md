@@ -34,6 +34,8 @@ Status values:
 
 **PR #20 audit, picomatch GHSA-fc5q-39xc-vjpf (2026-11-17):** a high-severity ReDoS in dev tooling only (vite, vitest, typescript-eslint through tinyglobby and fdir). It is not in any production dependency tree, not bundled, and never fed untrusted patterns, so it is **not exploitable**. **I signed off** on the time-boxed osv-scanner ignore: exact ID, `effectiveUntil = 2026-12-17` (checked against the osv-scanner v2.7.1 source: the advisory fails the gate again on that date, and unknown keys fail the scan), listed in the audit summary, thresholds unchanged. Details are at the end.
 
+**Offline and F-62 review (2026-11-17, branch `fix/offline-and-f62`, uncommitted tree on a55786e):** no Critical or High findings. **Approve; nothing blocks the PR.** **F-62 is verified and closed**, with one documented residual that I accept (no owner decision needed): a header made stale by a post-read cut that lands exactly on a line break. The `(error: …)` handling and Node's `Name [CODE]: message` header add nothing new. The offline change ("online to save") adds no duplicate-write, wrong-budget or wrong-user path, stores nothing on the device, and shows no cached data. New Low **F-63** (web, defence in depth, not blocking): the header line and a multi-line `name` are not in the "from the message" haystack, and the linked-error walk is capped in a way that can skip an error the SDK reports. Details are at the end.
+
 ## Summary
 | ID | Sev | Owner → implements | Issue (first review) | Status | Note (re-review 2026-11-13) |
 |---|---|---|---|---|---|
@@ -98,7 +100,8 @@ Status values:
 | F-59 | Low | frontend-engineer, backend-engineer | **New (Sentry):** stack frames are parsed from `error.stack`, which starts with the message, so frame-shaped message lines become frames. The browser scrub copies frame `filename` with no character bound, and both sides allow spaces in function names | verified (residual: F-62) | Defence in depth; no current trigger found. **Fixed and verified 2026-11-17 (`fix/sentry-followups`):** server `serializeError` skips the V8 header (`name` + `message` line count; fails closed on non-string name or message), and `FUNCTION_NAME` allows no free spaces; `beforeSend` re-derives SDK-built frames from `hint.originalException`. Web: file names are own hashed chunks, a pseudo-file or `<external>`; function names are identifier-only; frames whose text is in the message tail are dropped. I reproduced each case the finding named with the real SDK parser and V8: none gets through. Residual: F-62 |
 | F-60 | Low | architect → backend-engineer, sre | **New (Sentry):** the A6 owner alerts fire at 80% and 100%, but non-priority mail, password resets included, stops at 60%. Only priority mail can raise the count past 60, so a non-priority flood from one signed-in account suppresses resets for everyone until UTC midnight with no owner alert | verified | **Fixed 2026-11-17 (`fix/sentry-followups`, owner ruling):** the warning line is `bulkCutoff(quota)`, the same function the refusal uses, so the count a bulk flood can reach (exactly the cutoff) always fires it. auth.md §14, ARCHITECTURE, observability A6, email-quota.md and the cost sheet agree. Deviation 4's premise holds again |
 | F-61 | Low | ci-engineer, backend-engineer | **New (Sentry):** `@sentry/node` (with @sentry/core, server-utils, opentelemetry and `@opentelemetry/api`) is a backend *devDependency* but ships in `dist/chunks/esm-*.js`. Advisories in it look "dev-only" in Dependabot and in triage | verified | **Fixed 2026-11-17:** the ADR-0008 amendment and the audit.sh triage note state the rule; build.test.ts pins the exact set of bundled npm packages against `backend/scripts/bundled-runtime-packages.json`. I checked that list against the existing `dist/` maps: they match exactly (21 packages) |
-| F-62 | Low | frontend-engineer, backend-engineer | **New (Sentry follow-ups):** F-59 residuals. (a) Web: the SDK parser rewrites `(error: X)` in a line before parsing it, so a crafted message line yields a frame whose function and file are not verbatim in the message, and `fromMessage` misses it. (b) Both sides: the frame/header split trusts the *current* `message`; V8 fixes the header at the first `.stack` read, so a message shortened afterwards exposes its old lines | open | Defence in depth; no trigger. What leaks at most: one identifier-shaped word and two integers. Not blocking |
+| F-62 | Low | frontend-engineer, backend-engineer | **New (Sentry follow-ups):** F-59 residuals. (a) Web: the SDK parser rewrites `(error: X)` in a line before parsing it, so a crafted message line yields a frame whose function and file are not verbatim in the message, and `fromMessage` misses it. (b) Both sides: the frame/header split trusts the *current* `message`; V8 fixes the header at the first `.stack` read, so a message shortened afterwards exposes its old lines | verified (accepted residual) | Defence in depth; no trigger. What leaks at most: one identifier-shaped word and two integers. **Fixed and verified 2026-11-17 (`fix/offline-and-f62`):** (a) the web haystack also holds each tail as the SDK parser sees it (1024 cut, then the `(error: X)` rewrite); (b) both sides keep frames only when `stack` starts with exactly the current header (web: V8 only, every reachable linked error, own stack required, getters fail closed). I reproduced the original cases with the real parser and Node 24: none gets through. **Residual, accepted by security-reviewer:** a current header that is a whole-line prefix of the stale one (a cut exactly at a line break) still matches. Re-open conditions are in the review section |
+| F-63 | Low | frontend-engineer | **New (offline/F-62 review):** web F-59/F-62 gaps. (1) The haystack holds only the message's later lines, but the SDK also parses the header's first line when it lacks `Error: ` (a name such as `ReauthCancelled`) and every line of a multi-line `name`. (2) `reachableErrors` counts non-Error objects toward its cap of 32 and does not fail closed when the cap is hit, so a long non-Error `cause` chain can hide an `errors[]` child that the SDK still reports | open | Defence in depth; no trigger (every error name and every first message line in the app is fixed text, and browser DOMException names all end in `Error`). Same ceiling as F-59: at most one identifier and two integers. Not blocking |
 
 ## Re-review 2026-11-13: architect deviations
 | # | Deviation | Ruling |
@@ -1346,3 +1349,100 @@ The advisory is picomatch@4.0.7, GHSA-fc5q-39xc-vjpf (CVE-2026-112366, CVSS 8.7)
 3. The "unused" detection greps for osv's exact wording (`has unused ignores`). If a future osv version rewords it, the report goes quiet.
 
 **Re-check:** when picomatch > 4.0.7 ships (bump it and delete the entry), or on 2026-12-17, whichever comes first. Any extension needs a fresh sign-off.
+
+## Offline and F-62 review 2026-11-17: `fix/offline-and-f62` (uncommitted tree on a55786e)
+**Approve.** No Critical or High findings. F-62 is verified and closed, with an accepted residual. New Low: **F-63** (web). The offline change adds no security risk.
+
+**Verification.** The tech lead is running `make check`, `make e2e` and `make audit`, so I ran no make target and didn't touch Docker. The `.audit/` reports on disk are from 13:27, before this tree's edits (14:02–14:07):
+- osv: clean apart from the signed-off picomatch ignore;
+- Semgrep: only the two known dist-checks.test.ts fixture WARNINGs;
+- zizmor: no high finding.
+
+The diff changes no package.json or lockfile, so the osv and zizmor results still hold. CI's audit job covers Semgrep on the final tree. A secret-pattern grep over the diff and the two untracked files found only test fixtures.
+
+I probed both sides under Node 24: the real `@sentry/browser` 11.10.0 `defaultStackParser` into `scrubEvent`, and `serializeError` with crafted V8 errors and real Node-coded errors (scripts in the session scratchpad, not committed).
+
+### F-62: verified (residual accepted)
+- **(a) Web, `(error: …)`** (scrub.ts `asStackParserSees`, `messageTails`):
+  - It matches @sentry/core 11.10.0 `createStackParser` line for line: cut at 1024, then the same non-global `/\(error: (.*)\)/` replacement. The original line (`    at Pharm(error: acy (/assets/fo)o:4500:2`) is now dropped.
+  - **Nothing new gets through.** The rewritten tails are only *added* to the haystack, so they can only drop frames. They never touch what is sent.
+  - Every frame's file is a substring of the cleaned line, except data-URI and Safari-extension frames. For those two, the `at fn ` / `at fn(` / `fn@` needles come from the same cleaned line. Gecko's `fn(args)@` form drops the arguments from the function, but the file needle still matches.
+- **(b) Web, stale header** (scrub.ts `framesTrusted`):
+  - A cut mid-line, a replaced message, a renamed error, and a stale linked `cause` all send no frames.
+  - Firefox and Safari are exempt. That is correct: their native stacks never hold the message.
+  - The SDK walks `cause`, then `errors[]`, then SuppressedError, depth-first, up to limit + 1 = 6 values. `reachableErrors` follows the same order over a superset of keys. Cycles make `valueCount` larger than the set, which fails closed.
+  - One gap in the cap is filed as F-63 (2).
+- **(b) Server** (logging.ts `frameLines`):
+  - A cut mid-line and a stale name both give no frames. A non-string name or message, and a stack that is only the header, give no frames.
+  - Real Node errors keep their frames: `RangeError [ERR_OUT_OF_RANGE]`, plain `TypeError` with `code` ERR_INVALID_URL (Node 24 prints no `[CODE]` there), and `Error: ENOENT`.
+- **The `[CODE]` header form adds nothing new.**
+  - It is used only when the stack *literally* starts with `${name} [${code}]: ${message}\n`. It and the plain form differ at the character after `name`, so at most one can match.
+  - A `code` that holds a newline with no mutation gives no fake frame.
+  - The only way to abuse it is to change `name` *and* `message` after `.stack` was read, so that the coded header is a line prefix of the old one. I reproduced that; it is the residual below.
+- **Tests:** scrub.test.ts "F-62" (a, b, linked cause, getters, other engines, the residual pinned as a test), logging.test.ts (stale, Node-coded, header-only, non-string), error-tracker.test.ts.
+
+**Residual (accepted by security-reviewer, 2026-11-17; owner decision not needed).** On both sides, a stale header still passes when the current header is a whole-line prefix of the one V8 fixed. The reported case is a message cut exactly at a line break after the first `.stack` read. The same holds for any change to name, message or code that composes to such a prefix. Then the old message's frame-shaped lines survive, bounded by F-59: no filename on the web (`<external>` or an own chunk), and at most one identifier and two integers per line.
+
+Why I accept it rather than keep F-62 open:
+1. **There is no trigger.**
+   - No code in backend/src, db/src or frontend/src assigns `.message` or `.name` on a caught error. The only `.name =` assignments are in constructors, before any `.stack` read.
+   - No prod dependency checked earlier shortens a message after reading `.stack`.
+   - Stored text can't hold newlines.
+   - 4xx errors are never captured.
+2. **The ceiling is low and already reviewed** (F-59).
+3. **The full fix costs more than the risk.** A process-wide `Error.prepareStackTrace` hook changes `error.stack` for every library. It interacts with Node's source-map support and the Sentry SDK. It would itself be new code on every error path. I agree with both engineers not to do it.
+
+It stays Low-class defence in depth, inside my remit for an accepted residual. It is not a dismissal: the fix asked for is in place. **Re-open F-62 if:**
+- any code assigns `.message` or `.name` on an existing error (grep `\.(message|name)\s*=[^=]` outside constructors);
+- a dependency or app code sets `Error.prepareStackTrace` or calls `captureStackTrace` on a reused error;
+- an error message starts carrying multi-line user or API text.
+
+### F-63 Low (new, web): header line, multi-line names, and the linked-error cap
+- **Location:** frontend/src/observability/scrub.ts:166 (`messageTails`) and :486 (`scrubEvent` builds the tails). Separately, :236 (`reachableErrors`).
+- **Scenario (1), reproduced with the real parser on V8:**
+  - The SDK skips a stack line only if it contains `Error: `. With a name that doesn't end in `Error` (the app has `ReauthCancelled`), the header's first line is parsed.
+  - Example: `name = "ReauthCancelled"`, message `Pharmacy@https://<origin>/assets/foo-12345678.js:777:9`. This went out as `{filename: <own chunk>, function: "<anonymous>", lineno: 777, colno: 9}`. A message like `Paid /rent:1200:31` would send the integers 1200 and 31 with `<external>`.
+  - A multi-line `name` (`"X\n    at Pharmacy (…)"`) went out as `function: "Pharmacy"`.
+  - The haystack holds only the message's later lines, so `fromMessage` misses both. The server is not affected: it slices off the whole exact header.
+- **Scenario (2), reproduced:**
+  - Set up an `AggregateError([stale], …)` whose `cause` is a chain of 40 plain objects. `framesTrusted(agg, 2, true)` returns `true`, while the control without the chain returns `false`.
+  - This happens because the walk spends its 32 slots on the non-Error chain, which the SDK ignores. The SDK still reports `errors[0]`.
+- **Trigger:** none.
+  - Every error name in the app is a constant, and `ReauthCancelled`'s message is fixed text.
+  - Browser DOMException names all end in `Error`.
+  - Building such object graphs needs app code.
+  - The ceiling is the same as F-59.
+- **Recommended fix (frontend-engineer):**
+  1. For each error checked on V8, also add to the haystack the lines of `asStackParserSees(v8StackHeader(name, message))` that the SDK does *not* skip (no `Error: ` in the line). This covers the header's first line and every line of the name. It can drop only frames.
+  2. In `reachableErrors`, return "not trusted" when the cap is reached, instead of stopping quietly. Alternatively, count only values that pass the SDK's `isError`.
+  3. Add tests for both scenarios above.
+- **Owner:** frontend-engineer. Not blocking; fix when convenient, or together with the next scrub.ts change.
+
+### Offline ("online to save"): no new risk
+- **Duplicates and wrong target.** `networkMode: "always"` only removes the paused-mutation queue, so a write is never sent later "unseen". That *removes* the old path where a queued write could fire after reconnecting into a changed session.
+  - **Same key on retry is safe.** The key is reused only by the same mounted sheet. The server scopes it by `(user_id, key)` and `request_hash`, which covers the method, route template, path params (`budgetId`) and body. So:
+    - an edited body gives 422 `IDEMPOTENCY_KEY_REUSED`;
+    - another user can never replay it;
+    - a replay is loaded through the current `BudgetScope`, which re-checks membership (F-18);
+    - a sheet whose `budgetId` changed under it gets 400 for foreign category IDs before any write.
+  - **Edits and deletes carry `version`.** A retry after a lost response gives 409 or "Already deleted", never a second change.
+  - **Other writes.** For writes without a key (invite, category), a browser-offline `fetch` never leaves the device. The lost-response case is unchanged from before this PR, and existing limits bound it.
+  - The e2e tests prove one stored row and one key across the offline attempt and the Retry, including a 201 whose response was lost.
+- **F-54 (user binding):** unchanged.
+  - `stashDraft(budgetId, me.id, …)` is still the only stash, and only on `UNAUTHENTICATED`.
+  - `enter()` still discards another user's stash and return path.
+  - Offline sign-out fails honestly (F-51), so the cache isn't cleared while the same user is still signed in. That is correct.
+- **F-52 (device storage):** nothing new.
+  - The diff adds no storage, Cache Storage or IndexedDB use, and the service worker is untouched.
+  - The query cache stays in memory (ADR-0002) and is cleared on sign-out, on 401 and on bfcache restore.
+- **Stale data on the offline screens:** none.
+  - `PendingSlot` renders only in the `isPending` branch (nothing cached) and shows fixed text.
+  - Categories is gated on `isPending && isPaused` for each query.
+  - No offline screen renders cached data that wasn't already shown before this PR.
+- **Test-only changes:**
+  - `page.routeWebSocket` (a mocked Vite HMR socket) and the `preloadAllScreens()` import are dev-server only.
+  - `dal()` reads use the existing local-only test stack (F-56 is unchanged).
+  - render.tsx now merges the app's defaults, so unit tests exercise the real `networkMode`.
+
+### Notes (not findings)
+- Pre-existing, Info: when a person signs out in one tab, other tabs drop their in-memory cache only on their next API request (a 401), or on focus when they refetch. A tab that is offline keeps showing what it already had. This is the same person's device and the same behaviour as before this PR. There is no cross-tab sign-out broadcast. Worth considering after launch; no F-number.

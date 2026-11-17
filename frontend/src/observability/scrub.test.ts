@@ -1,5 +1,5 @@
 import { defaultStackParser, type ErrorEvent } from "@sentry/browser";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NetworkError, UnexpectedResponseError } from "../api/errors.ts";
 import { ERROR_COPY } from "../api/messages.ts";
 import { SignOutError } from "../app/auth.tsx";
@@ -7,6 +7,7 @@ import { ReauthCancelled } from "../app/reauth.tsx";
 import { sumCents } from "../lib/splits.ts";
 import {
   ANONYMOUS,
+  asStackParserSees,
   EXTERNAL,
   fromMessage,
   pathOf,
@@ -22,6 +23,7 @@ import {
   stripReactArgs,
   stripUrl,
   type SafeMessage,
+  v8StackHeader,
 } from "./scrub.ts";
 
 const routeOf = (p: string) =>
@@ -207,8 +209,11 @@ describe("event allowlist (F-06, F-07)", () => {
   });
 
   it("removes error messages but keeps types and stack frames", () => {
+    // An engine whose stacks don't hold the message (Firefox, Safari): no
+    // header to check (F-62), so this is about the frames' own bounds.
     const [first, second] =
-      scrubEvent(hostileEvent(), {}, ctx).exception?.values ?? [];
+      scrubEvent(hostileEvent(), {}, { ...ctx, stackHeader: false }).exception
+        ?.values ?? [];
     expect(first).toEqual({
       type: "SyntaxError",
       value: REDACTED,
@@ -353,7 +358,11 @@ describe("stack frames (F-59)", () => {
   it("keeps real frames from every part of a production stack intact", () => {
     const stack = `TypeError: x is undefined\n${REAL_V8}`;
     expect(
-      framesOf(eventFor("TypeError", "x is undefined", stack), undefined),
+      framesOf(eventFor("TypeError", "x is undefined", stack), {
+        name: "TypeError",
+        message: "x is undefined",
+        stack,
+      }),
     ).toEqual(REAL_FRAMES);
   });
 
@@ -381,8 +390,9 @@ describe("stack frames (F-59)", () => {
   it("bounds the frame even if the message were truncated or lost", () => {
     // The SDK may truncate `value`; without any message to compare, the
     // file and function bounds alone still let none of it through.
-    const event = eventFor("SyntaxError", "Unexpected", `x: y\n${HOSTILE}`);
-    expect(framesOf(event, undefined)).toEqual([
+    const stack = `x: y\n${HOSTILE}`;
+    const event = eventFor("SyntaxError", "Unexpected", stack);
+    expect(framesOf(event, { name: "x", message: "y", stack })).toEqual([
       {
         filename: EXTERNAL,
         function: ANONYMOUS,
@@ -505,6 +515,253 @@ describe("stack frames (F-59)", () => {
     expect(fromMessage(frame, [`at Object.save (x:1:2)`])).toBe(true);
     expect(fromMessage(frame, [`see ${INDEX}`])).toBe(true);
     expect(fromMessage({ function: "?" }, ["at ? (x:1:2)"])).toBe(false);
+  });
+
+  describe("F-62", () => {
+    // Vitest installs Error.prepareStackTrace (source maps), which formats
+    // the header differently ("TypeError: " for an empty message). Browsers
+    // use V8's own formatting, so these tests do too.
+    const v8 = Error as unknown as { prepareStackTrace?: unknown };
+    let saved: unknown;
+    beforeEach(() => {
+      saved = v8.prepareStackTrace;
+      v8.prepareStackTrace = undefined;
+    });
+    afterEach(() => {
+      v8.prepareStackTrace = saved;
+    });
+
+    // (a) @sentry/core rewrites "(error: X)" to "X" in each line before
+    // parsing it, so the frame's text is not verbatim in the message.
+    const REWRITTEN = "    at Pharm(error: acy (/assets/fo)o:4500:2";
+    const REWRITTEN_OWN = `    at Pharm(error: acy (${ORIGIN}/assets/index-1a2b3c4d.j)s:1:2`;
+
+    it("compares frames against the message as the SDK's parser sees it", () => {
+      expect(asStackParserSees(REWRITTEN)).toBe(
+        "    at Pharmacy (/assets/foo:4500:2",
+      );
+      expect(asStackParserSees(`a (error: b)\n${"x".repeat(1030)}`)).toBe(
+        `a b\n${"x".repeat(1024)}`,
+      );
+    });
+
+    it("(a) drops a message line the parser rewrites into a frame", () => {
+      for (const line of [REWRITTEN, REWRITTEN_OWN]) {
+        const message = `Unexpected token\n${line}`;
+        const stack = `SyntaxError: ${message}\n${REAL_V8}`;
+        const event = eventFor("SyntaxError", message, stack);
+        // The real parser really does build a "Pharmacy" frame from it,
+        // whose text is not in the message verbatim.
+        const parsed = event.exception?.values?.[0]?.stacktrace?.frames ?? [];
+        const fake = parsed.find((f) => f.function === "Pharmacy");
+        expect(fake, line).toBeDefined();
+        expect(message, line).not.toContain("at Pharmacy ");
+        expect(message, line).not.toContain(String(fake?.filename));
+
+        const frames = framesOf(event, new SyntaxError(message));
+        const out = JSON.stringify(frames);
+        expect(out, line).not.toContain("Pharmacy");
+        expect(out, line).not.toContain("4500");
+        for (const f of frames ?? [])
+          expect(REAL_FRAMES, line).toContainEqual(f);
+        expect(frames, line).toContainEqual(REAL_FRAMES[3]);
+      }
+    });
+
+    it("(a) does the same for a real V8 error and the SDK's parser", () => {
+      const error = new Error(`Unexpected token\n${REWRITTEN}`);
+      const event = eventFor("Error", error.message, error.stack ?? "");
+      const frames = framesOf(event, error) ?? [];
+      expect(frames.length).toBeGreaterThan(0);
+      const out = JSON.stringify(frames);
+      expect(out).not.toContain("Pharmacy");
+      expect(out).not.toContain("4500");
+    });
+
+    // (b) V8 fixes the header at the first .stack read; a message shortened
+    // afterwards leaves its old lines in the stack, where the SDK parses
+    // them as frames, while the tails come from the new message.
+    const shortened = (
+      before = "Unexpected token in JSON\n    at Pharmacy (x.js:4500:2)",
+      after = "Unexpected token",
+    ) => {
+      const error = new Error(before);
+      // The first read fixes the header.
+      expect(error.stack).toContain(before);
+      error.message = after;
+      return error;
+    };
+    const realEvent = (error: Error) =>
+      eventFor(error.name, error.message, error.stack ?? "");
+
+    it("(b) sends no frames when the message changed after .stack was read", () => {
+      const error = shortened();
+      const event = realEvent(error);
+      expect(JSON.stringify(event)).toContain("Pharmacy");
+      const out = scrubEvent(event, { originalException: error }, ctx);
+      expect(out.exception?.values?.[0]?.stacktrace).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain("Pharmacy");
+      expect(JSON.stringify(out)).not.toContain("4500");
+    });
+
+    it("(b) does the same for a message replaced or cut mid-line", () => {
+      for (const after of ["short", "", "Unexpected token in JSO"]) {
+        const error = shortened(undefined, after);
+        expect(framesOf(realEvent(error), error), after).toBeUndefined();
+      }
+    });
+
+    it("(b) residual: a cut exactly at a line break can't be told from the stack; the frame bounds still hold", () => {
+      // The stale stack then starts with the current header plus "\n", the
+      // same as a genuine one, and the cut-off line is in no message. What
+      // can still get through is what F-59's bounds allow: one
+      // identifier-shaped function name and two integers, never a file.
+      const error = shortened(
+        "Unexpected token\n    at Pharmacy (x.js:4500:2)",
+        "Unexpected token",
+      );
+      const frames = framesOf(realEvent(error), error) ?? [];
+      expect(frames.length).toBeGreaterThan(0);
+      expect(JSON.stringify(frames)).not.toContain("x.js");
+      for (const f of frames) {
+        expect(f.filename === EXTERNAL || f.filename === "<anonymous>").toBe(
+          true,
+        );
+        expect(safeFrameFunction(f.function)).toBe(f.function);
+      }
+    });
+
+    it("(b) does the same when the name changed after .stack was read", () => {
+      const error = new Error("x");
+      expect(error.stack).toMatch(/^Error: x\n/);
+      error.name = "Renamed";
+      expect(framesOf(realEvent(error), error)).toBeUndefined();
+    });
+
+    it("(b) sends no frames for any value when a linked cause's header is stale", () => {
+      const cause = shortened();
+      const outer = new Error("Network request failed", { cause });
+      const event: ErrorEvent = {
+        type: undefined,
+        exception: {
+          values: [cause, outer].map((e) => ({
+            type: e.name,
+            value: e.message,
+            stacktrace: { frames: defaultStackParser(e.stack ?? "") },
+          })),
+        },
+      };
+      const out = scrubEvent(event, { originalException: outer }, ctx);
+      for (const v of out.exception?.values ?? [])
+        expect(v.stacktrace).toBeUndefined();
+      expect(JSON.stringify(out)).not.toContain("Pharmacy");
+    });
+
+    it("(b) keeps frames for the app's errors, causes included", () => {
+      class AppError extends Error {
+        override name = "AppError";
+      }
+      for (const error of [
+        new AppError("Sign-out failed"),
+        new SignOutError({ cause: new NetworkError() }),
+        new NetworkError({ cause: new TypeError("Failed to fetch") }),
+        new UnexpectedResponseError(502, null),
+        new TypeError(""),
+        Object.assign(new Error("m"), { name: "" }),
+      ]) {
+        const chain: Error[] = [];
+        for (let e: unknown = error; e instanceof Error; e = e.cause)
+          chain.unshift(e);
+        const event: ErrorEvent = {
+          type: undefined,
+          exception: {
+            values: chain.map((e) => ({
+              type: e.name,
+              value: e.message,
+              stacktrace: { frames: defaultStackParser(e.stack ?? "") },
+            })),
+          },
+        };
+        const out = scrubEvent(event, { originalException: error }, ctx);
+        for (const v of out.exception?.values ?? [])
+          expect(v.stacktrace?.frames?.length, error.name).toBeGreaterThan(0);
+      }
+    });
+
+    it("(b) fails closed when the frames can't be tied to the thrown error", () => {
+      const error = new SyntaxError("Unexpected token");
+      const event = realEvent(error);
+      const frames = (original: unknown, values = event) =>
+        framesOf(values, original);
+      expect(frames(error)?.length).toBeGreaterThan(0);
+      // Nothing thrown, a string, an ErrorEvent-like wrapper or a plain
+      // object whose frames came from a property we don't check.
+      expect(frames(undefined)).toBeUndefined();
+      expect(frames("Unexpected token")).toBeUndefined();
+      expect(frames({ error })).toBeUndefined();
+      // More exception values than errors reachable from the thrown one.
+      const two: ErrorEvent = {
+        type: undefined,
+        exception: {
+          values: [
+            ...(event.exception?.values ?? []),
+            ...(event.exception?.values ?? []),
+          ],
+        },
+      };
+      expect(frames(error, two)).toBeUndefined();
+      // A stack that isn't a string, and a getter that throws.
+      expect(
+        frames({ name: "Error", message: "x", stack: ["Error: x"] }),
+      ).toBeUndefined();
+      const hostile = Object.defineProperty(new Error("x"), "cause", {
+        get() {
+          throw new Error("no");
+        },
+      });
+      expect(frames(hostile)).toBeUndefined();
+    });
+
+    it("(b) checks nothing on engines whose stacks never hold the message", () => {
+      const stack = `save@${INDEX}:1:4321`;
+      const event = eventFor("SyntaxError", "Unexpected token", stack);
+      const original = {
+        name: "SyntaxError",
+        message: "Unexpected token",
+        stack,
+      };
+      expect(framesOf(event, original)).toBeUndefined();
+      const out = scrubEvent(
+        event,
+        { originalException: original },
+        { ...ctx, stackHeader: false },
+      );
+      expect(out.exception?.values?.[0]?.stacktrace?.frames).toEqual([
+        {
+          filename: INDEX,
+          function: "save",
+          lineno: 1,
+          colno: 4321,
+          in_app: true,
+        },
+      ]);
+    });
+
+    it("v8StackHeader builds the header the way V8 does", () => {
+      for (const [name, message] of [
+        ["Error", "m"],
+        ["TypeError", ""],
+        ["", "m"],
+        ["", ""],
+        ["X", "a\nb"],
+      ] as const) {
+        const error = new Error(message);
+        error.name = name;
+        expect(error.stack?.split("\n    at ")[0]).toBe(
+          v8StackHeader(name, message),
+        );
+      }
+    });
   });
 });
 

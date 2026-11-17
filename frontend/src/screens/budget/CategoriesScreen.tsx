@@ -26,7 +26,7 @@ import {
   EmptyState,
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
 import { monthLabel, monthName, shiftMonth } from "../../lib/dates.ts";
@@ -395,7 +395,14 @@ export default function CategoriesScreen() {
       </header>
 
       {categories.isPending || plan.isPending ? (
-        <LoadingState label="Loading categories…" />
+        <PendingSlot
+          paused={
+            (categories.isPending && categories.isPaused) ||
+            (plan.isPending && plan.isPaused)
+          }
+          label="Loading categories…"
+          offlineMessage="You're offline. Categories and limits will appear when you reconnect."
+        />
       ) : categories.isError || plan.isError ? (
         <ErrorState
           error={categories.error ?? plan.error}

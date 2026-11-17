@@ -51,26 +51,39 @@ export function OfflineState({ message }: { message: string }) {
 }
 
 /**
- * The slot for a list that has tappable rows below it, while the list has no
- * data. Before those rows appear: a skeleton, or the offline message when the
- * read is paused (so the rows can appear below it, not wait forever). Once the
- * rows are on screen the slot keeps the offline box (now "back online") until
- * the list arrives, so it changes height once, after a reconnect.
+ * The slot for data that hasn't arrived yet (`isPending`): a skeleton, or the
+ * offline message when the read is paused (offline, nothing cached), so the
+ * screen settles instead of loading forever.
+ *
+ * For a list with tappable rows below it, pass `rowsBelowShown` (latched):
+ * before those rows appear the slot is a skeleton or the offline message (so
+ * the rows can appear below it, not wait forever); once they are on screen the
+ * slot keeps the offline box (now "back online") until the list arrives, so it
+ * changes height once, after a reconnect. Without rows below (the slot is the
+ * last thing on screen) a plain swap is safe.
  */
 export function PendingSlot({
   paused,
-  rowsBelowShown,
+  rowsBelowShown = false,
   rows,
+  label,
   offlineMessage,
 }: {
   paused: boolean;
-  rowsBelowShown: boolean;
-  rows: number;
+  rowsBelowShown?: boolean;
+  rows?: number;
+  /** The skeleton's screen-reader label. */
+  label?: string;
   offlineMessage: string;
 }) {
   if (paused) return <OfflineState message={offlineMessage} />;
   if (rowsBelowShown) return <OfflineState message="Back online. Loading…" />;
-  return <LoadingState rows={rows} />;
+  return (
+    <LoadingState
+      {...(rows !== undefined ? { rows } : {})}
+      {...(label !== undefined ? { label } : {})}
+    />
+  );
 }
 
 export function EmptyState({

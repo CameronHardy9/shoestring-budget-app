@@ -5,7 +5,9 @@
 //
 //   kept: error type names and stack frames (own hashed chunk URL without
 //         ?/# or "<external>", identifier-only function name, line, column;
-//         frames whose text came from the message are dropped: F-59),
+//         frames whose text came from the message are dropped: F-59; no
+//         frames at all when a V8 stack's header isn't the error's current
+//         one: F-62),
 //         mechanism, level, release, environment, timestamp, event ID, SDK
 //         name, the route TEMPLATE (/budgets/:budgetId), the opaque user ID,
 //         the failing API response's requestId, the browser (User-Agent), and
@@ -36,6 +38,11 @@ export interface ScrubContext {
   userAgent: string;
   /** The page's own origin (location.origin), for own-asset messages. */
   origin: string;
+  /**
+   * Whether this engine's error.stack starts with the "Name: message" header
+   * (V8). Defaults to a one-time probe; tests set it to model other engines.
+   */
+  stackHeader?: boolean;
 }
 
 /** Cuts a URL at the first "?" or "#" (F-06: tokens travel in fragments). */
@@ -133,15 +140,145 @@ export function fromMessage(
   return needles.some((n) => tails.some((t) => t.includes(n)));
 }
 
-/** Each message's text after its first line (only multi-line messages). */
+/**
+ * A text as @sentry/core's createStackParser sees it, line by line, just
+ * before parsing (F-62 a): each line cut to 1024 characters, then its first
+ * "(error: X)" rewritten to "X" (the SDK's own regex). A message line can use
+ * this to yield a frame whose function or file is not verbatim in the message,
+ * e.g. "    at Pharm(error: acy (/assets/fo)o:4500:2" → Pharmacy, /assets/foo.
+ */
+export function asStackParserSees(text: string): string {
+  return text
+    .split("\n")
+    .map((line) =>
+      (line.length > 1024 ? line.slice(0, 1024) : line).replace(
+        /\(error: (.*)\)/,
+        "$1",
+      ),
+    )
+    .join("\n");
+}
+
+/**
+ * Each message's text after its first line (only multi-line messages), both
+ * verbatim and as the SDK's stack parser sees it (F-62 a).
+ */
 function messageTails(messages: readonly unknown[]): string[] {
   const tails: string[] = [];
   for (const m of messages) {
     if (typeof m !== "string") continue;
     const nl = m.indexOf("\n");
-    if (nl !== -1) tails.push(m.slice(nl + 1));
+    if (nl === -1) continue;
+    const tail = m.slice(nl + 1);
+    tails.push(tail);
+    const parsed = asStackParserSees(tail);
+    if (parsed !== tail) tails.push(parsed);
   }
   return tails;
+}
+
+/** The header V8 puts on error.stack (ErrorUtils::ToString). */
+export function v8StackHeader(name: string, message: string): string {
+  if (name === "") return message;
+  if (message === "") return name;
+  return `${name}: ${message}`;
+}
+
+let engineHeader: boolean | undefined;
+/** Whether this engine starts error.stack with the header (V8: yes; Firefox, Safari: no). */
+function engineStackHeader(): boolean {
+  if (engineHeader === undefined) {
+    const probe = new Error("stack header probe").stack;
+    engineHeader =
+      typeof probe === "string" &&
+      probe.startsWith("Error: stack header probe");
+  }
+  return engineHeader;
+}
+
+/** The text the SDK parses frames from (`ex.stacktrace || ex.stack || ""`). */
+function stackText(error: object): unknown {
+  const { stacktrace, stack } = error as {
+    stacktrace?: unknown;
+    stack?: unknown;
+  };
+  return stacktrace || stack || "";
+}
+
+/**
+ * Whether an error's stack starts with exactly its CURRENT header (F-62 b).
+ * V8 fixes the header when `.stack` is first read; a message (or name)
+ * changed afterwards leaves the old one, whose later lines the SDK would parse
+ * as frames, while the message tails come from the new one. An error with no
+ * stack text passes (the SDK parsed no frames from it).
+ */
+function headerIsCurrent(error: object): boolean {
+  const text = stackText(error);
+  if (text === "") return true;
+  const { name, message } = error as { name?: unknown; message?: unknown };
+  if (
+    typeof text !== "string" ||
+    typeof name !== "string" ||
+    typeof message !== "string"
+  )
+    return false;
+  const header = v8StackHeader(name, message);
+  return text === header || text.startsWith(`${header}\n`);
+}
+
+const MAX_LINKED = 32;
+/**
+ * The thrown value and every error the SDK's linkedErrors integration can
+ * reach from it (cause, AggregateError.errors, SuppressedError.error and
+ * .suppressed), depth-first, cycles and size bounded. A superset of what the
+ * SDK follows: checking extra objects can only drop frames.
+ */
+function reachableErrors(original: object): object[] {
+  const seen = new Set<object>();
+  const visit = (value: unknown) => {
+    if (typeof value !== "object" || value === null) return;
+    if (seen.has(value) || seen.size >= MAX_LINKED) return;
+    seen.add(value);
+    const e = value as {
+      cause?: unknown;
+      errors?: unknown;
+      error?: unknown;
+      suppressed?: unknown;
+    };
+    visit(e.cause);
+    if (Array.isArray(e.errors)) for (const child of e.errors) visit(child);
+    visit(e.error);
+    visit(e.suppressed);
+  };
+  visit(original);
+  return [...seen];
+}
+
+/**
+ * Whether the event's stack frames may be sent at all (F-62 b, fail closed).
+ * On an engine whose stacks hold the message (V8), every frame must come from
+ * a stack whose header is the error's current one: the thrown value must be an
+ * object with its own stack text (else the frames came from something we
+ * can't check, such as an ErrorEvent's .error), every linked error must pass
+ * too, and there may be no more exception values than errors we checked.
+ * Firefox and Safari stacks never hold the message, so there is nothing to
+ * check. Any getter that throws drops the frames.
+ */
+export function framesTrusted(
+  original: unknown,
+  valueCount: number,
+  headerEngine: boolean,
+): boolean {
+  if (!headerEngine) return true;
+  if (typeof original !== "object" || original === null) return false;
+  try {
+    const errors = reachableErrors(original);
+    if (valueCount > errors.length) return false;
+    if (stackText(original) === "") return false;
+    return errors.every(headerIsCurrent);
+  } catch {
+    return false;
+  }
 }
 
 export const SAFE_MESSAGES: readonly SafeMessage[] = [
@@ -338,6 +475,12 @@ export function scrubEvent(
   const route = ctx.routeOf(pathOf(ctx.pathname));
   const requestId = requestIdOf(hint.originalException);
   const original = hint.originalException;
+  // No frames unless every stack they came from has its current header (F-62).
+  const keepFrames = framesTrusted(
+    original,
+    event.exception?.values?.length ?? 0,
+    ctx.stackHeader ?? engineStackHeader(),
+  );
   // Every message frames may have been parsed from: the values (possibly
   // truncated by the SDK) and the thrown error's own (F-59).
   const tails = messageTails([
@@ -359,7 +502,7 @@ export function scrubEvent(
           },
         }
       : {}),
-    ...(v.stacktrace?.frames
+    ...(keepFrames && v.stacktrace?.frames
       ? {
           stacktrace: {
             frames: v.stacktrace.frames

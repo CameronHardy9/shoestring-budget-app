@@ -95,8 +95,94 @@ describe("serializeError (F-07 allowlist)", () => {
     expect(serializeError(empty).frames).toEqual(["at real (z.js:7:8)"]);
   });
 
+  // F-62: V8 fixes the header at the first `.stack` read; a later message
+  // change must not expose the old message's lines as frames.
+  it("no frames when the message changed after the stack was read", () => {
+    const email = "pat@example.test";
+    const e = new Error(
+      `failed for ${email}\n    at Pharmacy (x.js:1:2)\n    at y.js:3:4`,
+    );
+    expect(serializeError(e).frames!.length).toBeGreaterThan(0); // reads .stack
+    e.message = "short";
+    expect(serializeError(e).frames).toEqual([]);
+    e.message = "failed"; // a prefix of the old first line
+    expect(serializeError(e).frames).toEqual([]);
+    e.message = "";
+    expect(serializeError(e).frames).toEqual([]);
+    const renamed = new Error("m\n    at Pharmacy (x.js:1:2)");
+    expect(renamed.stack).toContain("Pharmacy"); // fixes the header
+    renamed.name = "Other";
+    expect(serializeError(renamed).frames).toEqual([]);
+    expect(
+      JSON.stringify([serializeError(e), serializeError(renamed)]),
+    ).not.toMatch(/Pharmacy|x\.js|y\.js/);
+  });
+
+  it("keeps real frames when the header matches (one-part, multi-line, Node-coded)", () => {
+    const real = "    at real (z.js:7:8)";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ name: "E", message: "a\nb\nc" }, "E: a\nb\nc"],
+      [{ name: "E\nF", message: "m\nn" }, "E\nF: m\nn"],
+      [{ name: "", message: "a\nb" }, "a\nb"],
+      [{ name: "E\nF", message: "" }, "E\nF"],
+      [{ name: "", message: "" }, ""],
+      [{ message: "m" }, "Error: m"],
+      [
+        { name: "TypeError", message: "m", code: "ERR_X" },
+        "TypeError [ERR_X]: m",
+      ],
+    ];
+    for (const [fields, header] of cases)
+      expect(
+        serializeError({ ...fields, stack: `${header}\n${real}` }).frames,
+      ).toEqual(["at real (z.js:7:8)"]);
+    // A real V8 error with a multi-line message and a renamed subclass.
+    class Named extends Error {
+      constructor(m: string) {
+        super(m);
+        this.name = "Named";
+      }
+    }
+    const n = new Named("line one\nline two");
+    expect(serializeError(n).frames![0]).toMatch(
+      /logging\.test\.ts:\d+:\d+\)?$/,
+    );
+    // Node's own errors: `TypeError [ERR_INVALID_ARG_TYPE]: ...`.
+    let coded: unknown;
+    try {
+      Buffer.from(5 as unknown as string);
+    } catch (err) {
+      coded = err;
+    }
+    expect(serializeError(coded).frames!.length).toBeGreaterThan(0);
+  });
+
+  it("no frames when the stack has only a header or a different one", () => {
+    expect(
+      serializeError({ name: "E", message: "m", stack: "E: m" }).frames,
+    ).toEqual([]);
+    expect(
+      serializeError({
+        name: "E",
+        message: "m",
+        stack: "X: m\n    at real (z.js:7:8)",
+      }).frames,
+    ).toEqual([]);
+    expect(
+      serializeError({
+        name: "E",
+        message: "m",
+        code: 5,
+        stack: "E [5]: m\n    at real (z.js:7:8)",
+      }).frames,
+    ).toEqual([]);
+  });
+
   it("no frames when the header length is unknown (non-string message)", () => {
-    const e = { message: { toString: () => "a\nb" }, stack: "a\nb\n    at f (z.js:1:2)" };
+    const e = {
+      message: { toString: () => "a\nb" },
+      stack: "a\nb\n    at f (z.js:1:2)",
+    };
     expect(serializeError(e).frames).toEqual([]);
   });
 
@@ -134,14 +220,24 @@ describe("serializeError (F-07 allowlist)", () => {
     log.error(
       {
         err: pgError(),
-        headers: { cookie: "__Host-ss_sid=COOKIEVALUE9", "x-csrf-token": "CSRFVALUE9" },
+        headers: {
+          cookie: "__Host-ss_sid=COOKIEVALUE9",
+          "x-csrf-token": "CSRFVALUE9",
+        },
         password: "PASSWORDVALUE9",
         email: "a@b.test",
       },
       "boom",
     );
     const out = lines.join("");
-    for (const leak of ["Joe", "4321", "COOKIEVALUE9", "CSRFVALUE9", "PASSWORDVALUE9", "a@b.test"])
+    for (const leak of [
+      "Joe",
+      "4321",
+      "COOKIEVALUE9",
+      "CSRFVALUE9",
+      "PASSWORDVALUE9",
+      "a@b.test",
+    ])
       expect(out).not.toContain(leak);
     expect(out).toContain("transactions_payee_check");
   });

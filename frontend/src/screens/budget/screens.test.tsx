@@ -14,6 +14,7 @@ import {
 } from "../../test/fixtures.ts";
 import { deferred, tappableAfter } from "../../test/layout.ts";
 import { renderWithApp } from "../../test/render.tsx";
+import { keys } from "../../app/data.ts";
 import { BudgetLayout } from "./BudgetLayout.tsx";
 import OverviewScreen from "./OverviewScreen.tsx";
 import TransactionsScreen from "./TransactionsScreen.tsx";
@@ -152,6 +153,107 @@ describe("transactions", () => {
     expect(
       await screen.findByRole("dialog", { name: "Edit transaction" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("offline with nothing cached", () => {
+  const TX = `/budgets/${BUDGET_ID}/transactions`;
+  // The budget arrives just as the phone goes offline, so the screen's own
+  // reads start paused: never sent, never failed.
+  const goOffline = () => {
+    onlineManager.setOnline(false);
+    return json(200, budget);
+  };
+
+  it("overview: says so instead of loading forever, then shows the month", async () => {
+    const api = mockApi({
+      ...base,
+      [`GET /budgets/${BUDGET_ID}`]: goOffline,
+      [`GET ${TX}`]: json(200, { items: [], nextCursor: null }),
+    });
+    const view = renderWithApp(
+      <BudgetLayout budgetId={BUDGET_ID} active="overview">
+        <OverviewScreen />
+      </BudgetLayout>,
+      { path: `/budgets/${BUDGET_ID}` },
+    );
+    const box = await screen.findByTestId("offline");
+    expect(box).toHaveTextContent(
+      "You're offline. This month will appear when you reconnect.",
+    );
+    expect(box).toHaveAttribute("role", "status");
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "November" }),
+    ).toBeInTheDocument();
+    expect(
+      api.find("GET", `/budgets/${BUDGET_ID}/months/2026-11/summary`),
+    ).toHaveLength(0);
+    await expectNoAxeViolations(view.container);
+    onlineManager.setOnline(true);
+    expect(await screen.findByTestId("total-remaining")).toHaveTextContent(
+      "$164.45",
+    );
+    expect(screen.queryByTestId("offline")).toBeNull();
+  });
+
+  it("overview: the recent list says so when only the summary is cached", async () => {
+    const reply = deferred<ReturnType<typeof json>>();
+    const api = mockApi({
+      ...base,
+      [`GET /budgets/${BUDGET_ID}`]: () => reply.promise,
+      [`GET ${TX}`]: json(200, {
+        items: [transaction(1, { payee: "Corner Market" })],
+        nextCursor: null,
+      }),
+    });
+    const view = renderWithApp(
+      <BudgetLayout budgetId={BUDGET_ID} active="overview">
+        <OverviewScreen />
+      </BudgetLayout>,
+      { path: `/budgets/${BUDGET_ID}` },
+    );
+    view.client.setQueryData(keys.summary(BUDGET_ID, "2026-11"), summary);
+    onlineManager.setOnline(false);
+    reply.resolve(json(200, budget));
+    expect(await screen.findByTestId("total-remaining")).toHaveTextContent(
+      "$164.45",
+    );
+    expect(await screen.findByTestId("offline")).toHaveTextContent(
+      "You're offline. Recent transactions will appear when you reconnect.",
+    );
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(api.find("GET", TX)).toHaveLength(0);
+    onlineManager.setOnline(true);
+    expect(await screen.findByText("Corner Market")).toBeInTheDocument();
+    expect(screen.queryByTestId("offline")).toBeNull();
+  });
+
+  it("transactions: says so instead of loading forever, then lists them", async () => {
+    const api = mockApi({
+      ...base,
+      [`GET /budgets/${BUDGET_ID}`]: goOffline,
+      [`GET ${TX}`]: json(200, {
+        items: [transaction(1, { payee: "Corner Market" })],
+        nextCursor: null,
+      }),
+    });
+    const view = renderWithApp(
+      <BudgetLayout budgetId={BUDGET_ID} active="transactions">
+        <TransactionsScreen />
+      </BudgetLayout>,
+      { path: TX },
+    );
+    const box = await screen.findByTestId("offline");
+    expect(box).toHaveTextContent(
+      "You're offline. Transactions will appear when you reconnect.",
+    );
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(api.find("GET", TX)).toHaveLength(0);
+    await expectNoAxeViolations(view.container);
+    onlineManager.setOnline(true);
+    expect(await screen.findByText("Corner Market")).toBeInTheDocument();
+    expect(screen.queryByTestId("offline")).toBeNull();
   });
 });
 

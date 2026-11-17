@@ -90,4 +90,6 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - osv-scanner v2.7.1 uses `effectiveUntil` (`ignoreUntil` is deprecated) and rejects unknown keys, so a misspelled expiry fails the scan instead of becoming permanent.
   - Ignores are keyed by advisory ID, not package scope. Before any extension, re-run `pnpm why <pkg> --prod` in backend/ and frontend/. Any extension needs a fresh sign-off.
 
+- **Offline and F-62 review 2026-11-17 (`fix/offline-and-f62`): approve.** F-62 verified and closed with an **accepted residual (my call, no owner decision)**: a stale V8 header that is a whole-line prefix of the current one (message cut at a line break after the first `.stack` read). Reasons: no trigger, F-59 bounds, and an `Error.prepareStackTrace` hook is worse. Re-open if code mutates `.message`/`.name` on existing errors, sets `prepareStackTrace`, or messages start carrying multi-line user text. The `[CODE]` header form adds nothing. New F-63 (Low, web, open). Offline "online to save": no new risk.
+
 Related: [[project-review-hotspots]]
