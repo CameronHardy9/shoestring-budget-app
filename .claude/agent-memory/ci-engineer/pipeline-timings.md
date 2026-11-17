@@ -1,6 +1,6 @@
 ---
 name: pipeline-timings
-description: Local timings of make setup/check/e2e/audit/image/image-smoke: zero packages (2026-11-12), db/ only (2026-11-13), backend+db (2026-11-14), make test worker budget and full suites incl. e2e 9 min (2026-11-16)
+description: Local timings of make setup/check/e2e/audit/image/image-smoke: zero packages (2026-11-12), db/ only (2026-11-13), backend+db (2026-11-14), make test worker budget and full suites incl. e2e 9 min (2026-11-16), app+migrate image sizes (2026-11-17)
 metadata:
   type: project
 ---
@@ -19,3 +19,5 @@ make test worker budget (2026-11-16, 4 test packages incl. tests/ unit, 8-core M
 **How to apply:** compare against new runs after packages are added. If check grows past a few minutes, look at per-package lint/test first. See [[environment-pitfalls]].
 
 Full suites (2026-11-16, tests/ complete, e2e edge added, load avg ~10 from parallel agents): make e2e 9m11s (stack healthy 14s, Vitest API 1408 tests 245s, Playwright 54 tests 4.0m, visual 24 shots 38s in the container) · make e2e-up 17s · make check 76s · make audit 64s · make image 33s · make image-smoke 41s. CI e2e job timeout is 20 min; watch it if suites keep growing.
+
+Pre-deploy pass (2026-11-17, @shoestring/db moved to backend devDependencies, migrate image added): app image 279 MB (62.5 MB gzip, /app 49 MB; was 74 MB gzip) · migrate image 267 MB (66 MB gzip, /app 32 MB, mostly the dbmate binary), build 2 s cached / 8-13 s after a db/ change · make image-smoke 51 s warm (150 s when both images rebuild) · make check 2m35s · make audit 86s.

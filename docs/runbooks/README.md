@@ -13,6 +13,16 @@ Production commands are run by the **owner** only. Agents prepare them.
 | Backup retention | Deleted at **34 days** by lifecycle (always gone within 35) | Purged user data is gone everywhere within 30 + 35 days (data-model.md "Deletion and purge"). |
 | Availability | Best effort; SLO "record a transaction succeeds" 99.5% / 30 days | Defined in docs/ARCHITECTURE.md |
 
+## Images
+CI builds every image (linux/amd64 only; a Mac build is arm64 and is never published) and pushes it to GHCR. Deploys copy the **digest** to the Artifact Registry repo `shoestring` (us-east1) with `crane copy` and deploy by digest, never by tag, never rebuilt. All three GHCR packages are **public** (owner ruling 2026-11-17; free private storage is only 500 MB), so `crane digest`/`crane copy` from GHCR need no credentials (no `read:packages` token); only AR needs `gcloud auth configure-docker`. They contain no secrets, and the app image's SPA is public anyway. GHCR paths are lowercase: `GH_REPO_LC=$(printf '%s' "$GH_REPO" | tr '[:upper:]' '[:lower:]')` (the repo slug has capitals; bash 3.2 has no `${,,}`).
+| Image | GHCR | AR package | Runs | Updated by |
+|---|---|---|---|---|
+| App (Dockerfile target `runtime`) | `ghcr.io/$GH_REPO_LC:sha-<sha>` | `app` | service `shoestring`; jobs `shoestring-purge`, `shoestring-admin`, `shoestring-rewrap-mfa` (command `/nodejs/bin/node,/app/dist/admin.js`) | every deploy (deploy.md steps 4 and 6); rollback.md |
+| Migrate (target `migrate`) | `ghcr.io/$GH_REPO_LC-migrate:sha-<sha>` | `migrate` | job `shoestring-migrate` only; its entrypoint runs the migration (no command or args) | every deploy, **same SHA as the app** (deploy.md step 3); never on rollback |
+| Backup (`Dockerfile.backup`) | `ghcr.io/$GH_REPO_LC-backup:sha-<sha>` | `backup` | job `shoestring-backup` only | the owner, by hand (bootstrap-production.md step 12g) |
+
+The app image holds nothing of `db/`. `db/roles.sql` is only in the migrate image and the repo, so runbooks that run it by hand (bootstrap step 8, restore.md step 5) take it from a repo checkout. Registry cleanup: infra/artifact-registry/cleanup-policy.json (billing-protection.md §5).
+
 ## Restore drill record
 A restore drill must pass **before launch** and then every quarter, and after any change to the backup workflow or the Postgres major version.
 | Date | Backup restored (object name) | Target | Time to restore (RTO evidence) | Row-count check | Result | By |
@@ -67,7 +77,7 @@ Encryption at rest: Neon's disk encryption (provider), Cloud Storage's default e
 | Item | Design |
 |---|---|
 | Scheduler | **Cloud Scheduler** job `shoestring-purge-daily`, `0 8 * * *` UTC (1st of 3 free jobs; `shoestring-backup-nightly` is the 2nd, leaving 1 spare) |
-| Runs | Cloud Run Job `shoestring-purge`: the **same image** as the service, command `node dist/admin.js purge --yes`, its own service account `shoestring-purge@` with **`DATABASE_URL` only** (F-02). Output and logs are **counts only** (OD-3). |
+| Runs | Cloud Run Job `shoestring-purge`: the **same image** as the service, command `/nodejs/bin/node /app/dist/admin.js purge --yes` (no `node` on the distroless PATH), its own service account `shoestring-purge@` with **`DATABASE_URL` only** (F-02). Output and logs are **counts only** (OD-3). |
 | Why not GitHub Actions cron | It would copy a production database credential into GitHub, and its logs are public. It can also be delayed, or disabled after 60 days. Cloud Scheduler keeps the secret in GCP. Other admin commands **never** run in GitHub Actions (OD-3). |
 | Image kept current | The deploy updates the job's image to the new digest right after traffic moves (deploy.md step 6). |
 | Idempotent | Yes (admin-commands.md), so a retry or a manual re-run is safe. `--max-retries=1`. |

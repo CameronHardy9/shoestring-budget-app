@@ -92,4 +92,8 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
 
 - **Offline and F-62 review 2026-11-17 (`fix/offline-and-f62`): approve.** F-62 verified and closed with an **accepted residual (my call, no owner decision)**: a stale V8 header that is a whole-line prefix of the current one (message cut at a line break after the first `.stack` read). Reasons: no trigger, F-59 bounds, and an `Error.prepareStackTrace` hook is worse. Re-open if code mutates `.message`/`.name` on existing errors, sets `prepareStackTrace`, or messages start carrying multi-line user text. The `[CODE]` header form adds nothing. New F-63 (Low, web, open). Offline "online to save": no new risk.
 
+- **Pre-deploy pass 2026-11-17 (`chore/pre-deploy`): approve.** F-43 closed, F-47 still closed (checked on the built images). New Lows F-64 (restore roles.sql SHA provenance) and F-65 (V26 must measure both public paths), both for sre.
+  - **Owner ruling: the GHCR packages (app, migrate, backup) are public.** I ruled it adds no exposure: no secret build args, and the backend maps are public code and never served. Re-check when the publish workflow lands (main only, scoped `packages: write`, no secret build args because of `provenance: mode=max`, attestations preferred).
+  - The separate migrate image is accepted as a least-privilege improvement. Admin job default args `purge,--dry-run` are read-only (the transaction rolls back), so that is fine.
+
 Related: [[project-review-hotspots]]

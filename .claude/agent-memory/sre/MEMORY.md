@@ -1,3 +1,3 @@
-- [Hosting decision](project_hosting_proposal.md) — Cloud Run + Neon + Cloudflare DNS; backup job, APP_KEYRING, R-12 args; pitfalls
+- [Hosting decision](project_hosting_proposal.md) — Cloud Run + Neon + Cloudflare DNS; 3 images (app/migrate/backup); pitfalls incl. no node on PATH
 - [Owner constraints](owner_constraints.md) — $0 hard, card only with caps, no staging, RPO 24h, owner runs all prod commands
 - [Sentry free plan](project_sentry_free_plan.md) — Developer limits, alert-builder pitfalls, 2026-11-17 bootstrap lessons (UI-only token, env auto-create, CLI)

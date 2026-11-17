@@ -61,7 +61,7 @@ Then update the pinned version in deploy/cloudrun/*.yaml (once it exists), or th
 | `shoestring-app-keyring` | See "Application keyring" below | — | **Never replace it in place.** Add a key, rewrap, and remove the old key only when nothing uses it. |
 | Backup heartbeat URL (plain env, not a secret) | Better Stack → heartbeat → regenerate | Regenerating | `gcloud run jobs update shoestring-backup --update-env-vars BACKUP_HEARTBEAT_URL=<new url> --region "$REGION" --project "$PROJECT"` |
 | Backup `age` key pair | `age-keygen` on your Mac (bootstrap-production.md step 7), into vault A + offline copy | Keep the **old private key for 35 days** after the last dump made with it, then delete both copies | `gcloud run jobs update shoestring-backup --update-env-vars BACKUP_AGE_RECIPIENT=age1... --region "$REGION" --project "$PROJECT"`. Run a restore drill with the new key. |
-| Sentry DSN (not secret) | Sentry → project → Client Keys → new key | Disable the old key after the new one is live | **SPA (`shoestring-web`):** `gh variable set SENTRY_DSN_WEB --repo "$GH_REPO" --body "<new>"`, then re-run CI on `main` (`gh workflow run ci.yml --ref main`), because the DSN is baked into the bundle. Then deploy that build (deploy.md). **API (`shoestring-api`):** `gcloud run services update shoestring --update-env-vars SENTRY_DSN=<new> --region "$REGION" --project "$PROJECT"`, and the same `gcloud run jobs update … --update-env-vars` on the migrate, purge, admin and rewrap-mfa jobs. **Both DSNs must stay in the same Sentry org.** The backend derives the CSP `connect-src` host from `SENTRY_DSN`, so the SPA's ingest host must match it (bootstrap step 11b, S5 check). Verify with deploy.md smoke checks 1 and 4. |
+| Sentry DSN (not secret) | Sentry → project → Client Keys → new key | Disable the old key after the new one is live | **SPA (`shoestring-web`):** `gh variable set SENTRY_DSN_WEB --repo "$GH_REPO" --body "<new>"`, then re-run CI on `main` (`gh workflow run ci.yml --ref main`), because the DSN is baked into the bundle. Then deploy that build (deploy.md). **API (`shoestring-api`):** `gcloud run services update shoestring --update-env-vars SENTRY_DSN=<new> --region "$REGION" --project "$PROJECT"`, and the same `gcloud run jobs update … --update-env-vars` on the purge, admin and rewrap-mfa jobs (not migrate: it has no Sentry SDK and no `SENTRY_DSN`). **Both DSNs must stay in the same Sentry org.** The backend derives the CSP `connect-src` host from `SENTRY_DSN`, so the SPA's ingest host must match it (bootstrap step 11b, S5 check). Verify with deploy.md smoke checks 1 and 4. |
 | Sentry org auth token `SENTRY_AUTH_TOKEN` (GitHub environment secret; source-map upload only) | Sentry → Org Settings → Developer Settings → Organization Tokens → **Create New Token** `shoestring-ci-sourcemaps-<date>` | Revoke the old token on the same page after the next upload succeeds | `gh secret set SENTRY_AUTH_TOKEN --env sentry --repo "$GH_REPO"` (paste at the prompt; environment `sentry`, `main` only). Verify: the next main build's upload step passes, and the release shows an artifact bundle (deploy.md smoke check 6). Rotate at once if it ever appears in a log. |
 | WIF identity (deployer) | No keys exist | On suspected abuse: `gcloud iam workload-identity-pools providers update-oidc github-oidc --workload-identity-pool github --location global --project "$PROJECT" --disabled` (verify flag) | Re-enable with `--no-disabled` once the cause is fixed. |
 
@@ -69,8 +69,27 @@ Then update the pinned version in deploy/cloudrun/*.yaml (once it exists), or th
 Format and rules: docs/contracts/data-model.md "Application keyring". In short:
 - JSON `{"current":"k2","keys":{"k1":"<base64>","k2":"<base64>"}}`, each key exactly 32 random bytes.
 - New TOTP and recovery-code rows use `current`; existing rows record their key ID.
-- Throttle keys and cursor MACs always use `current`. Rotating therefore orphans at most 24 h of rate-limit counters and sends paging clients back to page 1. Harmless.
+- Throttle keys and cursor MACs always use `current`. Changing `current` (stage 1 only; stages 2 and 3 don't) therefore **resets every persistent rate limit and lockout** and sends paging clients back to page 1. Details below.
 - `GET /api/readyz` **fails if any row references a key ID missing from the keyring**. The candidate gate in step 2 therefore blocks a rotation that dropped a key still in use.
+
+### Effect on rate limits and lockouts (read before stage 1)
+The persistent counters in `auth_throttles` are keyed by `HMAC(throttle-v1 subkey of the current key, scope + IP, email or user ID)` (backend/src/http/rate-limit.ts `Throttles.key`), so no raw IP, email or user ID is stored. When stage 1's revision takes traffic, every new request computes a **different** key, so the old rows are never matched again (they expire and are purged). In effect, all of these **start from zero**:
+- login limits per IP, per email and IP pair, and per email per day, so an account locked out after failed logins is **unlocked**
+- the MFA failure budget (20 per user per 24 h) and the per-scope MFA throttles
+- signup per IP, password-reset requests and completions per IP and per email, email-change requests, invitations per budget and per user, data exports per user
+- the once-a-day "login throttled" and "MFA locked" notice emails, so a user under attack may get a **second** notice the same day
+
+Not affected: the daily email budget (`EMAIL_DAILY_QUOTA`) and its 60%/100% alerts, which use a fixed unkeyed hash, and the in-memory per-IP and per-user write limits (they reset on every new revision anyway). Per-session and per-token MFA attempt slots are stored on the session or token itself, so they survive too.
+
+What to do:
+- **Rotate in a quiet window:** a low-traffic hour (late evening US time), outside 08:00–09:30 UTC. Say in your admin log when stage 1 went live.
+- **Not during an active attack.** If Sentry or the logs show a burst of `RATE_LIMITED` (429) responses or lockouts in the last 24 h, wait until it has stopped, because rotating hands the attacker a fresh budget. Check with:
+  ```sh
+  gcloud logging read 'resource.labels.service_name="shoestring" AND jsonPayload.status=429' \
+    --project "$PROJECT" --freshness 1d --limit 20 --format 'value(timestamp,jsonPayload.route,jsonPayload.code)'
+  ```
+- **Emergency rotation during an attack** (the keyring is suspected exposed): rotate anyway, because a leaked key is worse than reset counters. Then watch the same query for the next 24 h; the limits rebuild from the first new failure. Tell the tech lead, so security-reviewer knows the lockouts were reset.
+- Users who were locked out can sign in again straight away. No action is needed for them.
 
 The keyring is built and edited with `jq` straight from Secret Manager to Secret Manager. **Its value never appears on screen or in process arguments.** Before starting, turn off Handoff and pause clipboard managers (bootstrap-production.md "How to use", F-40), because the escrow update goes through the clipboard. The only copy outside GCP is the escrow in **vault B** (never vault A with the `age` key; never with backups).
 

@@ -20,9 +20,6 @@ importers:
       '@node-rs/argon2':
         specifier: 2.2.2
         version: 2.2.2
-      '@shoestring/db':
-        specifier: workspace:*
-        version: link:../db
       '@simplewebauthn/server':
         specifier: 14.1.0
         version: 14.1.0
@@ -48,6 +45,9 @@ importers:
       '@sentry/node':
         specifier: 11.10.0
         version: 11.10.0
+      '@shoestring/db':
+        specifier: workspace:*
+        version: link:../db
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2

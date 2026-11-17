@@ -136,7 +136,7 @@ These bound the worst case while the cap reacts. The service and job limits are 
 | Resource | Setting |
 |---|---|
 | Service `shoestring` | `--min-instances=0 --max-instances=2 --concurrency=20 --cpu=1 --memory=512Mi --timeout=30s --cpu-boost`, request-based billing (never `--no-cpu-throttling`) |
-| Jobs `shoestring-migrate`, `-purge`, `-admin` | `--tasks=1 --parallelism=1 --max-retries=1 --task-timeout=10m --cpu=1 --memory=512Mi` |
+| Jobs `shoestring-migrate`, `-purge`, `-admin`, `-rewrap-mfa`, `-backup` | `--tasks=1 --parallelism=1 --cpu=1 --memory=512Mi`. Retries and timeouts per job (bootstrap-production.md step 12): migrate 0 retries / 10 min, purge 1 / 10 min, admin 0 / 5 min, rewrap-mfa 0 / 15 min, backup 1 / 15 min |
 
 **Project quota (console, verify the quota names):**
 1. Console → **IAM & Admin → Quotas & System Limits**, project `shoestring-prod-<suffix>`.
@@ -174,7 +174,7 @@ gcloud artifacts repositories set-cleanup-policies shoestring --project="$PROJEC
 gcloud artifacts repositories set-cleanup-policies shoestring --project="$PROJECT" \
   --location="$REGION" --policy=infra/artifact-registry/cleanup-policy.json --no-dry-run
 ```
-The policy keeps anything tagged `prod-*` (the deploy moves `prod-current` and `prod-previous`), keeps the 3 newest, and deletes untagged images after 1 day and everything else after 7 days. Policies run about once a day, and storage is billed per GB-month, so short peaks are fine.
+The policy keeps anything tagged `prod-*` in any package (the deploy moves `app:prod-current`, `app:prod-previous` and `migrate:prod-current`; the owner sets `backup:prod-backup`), keeps the 3 newest `app` and `backup` versions and the 2 newest `migrate` versions, and deletes untagged images after 1 day and everything else after 7 days. Keep rules win over delete rules. The migrate image shares the pinned distroless base layers with the app image, so each one adds only its own ~33 MB (uncompressed) layer, and less if `db/` didn't change (verify with `sizeBytes` after the first two deploys). Policies run about once a day, and storage is billed per GB-month, so short peaks are fine.
 
 **Verify:**
 ```sh

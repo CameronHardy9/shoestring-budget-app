@@ -5,9 +5,17 @@
     "condition": { "tagState": "TAGGED", "tagPrefixes": ["prod-"] }
   },
   {
-    "name": "keep-3-most-recent",
+    "name": "keep-3-most-recent-app-backup",
     "action": { "type": "Keep" },
-    "mostRecentVersions": { "keepCount": 3 }
+    "mostRecentVersions": {
+      "packageNamePrefixes": ["app", "backup"],
+      "keepCount": 3
+    }
+  },
+  {
+    "name": "keep-2-most-recent-migrate",
+    "action": { "type": "Keep" },
+    "mostRecentVersions": { "packageNamePrefixes": ["migrate"], "keepCount": 2 }
   },
   {
     "name": "delete-untagged-after-1d",

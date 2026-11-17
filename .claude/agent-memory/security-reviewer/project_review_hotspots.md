@@ -85,6 +85,12 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
     - **Bounded walks must fail closed at the cap.** `reachableErrors` counted non-Error objects toward 32 and stopped quietly, so an SDK-reported child could go unchecked (F-63). Check what counts toward a cap and what happens when it is hit.
     - Mutation `networkMode: "always"` removes queued writes; that's safer. Idempotency is `(user_id, key)` + request_hash with path params, so key reuse can't cross users or budgets.
 
+18. **Pre-deploy / runbook review (2026-11-17).**
+    - **`git show "$X:path"` with an empty `$X` reads the index copy**, and `git cat-file -e` passes too (verified). Any runbook that builds a revspec from a command's output needs a format check plus `merge-base --is-ancestor … origin/main`, especially when it runs as a privileged DB role (F-64).
+    - **`gcloud run services describe … .spec.template` is the latest revision, not the one taking traffic.** After a rollback they differ, so don't trust "serving SHA" claims built on it.
+    - **Hop counts apply to every public path.** `run.app` and the domain mapping both reach the service, so V26 must measure both and they must match (F-65).
+    - Inspect images, not scripts: `docker image inspect` (Env, Labels), `docker history --no-trunc`, and a node file walk with `--network none`. Check that the image's build time is after the last Dockerfile edit.
+
 **Why:** these were the non-obvious gaps that passed the architect's own review, including regressions introduced by fixes. **How to apply:** grep each diff for these spots before running the general checklist. Mark the F-number verified in FINDINGS.md when its regression test exists. When a fix adds a new token type or exemption, look for a chaining or ordering attack.
 
 Related: [[project-security-rulings]]

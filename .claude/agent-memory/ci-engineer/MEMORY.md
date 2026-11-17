@@ -1,2 +1,2 @@
-- [Environment pitfalls](environment-pitfalls.md): bash 3.2/make 3.81, corepack shim, .env read-deny, compose quirks, semgrep, pnpm traps, e2e edge client IP
-- [Pipeline timings](pipeline-timings.md): setup/check/e2e/audit/image timings by stage of the build-out; full e2e 9 min (2026-11-16)
+- [Environment pitfalls](environment-pitfalls.md): bash 3.2/make 3.81, corepack shim, .env read-deny, compose, semgrep, pnpm traps, e2e edge IP, migrate image/sslrootcert
+- [Pipeline timings](pipeline-timings.md): setup/check/e2e/audit/image timings by stage; full e2e 9 min; migrate image sizes (2026-11-17)

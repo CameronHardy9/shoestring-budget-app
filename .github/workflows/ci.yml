@@ -93,9 +93,10 @@ jobs:
       # Node toolchain or install is needed here.
       - run: make audit
 
-  # Prod-image smoke (ADR-0009): builds (does not push) the production image,
-  # then runs it with production-like config, no test hooks and a throwaway
-  # Postgres. Skips until backend/ exists. Publishing to a registry is a later
+  # Prod-image smoke (ADR-0009): builds (does not push) the production image
+  # and the migrate job image, migrates a throwaway Postgres with the migrate
+  # image, then runs the app image with production-like config and no test
+  # hooks. Skips until backend/ exists. Publishing to a registry is a later
   # release workflow.
   # On main (push or manual run on main; never a pull request, so never a fork)
   # the image's SPA gets its Sentry DSN.
@@ -116,6 +117,7 @@ jobs:
         with:
           persist-credentials: false
       - run: make image
+      - run: make image-migrate
       - run: make image-smoke
 
   # Private source-map upload to Sentry for this commit's release, main only.
