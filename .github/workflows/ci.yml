@@ -4,7 +4,10 @@ name: CI
 # Every third-party action is pinned to a full commit SHA (Dependabot keeps
 # them current). The only job that reads a secret is `sourcemaps`
 # (SENTRY_AUTH_TOKEN from the `sentry` environment, deployment branches: main),
-# which runs only on main (push or manual dispatch). `pull_request` (never
+# which runs only on main (push or manual dispatch). The only job with a write
+# permission is `publish` (packages, attestations, OIDC for signing), which runs
+# only on a push to main of this repository, runs no repository code, and
+# pushes the images the `image` job tested. `pull_request` (never
 # `pull_request_target`) gives fork PRs a read-only token and no secrets.
 
 on:
@@ -93,13 +96,16 @@ jobs:
       # Node toolchain or install is needed here.
       - run: make audit
 
-  # Prod-image smoke (ADR-0009): builds (does not push) the production image
-  # and the migrate job image, migrates a throwaway Postgres with the migrate
-  # image, then runs the app image with production-like config and no test
-  # hooks. Skips until backend/ exists. Publishing to a registry is a later
-  # release workflow.
+  # Prod-image smoke (ADR-0009): builds (does not push) the production image,
+  # the migrate job image and the backup job image, migrates a throwaway
+  # Postgres with the migrate image, runs the app image with production-like
+  # config and no test hooks, and round-trips an encrypted backup. Skips until
+  # backend/ exists.
   # On main (push or manual run on main; never a pull request, so never a fork)
   # the image's SPA gets its Sentry DSN.
+  # On a push to main it also hands the three tested images, unchanged, to the
+  # publish job (a 1-day artifact: the images are public once pushed anyway).
+  # This job keeps a read-only token; only publish can write packages.
   image:
     name: image
     permissions:
@@ -107,6 +113,11 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      app_id: ${{ steps.save.outputs.app_id }}
+      migrate_id: ${{ steps.save.outputs.migrate_id }}
+      backup_id: ${{ steps.save.outputs.backup_id }}
+      artifact: ${{ steps.save.outputs.artifact }}
     env:
       # Public by design (it ships in the bundle), so a variable, not a secret.
       # Job-wide so make image and make image-smoke (which rebuilds if needed)
@@ -118,7 +129,25 @@ jobs:
           persist-credentials: false
       - run: make image
       - run: make image-migrate
+      - run: make image-backup
       - run: make image-smoke
+      - name: Hand the tested images to publish
+        id: save
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+        env:
+          ARTIFACT: prod-images-${{ github.run_attempt }}
+        run: |
+          bash .github/scripts/image-save.sh "$RUNNER_TEMP/images/images.tar.gz"
+          echo "artifact=$ARTIFACT" >>"$GITHUB_OUTPUT"
+      - name: Upload the tested images (1 day)
+        if: steps.save.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.save.outputs.artifact }}
+          path: ${{ runner.temp }}/images/images.tar.gz
+          if-no-files-found: error
+          compression-level: 0 # already gzip
+          retention-days: 1
 
   # Private source-map upload to Sentry for this commit's release, main only.
   # The token is an environment secret of `sentry` (deployment branches: main),
@@ -126,8 +155,10 @@ jobs:
   # secret does not exist. The maps come from the Dockerfile's sourcemaps stage
   # with the same build arguments as the image job; they go only to Sentry,
   # never to a GitHub artifact (artifacts of this public repository are public).
-  # When a release workflow publishes the image, this upload moves into that
-  # job so the maps come from the published build itself.
+  # It stays separate from the publish job on purpose, so no job holds both the
+  # Sentry secret and a packages write token. The maps come from a second build
+  # of this commit on another runner; the SPA build is deterministic
+  # (content-hashed file names), so they match the published image's bundle.
   sourcemaps:
     name: sourcemaps
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -149,3 +180,157 @@ jobs:
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT_WEB: ${{ vars.SENTRY_PROJECT_WEB }}
         run: make sourcemaps-upload
+
+  # Publishes the images the image job tested, after check, e2e and audit pass:
+  #   ghcr.io/<owner>/<repo>:sha-<full sha>          app (service, purge, admin, rewrap-mfa)
+  #   ghcr.io/<owner>/<repo>-migrate:sha-<full sha>  migrate job
+  #   ghcr.io/<owner>/<repo>-backup:sha-<full sha>   backup job
+  # Paths are lowercase (the repo slug has capitals). No moving tags such as
+  # `latest`: sre deploys by digest (docs/runbooks/deploy.md).
+  # Push to main of this repository only: never a pull request, a manual run or
+  # a fork. No checkout: this job, the only one with a write token, runs no
+  # repository code. It loads the archive, refuses any image whose ID differs
+  # from what the image job tested, pushes, then attests each pushed digest
+  # (signed SLSA provenance via Sigstore; free for public repositories; it
+  # records the workflow, commit and run, not build arguments). Finally it pulls
+  # each digest back WITHOUT credentials and checks the image ID again: that is
+  # exactly what the owner's `crane copy` does, so it also proves the package
+  # is public.
+  # ONE-TIME OWNER STEP: assume each package is created PRIVATE on its first
+  # push. GitHub's docs disagree with each other (the Actions page says a
+  # package created with GITHUB_TOKEN inherits the repository's visibility; the
+  # access-control page says a personal-account package starts private and
+  # inherits access permissions "but not the visibility"). If the first run
+  # fails at "Pull back anonymously", then for each of the three packages
+  # (shoestring-budget-app, shoestring-budget-app-migrate,
+  # shoestring-budget-app-backup), open
+  # https://github.com/users/<owner>/packages/container/<package>/settings >
+  # Danger Zone > Change visibility > Public (there is no API for this), and
+  # "Re-run failed jobs" on that run. Later pushes keep the visibility.
+  publish:
+    name: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && !github.event.repository.fork
+    needs: [image, e2e, audit]
+    permissions:
+      packages: write # push to this repository's GHCR packages
+      id-token: write # Sigstore signing certificate for the attestations
+      attestations: write # store the attestations on this repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      APP_ID: ${{ needs.image.outputs.app_id }}
+      MIGRATE_ID: ${{ needs.image.outputs.migrate_id }}
+      BACKUP_ID: ${{ needs.image.outputs.backup_id }}
+    steps:
+      - name: Download the tested images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.image.outputs.artifact }}
+          path: ${{ runner.temp }}/images
+          # Fails on a digest mismatch with the upload (the default, made explicit).
+          digest-mismatch: error
+      - name: Load and check the image IDs
+        id: refs
+        run: |
+          set -euo pipefail
+          repo_lc="$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          app="ghcr.io/$repo_lc:sha-$GITHUB_SHA"
+          migrate="ghcr.io/$repo_lc-migrate:sha-$GITHUB_SHA"
+          backup="ghcr.io/$repo_lc-backup:sha-$GITHUB_SHA"
+          docker load --quiet --input "$RUNNER_TEMP/images/images.tar.gz"
+          check() { # check <ref> <expected id>
+            local got
+            [ -n "$2" ] || { echo "::error::no tested image ID for $1"; exit 1; }
+            got="$(docker image inspect --format '{{.Id}}' "$1")"
+            [ "$got" = "$2" ] || { echo "::error::$1 is $got, but the image job tested $2"; exit 1; }
+            echo "$1 = $got (tested)"
+          }
+          check "$app" "$APP_ID"
+          check "$migrate" "$MIGRATE_ID"
+          check "$backup" "$BACKUP_ID"
+          {
+            echo "app_name=ghcr.io/$repo_lc"
+            echo "migrate_name=ghcr.io/$repo_lc-migrate"
+            echo "backup_name=ghcr.io/$repo_lc-backup"
+          } >>"$GITHUB_OUTPUT"
+      - name: Push to GHCR
+        id: push
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          APP_NAME: ${{ steps.refs.outputs.app_name }}
+          MIGRATE_NAME: ${{ steps.refs.outputs.migrate_name }}
+          BACKUP_NAME: ${{ steps.refs.outputs.backup_name }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          push() { # push <output key> <image name>
+            local ref="$2:sha-$GITHUB_SHA" digest
+            docker push --quiet "$ref" >/dev/null
+            digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref" |
+              sed -n "s#^$2@##p" | head -n 1)"
+            case "$digest" in sha256:*) ;; *) echo "::error::no registry digest for $ref"; exit 1 ;; esac
+            echo "$1=$digest" >>"$GITHUB_OUTPUT"
+            echo "pushed $ref -> $2@$digest"
+          }
+          push app "$APP_NAME"
+          push migrate "$MIGRATE_NAME"
+          push backup "$BACKUP_NAME"
+      - name: Attest app
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.refs.outputs.app_name }}
+          subject-digest: ${{ steps.push.outputs.app }}
+      - name: Attest migrate
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.refs.outputs.migrate_name }}
+          subject-digest: ${{ steps.push.outputs.migrate }}
+      - name: Attest backup
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.refs.outputs.backup_name }}
+          subject-digest: ${{ steps.push.outputs.backup }}
+      - name: Pull back anonymously (public packages, same image)
+        env:
+          APP_NAME: ${{ steps.refs.outputs.app_name }}
+          MIGRATE_NAME: ${{ steps.refs.outputs.migrate_name }}
+          BACKUP_NAME: ${{ steps.refs.outputs.backup_name }}
+          APP_DIGEST: ${{ steps.push.outputs.app }}
+          MIGRATE_DIGEST: ${{ steps.push.outputs.migrate }}
+          BACKUP_DIGEST: ${{ steps.push.outputs.backup }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          failed=0
+          # verify <image name> <pushed digest> <tested image ID>
+          verify() {
+            local path="${1#ghcr.io/}" token got_digest got_id
+            # What `crane digest <name>:sha-<sha>` does, with no credential.
+            if ! token="$(curl -fsS --retry 3 "https://ghcr.io/token?scope=repository:$path:pull&service=ghcr.io" | jq -er .token)" ||
+              ! got_digest="$(curl -fsSI --retry 3 -H "Authorization: Bearer $token" -H "Accept: $accept" \
+                "https://ghcr.io/v2/$path/manifests/sha-$GITHUB_SHA" | tr -d '\r' |
+                sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: *//p')"; then
+              echo "::error::$1 is not readable without credentials. A package's first push creates it private. Make it public once (https://github.com/users/$GITHUB_REPOSITORY_OWNER/packages/container/${1##*/}/settings > Danger Zone > Change visibility > Public), then re-run this job."
+              failed=1
+              return 0
+            fi
+            if [ "$got_digest" != "$2" ]; then
+              echo "::error::$1:sha-$GITHUB_SHA resolves to '$got_digest', but this job pushed $2"
+              failed=1
+              return 0
+            fi
+            docker pull --quiet "$1@$2" >/dev/null
+            got_id="$(docker image inspect --format '{{.Id}}' "$1@$2")"
+            if [ "$got_id" = "$3" ]; then
+              echo "$1:sha-$GITHUB_SHA -> $2: public, image ID $got_id (the tested image)"
+            else
+              echo "::error::$1@$2 has image ID $got_id, but the image job tested $3"
+              failed=1
+            fi
+          }
+          verify "$APP_NAME" "$APP_DIGEST" "$APP_ID"
+          verify "$MIGRATE_NAME" "$MIGRATE_DIGEST" "$MIGRATE_ID"
+          verify "$BACKUP_NAME" "$BACKUP_DIGEST" "$BACKUP_ID"
+          exit "$failed"

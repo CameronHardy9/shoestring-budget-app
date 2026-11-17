@@ -17,7 +17,7 @@ release="$(image_release)"
 tag="$(migrate_image_tag)"
 
 log "Building migrate image $tag (APP_RELEASE=$release)"
-docker build --pull --build-arg "APP_RELEASE=$release" --target migrate --tag "$tag" .
+docker build --pull "${IMAGE_PLAIN[@]}" --build-arg "APP_RELEASE=$release" --target migrate --tag "$tag" .
 uid="$(docker image inspect --format '{{.Config.User}}' "$tag")"
 case "$uid" in "" | 0 | root | 0:*) die "migrate image runs as root (User='$uid')" ;; esac
 # The Cloud Run job sets no --command or --args: the image's own entrypoint

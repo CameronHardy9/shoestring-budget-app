@@ -66,3 +66,9 @@ Facts verified 2026-11-12 that shaped the pipeline scripts:
   - GHCR image paths must be lowercase; the repo slug has capitals (use `tr A-Z a-z`, bash 3.2 has no `${,,}`).
   - `CMD []` after ENTRYPOINT inspects as `null`; ENTRYPOINT alone already clears the base CMD.
   - `--user 0:0 --cap-drop ALL` cannot read the distroless nonroot user's 0700 /home/nonroot (root without DAC caps). Root scans in image-smoke use SCAN_HARDEN = HARDEN + `--cap-add DAC_READ_SEARCH` only (security Info item, 2026-11-17).
+
+- Image publishing (2026-11-17):
+  - GHCR package visibility: GitHub's docs contradict each other (Actions page: a GITHUB_TOKEN-created package inherits the repo's visibility; access-control page: a personal-account package starts private, inherits access "but not the visibility"). No REST API changes visibility; only the package settings page. Anonymous `https://ghcr.io/token?scope=repository:<path>:pull&service=ghcr.io` answers 403 for private AND nonexistent packages, 200 for public.
+  - Image ID differs by store: OrbStack (containerd snapshotter) `.Id` = manifest digest = pushed digest; GitHub runners (Docker 28, classic store) `.Id` = config digest, pushed digest differs. `docker pull <name>@<digest>` then `.Id` == tested ID holds in both (tested in docker:28-dind). `--provenance=false --sbom=false` keeps a single image manifest (no index) in either store.
+  - .dockerignore excludes deploy/, so the backup image builds with context deploy/backup (`-f Dockerfile.backup`).
+  - Editing ci.yml with a Python slice `s[:start] + new` silently dropped every job after the anchor (sourcemaps); actionlint and zizmor stay green. After any scripted workflow edit, diff the job list against HEAD. Python non-raw strings also eat `\`+newline in embedded shell.

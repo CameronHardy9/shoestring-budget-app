@@ -22,8 +22,14 @@
 #      is in /app/public or reachable over HTTP (they go to Sentry privately)
 #   8. with SENTRY_DSN set, the server starts (loads its bundled Sentry chunk)
 #      and the CSP names the DSN's ingest host
-# Builds either image first when it is not there yet (make image, make
-# image-migrate).
+#   B. the backup job image runs as non-root, holds bash, pg_dump (major >= 17),
+#      age, curl and the CA bundle and exactly deploy/backup/backup.sh, refuses
+#      missing config before doing anything, and with the read-only `backup`
+#      role from db/roles.sql: its own entrypoint dumps and encrypts the
+#      throwaway database (stopping at the upload, which needs GCP), and a
+#      pg_dump | age round trip decrypts to a dump listing every table
+# Builds any image first when it is not there yet (make image, make
+# image-migrate, make image-backup).
 source "$(dirname "$0")/lib.sh"
 require_docker
 command -v curl >/dev/null || die "curl is required"
@@ -42,6 +48,10 @@ migrate_tag="$(migrate_image_tag)"
 if ! docker image inspect "$migrate_tag" >/dev/null 2>&1; then
   bash "$ROOT/.github/scripts/image-migrate.sh"
 fi
+backup_tag="$(backup_image_tag)"
+if ! docker image inspect "$backup_tag" >/dev/null 2>&1; then
+  bash "$ROOT/.github/scripts/image-backup.sh"
+fi
 
 export COMPOSE_PROJECT_NAME=shoestring-smoke
 export POSTGRES_DB=shoestring_test
@@ -49,6 +59,7 @@ export POSTGRES_PORT="${SMOKE_POSTGRES_PORT:-55434}"
 SMOKE_PORT="${SMOKE_PORT:-58080}"
 APP_NAME="shoestring-smoke-app"
 MIGRATE_NAME="shoestring-smoke-migrate"
+BACKUP_NAME="shoestring-smoke-backup"
 NETWORK="${COMPOSE_PROJECT_NAME}_default"
 BASE="http://127.0.0.1:$SMOKE_PORT"
 # Postgres only: migrations come from the migrate image, not the dev compose
@@ -58,6 +69,10 @@ PROFILE_ARGS=()
 # Fresh throwaway credentials, passed to containers by name (-e VAR), so values
 # never appear in argv or logs.
 export_throwaway_credentials
+# The read-only backup role's password (db/roles.sql creates the role without
+# one; the smoke sets it as the superuser before the backup checks).
+BACKUP_DB_PASSWORD="$(rand_hex 24)"
+export BACKUP_DB_PASSWORD
 # Production-like config. APP_ORIGIN is a reserved .test name (RFC 6761); the
 # database is the compose service (a local host, so no sslmode=verify-full).
 # EMAIL_API_KEY is a dummy: nothing in the smoke sends email.
@@ -100,7 +115,7 @@ cleanup() {
     log "Last app logs"
     docker logs --tail 60 "$APP_NAME" 2>&1 || true
   fi
-  docker rm -f "$APP_NAME" "$MIGRATE_NAME" shoestring-smoke-refuse >/dev/null 2>&1 || true
+  docker rm -f "$APP_NAME" "$MIGRATE_NAME" "$BACKUP_NAME" shoestring-smoke-refuse >/dev/null 2>&1 || true
   compose_test down --remove-orphans >/dev/null 2>&1 || true
   exit "$rc"
 }
@@ -279,7 +294,7 @@ run_migrate() {
 # no_secrets_in <label> <text>: none of this run's passwords or URLs was printed.
 no_secrets_in() {
   local v leaked=""
-  for v in POSTGRES_PASSWORD APP_DB_PASSWORD MIGRATOR_DB_PASSWORD; do
+  for v in POSTGRES_PASSWORD APP_DB_PASSWORD MIGRATOR_DB_PASSWORD BACKUP_DB_PASSWORD; do
     if printf '%s' "$2" | grep -qF "${!v}"; then leaked="$leaked $v"; fi
   done
   if [ -z "$leaked" ]; then pass "$1: no credential in the output"; else fail "$1: printed$leaked"; fi
@@ -302,6 +317,61 @@ else
   fail "remote MIGRATOR_DATABASE_URL without verify-full: expected a refusal (exit $m_rc)"
 fi
 no_secrets_in "refusal" "$m_out"
+
+# --- B. the backup job image (no database needed) --------------------------------
+log "Backup image ($backup_tag)"
+# run_backup <docker args...> [-- <command args>]: runs the backup image hardened
+# like the Cloud Run job would be (read-only root, in-memory /tmp). Sets b_rc
+# and b_out.
+run_backup() {
+  set +e
+  b_out="$(docker run --rm --name "$BACKUP_NAME" "${HARDEN[@]}" "$@" 2>&1)"
+  b_rc=$?
+  set -e
+}
+run_backup --network none --entrypoint id "$backup_tag" -u
+if [ "$b_rc" -eq 0 ] && [ "$b_out" != 0 ]; then pass "backup image runs as uid $b_out (non-root)"; else fail "backup image uid: $b_out (exit $b_rc)"; fi
+# Tools on PATH, the CA bundle (libpq's sslrootcert=system and curl), and the
+# entrypoint script byte for byte from deploy/backup/ (owned by sre), not
+# writable by the job user.
+tools_check='
+for c in bash pg_dump pg_restore age age-keygen curl; do command -v "$c" >/dev/null || echo "missing $c"; done
+[ -s /etc/ssl/certs/ca-certificates.crt ] || echo "missing /etc/ssl/certs/ca-certificates.crt"
+[ -w /usr/local/bin/backup.sh ] && echo "backup.sh is writable by uid $(id -u)"
+echo "sha256 $(sha256sum /usr/local/bin/backup.sh | cut -d " " -f 1)"
+echo "version $(pg_dump --version)"
+'
+run_backup --network none --entrypoint bash "$backup_tag" -c "$tools_check"
+problems="$(printf '%s\n' "$b_out" | grep -E '^(missing|backup.sh is writable)' || true)"
+if [ "$b_rc" -eq 0 ] && [ -z "$problems" ]; then
+  pass "backup image: bash, pg_dump, pg_restore, age, age-keygen, curl, CA bundle"
+else
+  fail "backup image tools (exit $b_rc): $(printf '%s' "$problems" | paste -sd ';' -)"
+fi
+want_sum="$(_sha256 <"$ROOT/deploy/backup/backup.sh" | cut -d ' ' -f 1)"
+expect "backup image: entrypoint is deploy/backup/backup.sh (sha256)" "$want_sum" \
+  "$(printf '%s\n' "$b_out" | sed -n 's/^sha256 //p')"
+pg_version="$(printf '%s\n' "$b_out" | sed -n 's/^version pg_dump (PostgreSQL) //p')"
+pg_major="${pg_version%%.*}"
+case "$pg_major" in
+  '' | *[!0-9]*) fail "backup image: could not read the pg_dump version" ;;
+  *) if [ "$pg_major" -ge 17 ]; then pass "backup image: pg_dump $pg_version (major >= 17)"; else fail "backup image: pg_dump $pg_version, need major >= 17 (Neon is 17)"; fi ;;
+esac
+# Missing required config: the entrypoint stops at once with a clear message,
+# before any connection (no network at all here).
+run_backup --network none "$backup_tag"
+if [ "$b_rc" -ne 0 ] && printf '%s' "$b_out" | grep -qF "BACKUP_DATABASE_URL is required"; then
+  pass "backup: no config, refused (exit $b_rc)"
+else
+  fail "backup: no config, expected \"BACKUP_DATABASE_URL is required\" (exit $b_rc)"
+fi
+run_backup --network none -e "BACKUP_DATABASE_URL=postgres://backup:dummy-not-a-password@db.shoestring.test/x" \
+  -e BACKUP_BUCKET=shoestring-backups-smoke "$backup_tag"
+if [ "$b_rc" -ne 0 ] && printf '%s' "$b_out" | grep -qF "BACKUP_AGE_RECIPIENT is required"; then
+  pass "backup: no age recipient, refused (exit $b_rc)"
+else
+  fail "backup: no age recipient, expected \"BACKUP_AGE_RECIPIENT is required\" (exit $b_rc)"
+fi
 
 log "Starting throwaway Postgres (project $COMPOSE_PROJECT_NAME)"
 compose_test up -d --wait --quiet-pull postgres >/dev/null
@@ -331,6 +401,60 @@ else
   fail "job-shaped run failed (exit $m_rc)"
 fi
 note "Database migrated after $(elapsed)"
+
+# --- B. backup against the migrated database --------------------------------------
+log "Backup with the read-only backup role ($backup_tag)"
+# roles.sql creates `backup` without a password (production sets it on Neon).
+# Set this run's throwaway one as the superuser, through stdin (never argv).
+printf "ALTER ROLE backup PASSWORD '%s';\n" "$BACKUP_DB_PASSWORD" |
+  compose_test exec -T postgres psql -q -v ON_ERROR_STOP=1 -U postgres -d "$POSTGRES_DB" >/dev/null
+export BACKUP_DATABASE_URL="postgres://backup:${BACKUP_DB_PASSWORD}@postgres:5432/$POSTGRES_DB"
+# 1. The real entrypoint, configured like the job (a throwaway public key, a
+#    fake bucket). pg_dump | age must succeed and pass the size floor; the run
+#    then stops at the access-token request, because the metadata server only
+#    exists on GCP (pinned to this container's own closed port 80 here, so
+#    nothing leaves the machine). Reaching that request proves the dump stage.
+smoke_recipient="$(docker run --rm --network none "${HARDEN[@]}" --entrypoint bash "$backup_tag" \
+  -c 'age-keygen 2>/dev/null | age-keygen -y')"
+run_backup --network "$NETWORK" --add-host metadata.google.internal:127.0.0.1 \
+  -e BACKUP_DATABASE_URL -e BACKUP_BUCKET=shoestring-backups-smoke -e "BACKUP_AGE_RECIPIENT=$smoke_recipient" \
+  "$backup_tag"
+printf '%s\n' "$b_out" | sed 's/^/    | /'
+no_secrets_in "backup entrypoint" "$b_out"
+if [ "$b_rc" -ne 0 ] && printf '%s' "$b_out" | grep -qF "metadata.google.internal" &&
+  ! printf '%s' "$b_out" | grep -qE "smaller than|pg_dump:|age:"; then
+  pass "backup entrypoint: dumped and encrypted, then stopped at the GCP token request (exit $b_rc)"
+else
+  fail "backup entrypoint: expected the dump to pass and the run to stop at the metadata server (exit $b_rc)"
+fi
+# 2. Round trip in one container: the same pg_dump flags as backup.sh piped
+#    through age to a throwaway key in the in-memory /tmp, then decrypted
+#    straight into pg_restore --list. Plaintext never touches a file.
+roundtrip='
+set -euo pipefail
+umask 077
+age-keygen -o /tmp/key 2>/dev/null
+pg_dump --format=custom --no-owner --no-privileges --compress=6 --dbname="$BACKUP_DATABASE_URL" \
+  | age --encrypt --recipient "$(age-keygen -y /tmp/key)" >/tmp/dump.age
+echo "header $(head -c 21 /tmp/dump.age)"
+echo "bytes $(wc -c </tmp/dump.age | tr -d " ")"
+if grep -qa PGDMP /tmp/dump.age; then echo "plaintext dump marker in the ciphertext"; fi
+age --decrypt --identity /tmp/key /tmp/dump.age | pg_restore --list >/tmp/toc
+echo "tables $(grep -c " TABLE DATA public " /tmp/toc || true)"
+'
+run_backup --network "$NETWORK" -e BACKUP_DATABASE_URL --entrypoint bash "$backup_tag" -c "$roundtrip"
+no_secrets_in "backup round trip" "$b_out"
+n_tables="$(compose_test exec -T postgres psql -At -U postgres -d "$POSTGRES_DB" \
+  -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public'" | tr -d '[:space:]')"
+b_field() { printf '%s\n' "$b_out" | sed -n "s/^$1 //p"; }
+if [ "$b_rc" -ne 0 ]; then
+  printf '%s\n' "$b_out" | sed 's/^/    | /'
+  fail "backup round trip failed (exit $b_rc)"
+else
+  expect "backup round trip: age ciphertext" "age-encryption.org/v1" "$(b_field header)"
+  if printf '%s' "$b_out" | grep -q "plaintext dump marker"; then fail "backup round trip: PGDMP marker in the ciphertext"; else pass "backup round trip: no plaintext marker in $(b_field bytes) encrypted bytes"; fi
+  expect "backup round trip: decrypted dump lists every public table" "$n_tables" "$(b_field tables)"
+fi
 
 # start_app [docker env args...]: runs the image as $APP_NAME and waits for healthz.
 start_app() {

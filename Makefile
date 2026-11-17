@@ -6,7 +6,7 @@ SCRIPTS := .github/scripts
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev dev-lan dev-down dev-logs dev-reset \
-        lint typecheck test check e2e e2e-up e2e-down audit image image-migrate image-smoke sourcemaps-upload
+        lint typecheck test check e2e e2e-up e2e-down audit image image-migrate image-backup image-smoke sourcemaps-upload
 
 help: ## Show targets and the phone-testing recipe
 	@echo "Shoestring: canonical commands"
@@ -79,7 +79,10 @@ image: ## Build the production image (skips until backend/ exists; API-only unti
 image-migrate: ## Build the migrate job image (Dockerfile target migrate; skips until db/ exists)
 	@bash $(SCRIPTS)/image-migrate.sh
 
-image-smoke: ## Migrate a throwaway Postgres with the migrate image, then run and probe the app image (ADR-0009)
+image-backup: ## Build the backup job image (Dockerfile.backup: alpine, pg_dump 17, age, non-root)
+	@bash $(SCRIPTS)/image-backup.sh
+
+image-smoke: ## Migrate a throwaway Postgres with the migrate image, probe the app image, round-trip a backup (ADR-0009)
 	@bash $(SCRIPTS)/image-smoke.sh
 
 sourcemaps-upload: ## Upload the SPA's source maps privately to Sentry (CI on main; skips without SENTRY_AUTH_TOKEN)

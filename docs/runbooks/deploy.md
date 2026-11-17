@@ -14,14 +14,15 @@ To release a commit on `main` whose CI run is green. One release at a time. Avoi
   - Always the **same SHA** for both: the app's `/api/readyz` requires the newest migration its build ships with.
 - Any migration in the release is **expand-only**: the currently serving version must keep working against the new schema (data-engineer's checklist). Otherwise stop; rollback would not be safe.
 - **If the release changes `db/roles.sql`** (`git diff --stat <serving sha> <new sha> -- db/roles.sql` prints anything): run it as the database **owner** before step 3, from a clean checkout at the new SHA (`git switch --detach <new sha>`; then `git status --porcelain db/roles.sql` must print nothing, F-64), exactly as in bootstrap-production.md step 8 item 5 (`psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f db/roles.sql`; `unset OWNER_URL` afterwards). The migrate job re-runs it as `migrator` and fails closed if the owner's part (database grants, the F-44 revokes) is missing.
-- `gcloud`, `jq` and `crane` are installed; `gcloud auth login` done; `gcloud auth configure-docker us-east1-docker.pkg.dev` done once.
+- `gcloud`, `gh` (logged in; for `gh attestation verify`), `jq` and `crane` are installed; `gcloud auth login` done; `gcloud auth configure-docker us-east1-docker.pkg.dev` done once.
 
-## Steps: normal path (GitHub Actions)
+## Steps: normal path (GitHub Actions) [not available yet]
+`.github/workflows/deploy.yml` doesn't exist yet: **use the manual path below for now.** Once it exists:
 ```sh
 gh workflow run deploy.yml -f sha="<full git sha>"
 gh run watch          # then approve the "production" environment when asked
 ```
-The workflow (ci-engineer writes `.github/workflows/deploy.yml` to this spec) runs exactly the manual steps below, using the `shoestring-deployer` identity through OIDC. Workflow constraints (F-16): `permissions: {}` except `id-token: write` and `contents: read` on the deploy job; environment `production`; **no `pnpm install` or checkout of app code** in the deploy job; actions pinned by SHA. The workflow never runs admin commands (OD-3).
+The workflow (ci-engineer writes `.github/workflows/deploy.yml` to this spec) runs exactly the manual steps below, using the `shoestring-deployer` identity through OIDC. Workflow constraints (F-16): `permissions: {}` except `id-token: write` and `contents: read` on the deploy job; environment `production`; **no `pnpm install` or checkout of app code** in the deploy job; actions pinned by SHA. The workflow never runs admin commands (OD-3). It must verify attestations exactly as the manual step 1 does (F-67). On its first run, successful auth confirms the token's subject matches the immutable-form binding (bootstrap step 6). If auth fails, **never widen the WIF binding to a `principalSet`** (F-66): stop and tell the tech lead.
 
 ## Steps: manual path (same commands, if the workflow is unavailable)
 ```sh
@@ -35,11 +36,16 @@ export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
 
 # 1. Copy both CI-built images (same SHA) to Artifact Registry. Same digests; never rebuild.
+#    MANDATORY (F-67): verify the attestation of each digest, then copy by @digest, never by tag.
+#    If `gh attestation verify` fails, the && skips the copy: STOP and tell the tech lead.
+ATTEST_FLAGS=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$SHA" --deny-self-hosted-runners)   # --source-digest: built from exactly $SHA (F-67 re-check)
 DIGEST=$(crane digest "$GHCR_IMAGE")
-crane copy "$GHCR_IMAGE" "$AR_REPO:sha-$SHA"
+gh attestation verify "oci://ghcr.io/$GH_REPO_LC@$DIGEST" "${ATTEST_FLAGS[@]}" \
+  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "$AR_REPO:sha-$SHA"
 IMAGE="$AR_REPO@$DIGEST"
 MIGRATE_DIGEST=$(crane digest "$GHCR_MIGRATE_IMAGE")
-crane copy "$GHCR_MIGRATE_IMAGE" "$MIGRATE_AR_REPO:sha-$SHA"
+gh attestation verify "oci://ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${ATTEST_FLAGS[@]}" \
+  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "$MIGRATE_AR_REPO:sha-$SHA"
 MIGRATE_IMAGE="$MIGRATE_AR_REPO@$MIGRATE_DIGEST"
 echo "$IMAGE"; echo "$MIGRATE_IMAGE"
 
@@ -77,7 +83,8 @@ curl -fsS -m 10 "$PUBLIC_URL/api/readyz" && echo
 gcloud run jobs update shoestring-purge --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-admin --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-rewrap-mfa --image "$IMAGE" --region "$REGION" --project "$PROJECT"
-# shoestring-backup uses its own image and is updated by the owner only (bootstrap step 12g)
+# shoestring-backup uses its own image and is NOT rolled here. Roll its digest when the image scan or
+# Dependabot flags the backup base or packages (F-68): bootstrap-production.md 12g, "Rolling the backup image".
 
 # 7. Protect the rollback target and the images the jobs use from the registry cleanup policy
 gcloud artifacts docker tags add "$PREV_IMAGE" "$AR_REPO:prod-previous"
