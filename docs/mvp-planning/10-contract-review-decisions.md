@@ -115,3 +115,11 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | /more loading layout shift; quick-add + ignored while the budget loads | **Follow-up frontend PR** after #14. |
 | 300 ms API p95 guard | **The EXPLAIN row-count check is enough** at beta scale; no API-level timing test. ARCHITECTURE updated to match. |
 | F-22 slow-mailer test hook | **Not added** (security: the 1 s pad floor test plus the mailer timeout test cover it, and a hook would widen the test-hook surface). |
+
+## Build round 7: loading tap targets (2026-11-16)
+| Topic | Decision |
+|---|---|
+| Quick-add chip order after "Save & new" | **Freeze the order while the sheet is open.** The just-used category moves to the front the next time quick-add opens, so no tap can land on a chip that moved. |
+| Recent-transactions query that sets chip order | **Prefetch it in BudgetLayout** so chips are usually ready when + is tapped (one extra small request per budget page; $0). |
+| Saving while the phone knows it's offline | **Fail fast** ("online to save"): Save fails at once with the offline message, the sheet keeps the entry, and the person saves again when back online. Separate frontend PR. |
+| Other screens showing an endless loader offline with nothing cached (Overview summary, Transactions, Categories, Sessions, Deleted budgets, Invitations, Security) | **Fix in the same offline PR**, so offline is handled consistently. |

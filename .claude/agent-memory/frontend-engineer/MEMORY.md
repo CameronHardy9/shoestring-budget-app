@@ -1,3 +1,3 @@
 - [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP hashes, Tailwind v4 ordering, React 19 lazy, jsdom navigation seam, ESLint fixture tests
-- [Build status](project-phase1-status.md) — owner decisions, MVP + pre-launch hardening done, device-only checks and open design items
+- [Build status](project-phase1-status.md) — owner decisions, MVP + hardening + lost-tap fixes, device-only checks, open items
 - [No .env secrets](feedback-no-env-secrets.md) — don't read seed passwords from .env for checks; use test hooks or ask

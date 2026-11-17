@@ -1,4 +1,5 @@
 // Phase 2b screens: behaviour against the contract, plus axe on each screen.
+import { onlineManager } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,9 @@ import {
   summary,
   uuid,
 } from "../test/fixtures.ts";
+import { deferred, tappableAfter } from "../test/layout.ts";
 import { renderWithApp } from "../test/render.tsx";
+import { SIGN_OUT_OFFLINE } from "../components/SignOutButton.tsx";
 import { BudgetLayout } from "./budget/BudgetLayout.tsx";
 import CategoriesScreen from "./budget/CategoriesScreen.tsx";
 import MembersScreen from "./budget/MembersScreen.tsx";
@@ -37,6 +40,7 @@ const budgetBase = {
 };
 
 afterEach(() => {
+  onlineManager.setOnline(true);
   document.documentElement.removeAttribute("data-theme");
   localStorage.clear();
 });
@@ -236,6 +240,51 @@ describe("members", () => {
         userId: uuid(902),
       });
     });
+  });
+
+  it("shows nothing tappable below the lists until both have loaded", async () => {
+    const list = deferred<ReturnType<typeof json>>();
+    const invites = deferred<ReturnType<typeof json>>();
+    renderOwnerMembers({
+      [`GET ${B}/members`]: () => list.promise,
+      [`GET ${B}/invitations`]: () => invites.promise,
+    });
+    const loading = await screen.findByTestId("loading");
+    const main = document.getElementById("main")!;
+    expect(tappableAfter(loading, main)).toEqual([]);
+    list.resolve(json(200, { items: members }));
+    expect(await screen.findByText("Alex (you)")).toBeInTheDocument();
+    expect(screen.queryByTestId("send-invitation")).toBeNull();
+    expect(screen.queryByTestId("delete-budget")).toBeNull();
+    invites.resolve(json(200, { items: [] }));
+    expect(await screen.findByTestId("send-invitation")).toBeInTheDocument();
+    expect(screen.getByTestId("delete-budget")).toBeInTheDocument();
+  });
+
+  it("offline before the lists load: offline messages, and the owner's sections still appear", async () => {
+    // The budget arrives just as the phone goes offline, so the member and
+    // invitation reads start paused (nothing cached).
+    const reply = deferred<ReturnType<typeof json>>();
+    const { api } = renderOwnerMembers({ [`GET ${B}`]: () => reply.promise });
+    await waitFor(() => {
+      expect(api.find("GET", B)).toHaveLength(1);
+    });
+    onlineManager.setOnline(false);
+    reply.resolve(json(200, budget));
+    const [membersSlot, invitesSlot] = await screen.findAllByTestId("offline");
+    expect(membersSlot).toHaveTextContent(
+      "You're offline. Members will appear when you reconnect.",
+    );
+    expect(invitesSlot).toHaveTextContent(
+      "You're offline. Invitations will appear when you reconnect.",
+    );
+    expect(screen.getByTestId("send-invitation")).toBeInTheDocument();
+    expect(screen.getByTestId("delete-budget")).toBeInTheDocument();
+    expect(api.find("GET", `${B}/members`)).toHaveLength(0);
+
+    onlineManager.setOnline(true);
+    expect(await screen.findByText("Alex (you)")).toBeInTheDocument();
+    expect(screen.getByTestId("delete-budget")).toBeInTheDocument();
   });
 
   it("shows a member only the list and Leave", async () => {
@@ -487,6 +536,69 @@ describe("account-level screens", () => {
         api.find("POST", `/me/deleted-budgets/${BUDGET_ID}/restore`),
       ).toHaveLength(1);
     });
+  });
+
+  it("adds the rows below the budget list on More only once it has loaded", async () => {
+    const reply = deferred<ReturnType<typeof json>>();
+    mockApi({ "GET /budgets": () => reply.promise });
+    const view = renderWithApp(<MoreScreen />, { path: "/more" });
+    const loading = screen.getByTestId("loading");
+    const main = document.getElementById("main")!;
+    // While the list's length is unknown, nothing follows it that it could
+    // push down: no settings rows, theme switch or Sign out yet.
+    expect(tappableAfter(loading, main)).toEqual([]);
+    expect(screen.queryByTestId("sign-out")).toBeNull();
+    await expectNoAxeViolations(view.container);
+    reply.resolve(
+      json(200, {
+        items: [budget, { ...budget, id: uuid(60), name: "Holiday fund" }],
+      }),
+    );
+    const newBudget = await screen.findByRole("link", { name: "New budget" });
+    const signOut = screen.getByTestId("sign-out");
+    expect(tappableAfter(newBudget, main)).toContain(signOut);
+    expect(screen.getByRole("link", { name: /Account/ })).toBeInTheDocument();
+  });
+
+  it("still offers settings and Sign out when the budget list fails", async () => {
+    mockApi({ "GET /budgets": apiError(500, "INTERNAL") });
+    renderWithApp(<MoreScreen />, { path: "/more" });
+    expect(await screen.findByTestId("error")).toBeInTheDocument();
+    expect(screen.getByTestId("sign-out")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Security/ })).toBeInTheDocument();
+  });
+
+  it("offline with nothing cached: says so, and Sign out stays reachable with F-51's offline message", async () => {
+    onlineManager.setOnline(false);
+    const api = mockApi({
+      "GET /budgets": json(200, { items: [budget] }),
+      "POST /auth/logout": new TypeError("Failed to fetch"),
+    });
+    const view = renderWithApp(<MoreScreen />, { path: "/more" });
+    // The read is paused (never sent, never failed), not loading forever.
+    const offline = await screen.findByTestId("offline");
+    expect(offline).toHaveTextContent(
+      "You're offline. Your budgets will appear when you reconnect.",
+    );
+    expect(offline).toHaveAttribute("role", "status");
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(api.find("GET", "/budgets")).toHaveLength(0);
+    expect(screen.getByRole("link", { name: /Account/ })).toBeInTheDocument();
+    await expectNoAxeViolations(view.container);
+
+    await userEvent.click(screen.getByTestId("sign-out"));
+    expect(await screen.findByTestId("sign-out-error")).toHaveTextContent(
+      SIGN_OUT_OFFLINE,
+    );
+
+    // Back online: the list replaces the offline box; the rows below stay.
+    const signOut = screen.getByTestId("sign-out");
+    onlineManager.setOnline(true);
+    expect(
+      await screen.findByRole("link", { name: "New budget" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("sign-out")).toBe(signOut);
+    expect(screen.queryByTestId("offline")).toBeNull();
   });
 
   it("switches the theme from More", async () => {

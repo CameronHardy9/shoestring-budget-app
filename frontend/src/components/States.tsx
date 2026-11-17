@@ -32,6 +32,47 @@ export function LoadingState({
   );
 }
 
+/**
+ * Instead of a loader when a read is paused: the device is offline and nothing
+ * is cached, so TanStack Query waits for the connection instead of failing.
+ * One short message at a fixed minimum height, announced politely.
+ */
+export function OfflineState({ message }: { message: string }) {
+  return (
+    <div
+      role="status"
+      className="flex min-h-16 items-center gap-3 rounded-lg bg-surface px-4 py-3 text-sm text-fg shadow-1"
+      data-testid="offline"
+    >
+      <Icon name="alert" size={18} className="shrink-0 text-fg-muted" />
+      <p>{message}</p>
+    </div>
+  );
+}
+
+/**
+ * The slot for a list that has tappable rows below it, while the list has no
+ * data. Before those rows appear: a skeleton, or the offline message when the
+ * read is paused (so the rows can appear below it, not wait forever). Once the
+ * rows are on screen the slot keeps the offline box (now "back online") until
+ * the list arrives, so it changes height once, after a reconnect.
+ */
+export function PendingSlot({
+  paused,
+  rowsBelowShown,
+  rows,
+  offlineMessage,
+}: {
+  paused: boolean;
+  rowsBelowShown: boolean;
+  rows: number;
+  offlineMessage: string;
+}) {
+  if (paused) return <OfflineState message={offlineMessage} />;
+  if (rowsBelowShown) return <OfflineState message="Back online. Loading…" />;
+  return <LoadingState rows={rows} />;
+}
+
 export function EmptyState({
   icon = "list",
   title,

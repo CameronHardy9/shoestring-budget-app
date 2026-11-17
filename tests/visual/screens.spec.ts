@@ -172,7 +172,8 @@ for (const scheme of ["light", "dark"] as const) {
     test("quick-add", async ({ page, cspViolations }) => {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
-      // The + is inert until the budget has loaded (BudgetLayout).
+      // The page behind the sheet's scrim is part of the screenshot: let it
+      // finish loading first, or the baseline would catch a skeleton.
       await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       await page.keyboard.type("12.50");
@@ -186,7 +187,8 @@ for (const scheme of ["light", "dark"] as const) {
     test("quick-add split", async ({ page, cspViolations }) => {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
-      // The + is inert until the budget has loaded (BudgetLayout).
+      // The page behind the sheet's scrim is part of the screenshot: let it
+      // finish loading first, or the baseline would catch a skeleton.
       await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       const sheet = page.getByTestId("quick-add-sheet");

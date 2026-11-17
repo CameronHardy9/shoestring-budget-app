@@ -124,4 +124,73 @@ test.describe("J2 quick-add", () => {
       { categoryId: budget.categories.Dining, amountCents: 1_000 },
     ]);
   });
+
+  test("+ tapped while the budget is still loading opens the sheet at once: the amount takes typing, the categories follow", async ({
+    page,
+    taps,
+  }) => {
+    const user = await createUser({ prefix: "eager" });
+    const budget = await createBudget(user, { name: "Eager household" }); // Groceries 500, Dining 200
+    await signInAs(page, user.email);
+
+    // Hold GET /api/budgets/{id} (only that resource, not its sub-resources)
+    // until the test releases it, so the tap lands while the budget loads.
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let held = 0;
+    await page.route(
+      (url) => url.pathname === `/api/budgets/${budget.id}`,
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        held += 1;
+        await gate;
+        await route.fallback();
+      },
+    );
+    const sheet = page.getByTestId("quick-add-sheet");
+    const loadingCategories = sheet
+      .getByRole("status")
+      .filter({ hasText: "Loading categories…" });
+    try {
+      await page.goto(`/budgets/${budget.id}`);
+      await taps.tap(quickAddOpener(page)); // tap 1, right after navigation
+      await expect(sheet).toBeVisible();
+      const amount = page.getByTestId("quick-add-amount");
+      await expect(amount, "the amount is focused at once").toBeFocused();
+      await page.keyboard.type("9.50");
+      await expect(amount).toHaveValue("9.50");
+      await expect(loadingCategories).toBeVisible();
+      await expect(sheet.getByText("Groceries", { exact: true })).toHaveCount(
+        0,
+      );
+      expect(held, "the budget request was still held during all this").toBe(
+        1,
+      );
+      await expect(page.getByTestId("total-remaining")).toHaveCount(0);
+    } finally {
+      release();
+    }
+
+    const groceries = sheet.getByText("Groceries", { exact: true });
+    await expect(groceries).toBeVisible();
+    await expect(loadingCategories).toHaveCount(0);
+    await expect(page.getByTestId("quick-add-amount")).toHaveValue("9.50");
+    await taps.tap(groceries); // tap 2
+    await taps.tap(page.getByTestId("quick-add-save")); // tap 3
+    await expect(sheet).toBeHidden();
+    expect(taps.count).toBe(3);
+
+    await expect(page.getByTestId("total-remaining")).toHaveText("$690.50");
+    const [tx] = await transactions(page, budget.id);
+    expect(tx).toMatchObject({
+      date: budget.record.today,
+      amountCents: 950,
+      direction: "outflow",
+    });
+    expect(tx!.splits).toEqual([
+      { categoryId: budget.categories.Groceries, amountCents: 950 },
+    ]);
+  });
 });

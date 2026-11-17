@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { categories, transaction, uuid } from "../test/fixtures.ts";
+import { categories, category, transaction, uuid } from "../test/fixtures.ts";
 import {
   buildTransaction,
   codePoints,
@@ -7,6 +7,7 @@ import {
   draftFrom,
   emptyDraft,
   endSplit,
+  keepKnownFirst,
   newRow,
   orderCategories,
   recentCategoryIds,
@@ -281,6 +282,22 @@ describe("category order", () => {
     expect(
       orderCategories(categories, [], "outflow", [uuid(5)]).map((c) => c.name),
     ).toContain("Old stuff");
+  });
+
+  it("keeps a frozen order: known categories stay put, new ones go last, removed ones drop out", () => {
+    const known = new Set([uuid(1), uuid(2), uuid(3), uuid(4), uuid(8)]);
+    const now = orderCategories(
+      [category(9, "Pets"), ...categories.filter((c) => c.id !== uuid(2))],
+      [],
+      "outflow",
+    );
+    expect(keepKnownFirst(now, known).map((c) => c.name)).toEqual([
+      "Groceries",
+      "Transport",
+      "Household",
+      "Salary",
+      "Pets",
+    ]);
   });
 
   it("allows dates up to a year ahead, leap day included", () => {

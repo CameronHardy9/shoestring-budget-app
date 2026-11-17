@@ -78,9 +78,12 @@ export function useTransactions(
   budgetId: string,
   filters: TransactionFilters,
   limit = PAGE_SIZE,
+  /** False until the filters are known (quick-add opened before the budget loaded). */
+  enabled = true,
 ) {
   return useInfiniteQuery({
     queryKey: [...keys.transactions(budgetId, filters), limit],
+    enabled,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam }) =>
       unwrap(
