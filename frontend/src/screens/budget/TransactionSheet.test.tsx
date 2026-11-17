@@ -1,6 +1,7 @@
+import { onlineManager } from "@tanstack/react-query";
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { apiError, json, mockApi } from "../../test/api-mock.ts";
 import { expectNoAxeViolations } from "../../test/axe.ts";
 import {
@@ -34,6 +35,10 @@ function open(mode: SheetMode = { kind: "create" }) {
   );
   return { ...view, closed: () => closed };
 }
+
+afterEach(() => {
+  onlineManager.setOnline(true);
+});
 
 const sheet = () => screen.getByTestId("quick-add-sheet");
 const chip = (name: string) => within(sheet()).getByText(name, { exact: true });
@@ -143,6 +148,118 @@ describe("quick-add", () => {
       .map((c) => c.headers.get("Idempotency-Key"));
     expect(keys).toHaveLength(2);
     expect(keys[0]).toBe(keys[1]);
+  });
+
+  it("fails at once when the phone knows it's offline, keeping the entry", async () => {
+    // Offline, the browser's fetch rejects straight away ("Failed to fetch").
+    const api = mockApi({
+      ...base,
+      [`POST ${TX}`]: new TypeError("Failed to fetch"),
+    });
+    const view = open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await within(sheet()).findByRole("radiogroup", { name: "Category" });
+    onlineManager.setOnline(false);
+    await userEvent.type(amount, "12.34");
+    await userEvent.click(chip("Dining out"));
+    await userEvent.click(screen.getByTestId("quick-add-save"));
+    // Not paused behind a spinner until the connection returns: the write
+    // was attempted and failed, and the sheet says so with the entry intact.
+    expect(await within(sheet()).findByTestId("form-error")).toHaveTextContent(
+      "You're offline or the connection dropped. Nothing you typed was lost.",
+    );
+    expect(api.find("POST", TX)).toHaveLength(1);
+    expect(view.closed()).toBe(0);
+    expect(amount).toHaveValue("12.34");
+    expect(
+      within(sheet()).getByRole("radio", { name: "Dining out" }),
+    ).toBeChecked();
+    const save = screen.getByTestId("quick-add-save");
+    expect(save).toHaveTextContent("Retry");
+    expect(save).not.toHaveAttribute("data-pending");
+    expect(screen.getByTestId("quick-add-save-new")).not.toHaveAttribute(
+      "data-pending",
+    );
+  });
+
+  it("creates exactly one transaction when retried after reconnecting", async () => {
+    // A server that honours Idempotency-Key: a repeated key replays the
+    // first result instead of creating another transaction.
+    const created = new Map<string, ReturnType<typeof transaction>>();
+    let attempt = 0;
+    const api = mockApi({
+      ...base,
+      [`POST ${TX}`]: (req) => {
+        attempt += 1;
+        // 1: offline, never reaches the server.
+        if (attempt === 1) return new TypeError("Failed to fetch");
+        const key = req.headers.get("Idempotency-Key") ?? "";
+        if (!created.has(key)) created.set(key, transaction(created.size + 1));
+        // 2: back online, saved, but the response is lost on the way back.
+        if (attempt === 2) return new TypeError("Failed to fetch");
+        return json(201, created.get(key));
+      },
+    });
+    const view = open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await within(sheet()).findByRole("radiogroup", { name: "Category" });
+    onlineManager.setOnline(false);
+    await userEvent.type(amount, "5");
+    await userEvent.click(chip("Groceries"));
+    await userEvent.click(screen.getByTestId("quick-add-save"));
+    expect(await screen.findByText(/You're offline/)).toBeInTheDocument();
+
+    onlineManager.setOnline(true);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(api.find("POST", TX)).toHaveLength(2);
+    });
+    expect(await screen.findByText(/You're offline/)).toBeInTheDocument();
+    expect(amount).toHaveValue("5");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(view.closed()).toBe(1);
+    });
+    const sent = api
+      .find("POST", TX)
+      .map((c) => c.headers.get("Idempotency-Key"));
+    expect(sent).toHaveLength(3);
+    expect(new Set(sent).size).toBe(1);
+    expect(created.size).toBe(1);
+  });
+
+  it("fails an offline edit and an offline delete at once too", async () => {
+    const existing = transaction(7, { version: 3 });
+    const ONE = `${TX}/${existing.id}`;
+    const api = mockApi({
+      ...base,
+      [`PUT ${ONE}`]: new TypeError("Failed to fetch"),
+      [`DELETE ${ONE}`]: new TypeError("Failed to fetch"),
+    });
+    const view = open({ kind: "edit", transaction: existing });
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    onlineManager.setOnline(false);
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "8");
+    await userEvent.click(screen.getByTestId("quick-add-save"));
+    expect(await within(sheet()).findByTestId("form-error")).toHaveTextContent(
+      "You're offline",
+    );
+    expect(amount).toHaveValue("8");
+    expect(api.find("PUT", ONE)).toHaveLength(1);
+
+    await userEvent.click(screen.getByTestId("delete-transaction"));
+    await userEvent.click(screen.getByTestId("confirm-delete"));
+    await waitFor(() => {
+      expect(api.find("DELETE", ONE)).toHaveLength(1);
+    });
+    expect(within(sheet()).getByTestId("form-error")).toHaveTextContent(
+      "You're offline",
+    );
+    expect(screen.getByTestId("confirm-delete")).not.toHaveAttribute(
+      "data-pending",
+    );
+    expect(view.closed()).toBe(0);
   });
 
   it("Save & new keeps the sheet open with a fresh key", async () => {

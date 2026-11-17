@@ -14,7 +14,7 @@ import { SegmentedControl } from "../../components/SegmentedControl.tsx";
 import {
   EmptyState,
   ErrorState,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { daysLeftInMonth, monthLabel, monthName } from "../../lib/dates.ts";
 import { monthFrom, useCurrentBudget } from "./BudgetLayout.tsx";
@@ -204,7 +204,11 @@ export default function OverviewScreen() {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 pt-4 lg:px-8 lg:pt-8">
         {header}
-        <LoadingState label="Loading this month…" />
+        <PendingSlot
+          paused={summary.isPaused}
+          label="Loading this month…"
+          offlineMessage="You're offline. This month will appear when you reconnect."
+        />
       </div>
     );
   }
@@ -348,7 +352,11 @@ export default function OverviewScreen() {
                 onRetry={() => void recent.refetch()}
               />
             ) : recent.isPending ? (
-              <LoadingState rows={2} />
+              <PendingSlot
+                paused={recent.isPaused}
+                rows={2}
+                offlineMessage="You're offline. Recent transactions will appear when you reconnect."
+              />
             ) : recentItems.length === 0 ? (
               <p className="pb-3 text-sm text-fg-muted">
                 Nothing recorded in {monthLabel(month)} yet. Tap + to add a

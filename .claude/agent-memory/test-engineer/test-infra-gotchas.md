@@ -40,3 +40,9 @@ Learned on the Sentry PR (2026-11-17):
 - **At addInitScript time `document.documentElement` can be null**: `MutationObserver.observe(document.documentElement)` throws and silently kills the rest of the init script. Observe `document` with subtree.
 - Sentry envelopes: the SDK adds `sdk.integrations/packages/settings{infer_ip:"never"}` AFTER beforeSend; Sentry's fetch transport sends Referer origin-only (strict-origin). Probe real envelopes with a throwaway spec before writing allowlists.
 - Service workers DO run under Playwright on both csp-prod engines (localhost is a secure context; prod-server serves /sw.js). Only sw-first-visit.spec.ts allows them.
+
+Learned on the offline PR (2026-11-17, PW 1.65):
+- **`context.setOffline` works on all three journey projects:** navigator.onLine flips and `offline`/`online` fire (what TanStack's onlineManager needs; a `page.route` abort does not pause reads). It did NOT close Vite's open HMR socket in a probe, but offline.spec.ts mocks it with `page.routeWebSocket` anyway and asserts no reload (a closed socket = Vite polls then `location.reload()`).
+- **Every screen is lazy:** offline, a never-fetched screen module fails to import on the dev server. Preload online with `import("/src/app/lazy-screen.tsx").preloadAllScreens()` in page.evaluate (same module instance), which caches no data.
+- An offline (refused) fetch still emits Playwright `request` events with its headers (Idempotency-Key observable). `page.request` ignores setOffline.
+- **Recurring false-alarm class: digit patterns vs clock-derived IDs (2026-11-17).** The Sentry gate's `8765` amount regex matched "-8765-" inside a UUIDv7 (leading groups = clock), only at certain times. Mask UUIDs, 32-hex IDs and lineno/colno/timestamp/status_code values first (support/pii-scan.ts, unit-tested). Apply the same masking to any new "value must not appear" scan.

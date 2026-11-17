@@ -29,7 +29,7 @@ import { Sheet } from "../../components/Sheet.tsx";
 import {
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
 import { saveBlob } from "../../lib/download.ts";
@@ -355,7 +355,11 @@ export default function SecurityScreen() {
         <h1 className="text-2xl font-semibold text-fg">Security</h1>
         <FormError error={removing ? null : action.error} />
         {mfa.isPending ? (
-          <LoadingState rows={2} />
+          <PendingSlot
+            paused={mfa.isPaused}
+            rows={2}
+            offlineMessage="You're offline. Your two-step verification settings will appear when you reconnect."
+          />
         ) : mfa.isError ? (
           <ErrorState error={mfa.error} onRetry={() => void mfa.refetch()} />
         ) : (

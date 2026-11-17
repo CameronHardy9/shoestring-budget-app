@@ -18,7 +18,7 @@ import {
   EmptyState,
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../components/States.tsx";
 import { getLastBudgetId } from "../lib/preferences.ts";
 
@@ -74,7 +74,11 @@ export default function InvitationsScreen() {
           <FormError error={declining ? null : action.error} />
         )}
         {invitations.isPending ? (
-          <LoadingState rows={2} />
+          <PendingSlot
+            paused={invitations.isPaused}
+            rows={2}
+            offlineMessage="You're offline. Your invitations will appear when you reconnect."
+          />
         ) : invitations.isError ? (
           <ErrorState
             error={invitations.error}

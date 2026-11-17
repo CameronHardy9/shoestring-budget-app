@@ -16,7 +16,7 @@ import { PageColumn } from "../../components/Section.tsx";
 import {
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { getLastBudgetId } from "../../lib/preferences.ts";
 
@@ -93,7 +93,11 @@ export default function SessionsScreen() {
       >
         <FormError error={revoking ? null : action.error} />
         {sessions.isPending ? (
-          <LoadingState rows={2} />
+          <PendingSlot
+            paused={sessions.isPaused}
+            rows={2}
+            offlineMessage="You're offline. Your signed-in devices will appear when you reconnect."
+          />
         ) : sessions.isError ? (
           <ErrorState
             error={sessions.error}

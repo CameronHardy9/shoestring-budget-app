@@ -14,7 +14,7 @@ import {
   EmptyState,
   ErrorState,
   FormError,
-  LoadingState,
+  PendingSlot,
 } from "../../components/States.tsx";
 import { getLastBudgetId } from "../../lib/preferences.ts";
 
@@ -48,7 +48,11 @@ export default function DeletedBudgetsScreen() {
           <FormError error={action.error} />
         )}
         {deleted.isPending ? (
-          <LoadingState rows={2} />
+          <PendingSlot
+            paused={deleted.isPaused}
+            rows={2}
+            offlineMessage="You're offline. Deleted budgets will appear when you reconnect."
+          />
         ) : deleted.isError ? (
           <ErrorState
             error={deleted.error}

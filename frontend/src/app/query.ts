@@ -26,7 +26,11 @@ export function createQueryClient(): QueryClient {
         refetchOnWindowFocus: true,
       },
       // Writes are retried by the person (same Idempotency-Key), never silently.
-      mutations: { retry: false },
+      // "Online to save" (ADR-0002, owner ruling round 7): a write is always
+      // sent, so offline it fails at once with NetworkError and the form keeps
+      // the entry. The default ("online") would pause it behind a spinner
+      // until the connection returned, then send it unseen.
+      mutations: { retry: false, networkMode: "always" },
     },
   });
 }

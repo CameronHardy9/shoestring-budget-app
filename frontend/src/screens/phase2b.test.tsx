@@ -23,6 +23,7 @@ import { BudgetLayout } from "./budget/BudgetLayout.tsx";
 import CategoriesScreen from "./budget/CategoriesScreen.tsx";
 import MembersScreen from "./budget/MembersScreen.tsx";
 import InvitationsScreen from "./InvitationsScreen.tsx";
+import HomeScreen from "./HomeScreen.tsx";
 import MoreScreen from "./MoreScreen.tsx";
 import AccountScreen from "./settings/AccountScreen.tsx";
 import DeletedBudgetsScreen from "./settings/DeletedBudgetsScreen.tsx";
@@ -107,6 +108,36 @@ describe("categories and limits", () => {
     expect(
       api.find("POST", `${B}/months/2026-11/plan/copy-previous`)[0]?.body,
     ).toEqual({ overwrite: false });
+  });
+
+  it("offline with nothing cached: says so instead of loading forever, then loads", async () => {
+    // The budget arrives just as the phone goes offline, so the plan read
+    // starts paused (nothing cached).
+    const api = mockApi({
+      ...budgetBase,
+      [`GET ${B}`]: () => {
+        onlineManager.setOnline(false);
+        return json(200, budget);
+      },
+    });
+    const view = renderWithApp(
+      <BudgetLayout budgetId={BUDGET_ID} active="budgets">
+        <CategoriesScreen />
+      </BudgetLayout>,
+      { path: `${B}/categories` },
+    );
+    const box = await screen.findByTestId("offline");
+    expect(box).toHaveTextContent(
+      "You're offline. Categories and limits will appear when you reconnect.",
+    );
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(api.find("GET", `${B}/months/2026-11/plan`)).toHaveLength(0);
+    await expectNoAxeViolations(view.container);
+    onlineManager.setOnline(true);
+    expect((await screen.findAllByTestId("category-row"))[0]).toHaveTextContent(
+      "Groceries$600.00",
+    );
+    expect(screen.queryByTestId("offline")).toBeNull();
   });
 
   it("updates a limit with its version and offers archive when a category is in use", async () => {
@@ -537,6 +568,87 @@ describe("account-level screens", () => {
       ).toHaveLength(1);
     });
   });
+
+  // Offline with nothing cached the read is paused, not failed: each screen
+  // must settle on an offline message instead of a loader, then load once the
+  // connection returns.
+  it.each([
+    {
+      name: "Invitations",
+      ui: <InvitationsScreen />,
+      path: "/invitations",
+      read: "/me/invitations",
+      reply: json(200, { items: [] }),
+      offline:
+        "You're offline. Your invitations will appear when you reconnect.",
+      loaded: () => screen.findByText("No invitations"),
+    },
+    {
+      name: "Sessions",
+      ui: <SessionsScreen />,
+      path: "/settings/sessions",
+      read: "/me/sessions",
+      reply: json(200, { items: [] }),
+      offline:
+        "You're offline. Your signed-in devices will appear when you reconnect.",
+      loaded: () => screen.findByTestId("session-list"),
+    },
+    {
+      name: "Deleted budgets",
+      ui: <DeletedBudgetsScreen />,
+      path: "/settings/deleted-budgets",
+      read: "/me/deleted-budgets",
+      reply: json(200, { items: [] }),
+      offline:
+        "You're offline. Deleted budgets will appear when you reconnect.",
+      loaded: () => screen.findByText("Nothing to restore"),
+    },
+    {
+      name: "Security",
+      ui: <SecurityScreen />,
+      path: "/settings/security",
+      read: "/me/mfa",
+      reply: json(200, {
+        enabled: false,
+        totp: { enabled: false, confirmedAt: null },
+        passkeys: [],
+        recoveryCodesRemaining: 0,
+      }),
+      offline:
+        "You're offline. Your two-step verification settings will appear when you reconnect.",
+      loaded: () => screen.findByTestId("mfa-status"),
+    },
+    {
+      name: "Home",
+      ui: <HomeScreen />,
+      path: "/",
+      read: "/budgets",
+      reply: json(200, { items: [budget] }),
+      offline: "You're offline. Your budgets will appear when you reconnect.",
+      loaded: () =>
+        waitFor(() => {
+          expect(window.location.pathname).toBe(B);
+        }),
+    },
+  ])(
+    "$name, offline with nothing cached: an offline message, then the data once back online",
+    async ({ ui, path, read, reply, offline, loaded }) => {
+      onlineManager.setOnline(false);
+      const api = mockApi({ [`GET ${read}`]: reply });
+      const view = renderWithApp(ui, { path });
+      const box = await screen.findByTestId("offline");
+      expect(box).toHaveTextContent(offline);
+      expect(box).toHaveAttribute("role", "status");
+      expect(screen.queryByTestId("loading")).toBeNull();
+      expect(api.find("GET", read)).toHaveLength(0);
+      await expectNoAxeViolations(view.container);
+
+      onlineManager.setOnline(true);
+      await loaded();
+      expect(screen.queryByTestId("offline")).toBeNull();
+      expect(api.find("GET", read)).toHaveLength(1);
+    },
+  );
 
   it("adds the rows below the budget list on More only once it has loaded", async () => {
     const reply = deferred<ReturnType<typeof json>>();

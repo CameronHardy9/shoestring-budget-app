@@ -108,7 +108,7 @@ function dbError(): Error {
       query:
         "INSERT INTO splits (payee, memo, amount_cents) VALUES ($1, $2, $3)",
       parameters: [PAYEE, MEMO, Number(AMOUNT)],
-      stack: `error: new row for relation "splits" violates check constraint: ${PAYEE}\n    at Parser.parseErrorMessage (/srv/shoestring/node_modules/pg-protocol/dist/parser.js:285:98)\n    at createSplit (/srv/shoestring/dist/server.js:1200:15)\n    at /Users/someone/secret-project/x.js:1:1`,
+      stack: `error: new row for relation "splits" violates check constraint: ${PAYEE} ${MEMO} ${AMOUNT}\n    at Parser.parseErrorMessage (/srv/shoestring/node_modules/pg-protocol/dist/parser.js:285:98)\n    at createSplit (/srv/shoestring/dist/server.js:1200:15)\n    at /Users/someone/secret-project/x.js:1:1`,
     },
   );
 }
@@ -276,14 +276,21 @@ describe("captureError: built from the F-07 allowlist only", () => {
       `failed for ${EMAIL}\n    at ${PAYEE} (${EMAIL}:1:2)\n    at ${MEMO} (x.js:3:4)\n    at evil.js:5:6`,
     );
   const framesOf = (it: Item) =>
-    (it.payload.exception as { values: { stacktrace?: { frames: Record<string, unknown>[] } }[] })
-      .values.flatMap((v) => v.stacktrace?.frames ?? []);
+    (
+      it.payload.exception as {
+        values: { stacktrace?: { frames: Record<string, unknown>[] } }[];
+      }
+    ).values.flatMap((v) => v.stacktrace?.frames ?? []);
 
   for (const path of ["captureError", "uncaught (SDK-built)"] as const) {
     it(`a multi-line message with fake frames: none reaches Sentry (${path})`, async () => {
       const { t, raw, items } = await tracker();
       if (path === "captureError")
-        t.captureError(fakeFrameError(), { requestId: "r-1", userId: null, route: null });
+        t.captureError(fakeFrameError(), {
+          requestId: "r-1",
+          userId: null,
+          route: null,
+        });
       else Sentry.captureException(fakeFrameError());
       await t.flush();
       expectClean(raw);
@@ -293,7 +300,30 @@ describe("captureError: built from the F-07 allowlist only", () => {
       const frames = framesOf(event!);
       expect(frames.length).toBeGreaterThan(0);
       // Only this file's real frames (base name: the repo is outside ROOT).
-      expect(frames.at(-1)).toMatchObject({ filename: "error-tracker.test.ts" });
+      expect(frames.at(-1)).toMatchObject({
+        filename: "error-tracker.test.ts",
+      });
+    });
+  }
+
+  // F-62: a message shortened after `.stack` was read leaves V8's old header;
+  // no frame at all is sent then (fail closed), on either path.
+  for (const path of ["captureError", "uncaught (SDK-built)"] as const) {
+    it(`a message shortened after the stack was read: no frames reach Sentry (${path})`, async () => {
+      const { t, raw, items } = await tracker();
+      const e = fakeFrameError();
+      expect(e.stack).toContain("copay"); // fixes the header
+      e.message = "failed";
+      if (path === "captureError")
+        t.captureError(e, { requestId: "r-1", userId: null, route: null });
+      else Sentry.captureException(e);
+      await t.flush();
+      expectClean(raw);
+      for (const leak of ["x.js", "evil.js", "copay"])
+        expect(raw.join("\n")).not.toContain(leak);
+      const [event] = items().filter((i) => i.type === "event");
+      expect(event).toBeDefined();
+      expect(framesOf(event!)).toEqual([]);
     });
   }
 
@@ -307,8 +337,16 @@ describe("captureError: built from the F-07 allowlist only", () => {
               value: "x",
               stacktrace: {
                 frames: [
-                  { filename: "/srv/shoestring/dist/a.js", function: `${MEMO} ${EMAIL}`, lineno: 1 },
-                  { filename: "/srv/shoestring/dist/b.js", function: "new Foo.bar", lineno: 2 },
+                  {
+                    filename: "/srv/shoestring/dist/a.js",
+                    function: `${MEMO} ${EMAIL}`,
+                    lineno: 1,
+                  },
+                  {
+                    filename: "/srv/shoestring/dist/b.js",
+                    function: "new Foo.bar",
+                    lineno: 2,
+                  },
                 ],
               },
             },
@@ -358,7 +396,9 @@ describe("the HTTP pipeline: 5xx captured, 4xx never", () => {
       errors: t,
       dal: { users: { updateDisplayName: () => Promise.reject(fail) } },
     });
-    const s = h.sessions.add({ userId: "01a1d7ab-0000-7000-8000-000000000001" });
+    const s = h.sessions.add({
+      userId: "01a1d7ab-0000-7000-8000-000000000001",
+    });
     const r = await h.req("PATCH", "/api/me", {
       auth: s,
       body: { displayName: `${PAYEE} ${PASSWORD}` },
@@ -370,7 +410,8 @@ describe("the HTTP pipeline: 5xx captured, 4xx never", () => {
     expect(r.statusCode).toBe(500);
     await t.flush();
     expectClean(raw);
-    for (const secret of [s.token, s.csrf, "client-req-1x"]) expect(raw.join("")).not.toContain(secret);
+    for (const secret of [s.token, s.csrf, "client-req-1x"])
+      expect(raw.join("")).not.toContain(secret);
     const events = items().filter((i) => i.type === "event");
     expect(events).toHaveLength(1);
     expect(events[0]!.payload.tags).toEqual({
@@ -392,16 +433,25 @@ describe("the HTTP pipeline: 5xx captured, 4xx never", () => {
         transactions: { listTransactions: () => Promise.reject(dbError()) },
       },
     });
-    const s = h.sessions.add({ userId: "01a1d7ab-0000-7000-8000-000000000001" });
-    const r = await h.req("GET", `/api/budgets/${B}/transactions?month=2024-02&categoryId=${CATEGORY}&limit=7`, { auth: s });
+    const s = h.sessions.add({
+      userId: "01a1d7ab-0000-7000-8000-000000000001",
+    });
+    const r = await h.req(
+      "GET",
+      `/api/budgets/${B}/transactions?month=2024-02&categoryId=${CATEGORY}&limit=7`,
+      { auth: s },
+    );
     expect(r.statusCode).toBe(500);
     await t.flush();
     expectClean(raw);
     const all = raw.join("");
-    for (const v of [CATEGORY, B, "month=", "2024-02", "limit=7", "?"]) expect(all).not.toContain(v);
-    expect(items().find((i) => i.type === "event")!.payload.tags).toMatchObject({
-      route: "/api/budgets/:budgetId/transactions",
-    });
+    for (const v of [CATEGORY, B, "month=", "2024-02", "limit=7", "?"])
+      expect(all).not.toContain(v);
+    expect(items().find((i) => i.type === "event")!.payload.tags).toMatchObject(
+      {
+        route: "/api/budgets/:budgetId/transactions",
+      },
+    );
   });
 
   it("contract 4xx (validation, not found, conflict, auth) never reach Sentry", async () => {

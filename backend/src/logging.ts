@@ -38,28 +38,33 @@ function safeString(v: unknown): string | undefined {
   return typeof v === "string" && SAFE_TOKEN.test(v) ? v : undefined;
 }
 
-const lineCount = (s: string) => s.split("\n").length;
-
 /**
- * F-59: V8's stack starts with a header, `${name}: ${message}` (only one of
- * them when the other is empty), and the message may span several lines. Only
- * lines after the header are frames, so a message line shaped like a frame
- * (`    at Pharmacy (x.js:1:2)`) never becomes one. When name or message is
- * not a string, the header length is unknown and no frame is kept.
+ * F-59, F-62: V8's stack starts with a header, `${name}: ${message}` (only one
+ * of them when the other is empty; Node's own errors add ` [${code}]` after
+ * the name), and the message may span several lines. Only lines after the
+ * header are frames, so a message line shaped like a frame
+ * (`    at Pharmacy (x.js:1:2)`) never becomes one.
+ *
+ * V8 fixes the header when `.stack` is first read, so `name` or `message` may
+ * have changed since. Frames are kept only when the stack starts with exactly
+ * the header built from the current values; otherwise (including a non-string
+ * name or message) no frame is kept. Known limit: a message cut at a line
+ * boundary after the first read still matches; what can then pass is bounded
+ * by FRAME (one identifier-shaped name and two integers per line).
  */
 function frameLines(e: Record<string, unknown>, stack: string): string[] {
   const name = e.name === undefined ? "Error" : e.name;
   const message = e.message === undefined ? "" : e.message;
   if (typeof name !== "string" || typeof message !== "string") return [];
-  const header =
-    name === ""
-      ? lineCount(message)
-      : message === ""
-        ? lineCount(name)
-        : lineCount(name) + lineCount(message) - 1;
+  const headers =
+    name === "" ? [message] : message === "" ? [name] : [`${name}: ${message}`];
+  if (name !== "" && message !== "" && typeof e.code === "string")
+    headers.push(`${name} [${e.code}]: ${message}`);
+  const header = headers.find((h) => stack.startsWith(`${h}\n`));
+  if (header === undefined) return [];
   return stack
+    .slice(header.length + 1)
     .split("\n")
-    .slice(header)
     .map((l) => l.trim())
     .filter((l) => FRAME.test(l))
     .slice(0, 20);
