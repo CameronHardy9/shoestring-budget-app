@@ -40,6 +40,7 @@ log "Handing on the tested images for publishing"
 save_one app "$(image_tag)" ""
 save_one migrate "$(migrate_image_tag)" -migrate
 save_one backup "$(backup_image_tag)" -backup
+mkdir -p "$(dirname "$out")" # the workflow passes a path under RUNNER_TEMP that nothing creates
 docker save "${refs[@]}" | gzip -1 >"$out"
 size="$(wc -c <"$out" | awk '{ printf "%.0f MB", $1 / 1000000 }')"
 log "image-save: $out ($size) in $(elapsed)"

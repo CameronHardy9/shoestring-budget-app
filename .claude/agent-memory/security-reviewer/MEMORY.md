@@ -1,3 +1,3 @@
 - [Security rulings](project_security_rulings.md): rulings and accepted deviations (2026-11-12 to 11-17): MFA risk, backups, RLS, CSP, SAFE_MESSAGES, public GHCR, publish job
-- [Review hotspots](project_review_hotspots.md): recurring weak spots (token chains, bundle order, SDK fields, parser rewrites, revspecs, hop paths, OIDC sub)
+- [Review hotspots](project_review_hotspots.md): recurring weak spots (token chains, bundle order, SDK fields, parser rewrites, revspecs, hop paths, OIDC sub, CI caches)
 - [Findings delivery](feedback_findings_delivery.md): use Edit on FINDINGS.md; if a write is refused, return the content as text and don't work around it
