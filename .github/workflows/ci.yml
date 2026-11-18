@@ -43,7 +43,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
+      # Unit tests use jsdom or node, never Playwright: no browsers, no apt.
       - run: make setup
+        env:
+          SKIP_BROWSERS: "1"
       - run: make check
 
   e2e:
@@ -52,7 +55,9 @@ jobs:
       contents: read
     needs: check
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Well under 20 min with warm caches. The headroom covers a cold apt cache on a
+    # slow Ubuntu mirror (setup took 15 min at 150 kB/s once); still a tripwire.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,12 +67,19 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      - name: Cache Playwright browsers
+      # Browsers plus the .debs of their system packages (setup.sh points apt
+      # at ~/.cache/playwright-apt). apt trusts a cached .deb by size alone, so
+      # setup.sh first deletes every .deb whose SHA256 is not the signed
+      # index's (F-69). restore-keys keep the cache warm across lockfile changes.
+      - name: Cache Playwright browsers and system packages
         if: hashFiles('tests/package.json') != ''
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/playwright-apt
+          key: playwright-apt-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-apt-${{ runner.os }}-
       - run: make setup
       - run: make e2e
       - name: Upload Playwright report

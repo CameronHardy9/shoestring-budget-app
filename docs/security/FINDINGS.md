@@ -1633,3 +1633,29 @@ Scope: `git diff chore/pre-deploy`. That covers ci-engineer's `publish` job, the
 - **sre's question, binding to the commit:** the flags prove "built on main by ci.yml", not "built from `$SHA`". So someone with package write could re-point `sha-<X>` to an *older* attested main digest: a downgrade to a release with a known flaw, or app and migrate from different commits. That's the same precondition as F-67, so it is not a launch blocker.
   - But the fix is one flag: `gh` 2.97 supports `--source-digest`. **Recommended now, folded into F-67:** add `--source-digest "$SHA"` (`"$BACKUP_SHA"` in 12g, and the same in the future deploy.yml) to every verify.
   - That also binds app and migrate to the same commit. I'm not reopening F-67 for it.
+
+## Review 2026-11-17: fix/ci-publish-handoff (apt .deb cache, SKIP_BROWSERS, image-save mkdir)
+
+### F-69 Low (new, ci-engineer): cached .debs are trusted by size only, and the comments say otherwise. **Fixed and verified 2026-11-17 (same branch)**
+- **Location:** .github/scripts/setup.sh:6-7 and `ci_apt_cache` (lines 16-25); .github/workflows/ci.yml:70-81 (cache step comment and `restore-keys`).
+- **The comment is wrong.** apt 2.7.x (Ubuntu 24.04) `pkgAcqArchive::QueueNext` accepts a file already in `Dir::Cache::Archives` when its *size* equals the index's `Size`, and marks it done without hashing it (verified in apt 2.7.14 `apt-pkg/acquire-item.cc:3494-3507`). dpkg then installs it as root with no signature check. Only freshly downloaded .debs are checked against the signed index.
+- **Scenario:** code running in any main-branch job can write a main-scoped cache entry, for example a compromised dev dependency in `check`'s `pnpm install` or unit tests (the runtime token is reachable with the runner's passwordless sudo, as in Cacheract). It saves `playwright-apt-Linux-<hash>` holding a same-size trojaned .deb, either before e2e saves the exact key or as a newer prefix match. Every later main e2e run installs that .deb as root. Because `restore-keys` restores it and the next save copies it forward, and `autoclean` keeps any filename the index still lists, the foothold survives lockfile changes and a revert of the bad dependency.
+- **Not reachable:** PR and Dependabot caches are scoped to `refs/pull/N/merge`, and main never restores them, so a fork or Dependabot PR alone cannot poison main. The images don't cross either. `image` uses no actions/cache and builds in Docker, and `publish` loads the artifact and checks each image ID against the `image` job's outputs before pushing. e2e has `contents: read` and no secrets. The worst case is a forged e2e pass plus persistence for re-poisoning other main caches. The existing `~/.cache/ms-playwright` entry already gave the same code execution through unverified browser binaries, so the change adds little new exposure. That is why this is Low.
+- **Recommended fix (ci-engineer):**
+  - Correct the comments in setup.sh and ci.yml: say apt trusts cached .debs by size.
+  - In `ci_apt_cache`, run `sudo apt-get update`, then delete every cached `*.deb` whose SHA256 doesn't match the signed index. Get the expected hash with `dpkg-deb -f <deb> Package Version Architecture`, then `apt-cache show "<pkg>:<arch>=<ver>"`, then the `SHA256:` field. Delete the file if it isn't in the index or the hash differs. That restores the property the comment claims, costs seconds, and leaves `restore-keys` safe.
+  - Fallback if the check isn't wanted: drop `restore-keys`, so a poisoned entry dies at the next lockfile change, and fix the comments.
+- **Owner:** ci-engineer.
+
+### Other checks: no issue
+- `SKIP_BROWSERS=1` only skips the browser install in `check`. `image-save.sh`'s `mkdir -p` targets `$RUNNER_TEMP/images`. No permission, action or pin changed, and the timeout rise is fine. The `/etc/apt/apt.conf.d/99-shoestring-ci` write and `chown` run on ephemeral runners only (Linux + `CI=true`).
+
+### Re-check 2026-11-17: F-69 verified
+- **The fix:** `ci_apt_cache` now runs these steps in order.
+  1. Removes the cache dir if it's a symlink or not a directory.
+  2. Deletes every top-level entry that isn't a regular `*.deb`. That covers symlinks, dirs, `partial/` and the lock. `find ! -type f` doesn't follow links.
+  3. Writes the apt conf, then runs `sudo apt-get update`.
+  4. Keeps a .deb only if `dpkg-deb -W` reads it, its filename is apt's canonical `<pkg>_<ver %3a>_<arch>.deb`, and its sha256 appears as an exact `SHA256:` line in `apt-cache show pkg:arch=ver`, which comes from the root-owned, freshly updated, signed lists. Every other file is deleted.
+  
+  Every failure path deletes the file and apt downloads it again, which is fail-closed. Nothing writes the dir between the check and playwright's install. The ci.yml and setup.sh comments are now accurate, so keeping `restore-keys` is fine.
+- **Residual, not new and accepted as Low:** `~/.cache/ms-playwright` browser binaries are still restored without verification, as they were before this branch. Reaching them still needs code running in a main-branch job, and they can't reach the images because publish checks the image IDs.
