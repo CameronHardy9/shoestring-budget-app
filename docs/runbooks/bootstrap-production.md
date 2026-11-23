@@ -700,7 +700,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api
 | ☐ | Phone journeys | Sign up with an invite (admin-commands.md), add a transaction, see the month | Works on your phone |
 | ☑ | **Hop count measured on both paths (V26, F-65)**: 1 and 1, 2026-11-23 | Step 14a (`run.app`) **and** 14b (domain mapping), both recorded in infra/CLAUDE.md "Client IP"; they agree, and the service's `TRUST_PROXY_HOPS` matches | **Launch blocker** (security-reviewer) |
 | ☐ | **DMARC at `p=reject`** | `dig +short TXT "_dmarc.mail.$DOMAIN"` | **Launch blocker** (F-29) |
-| ☐ | Admin args retention (V34) | Run `gcloud run jobs execute shoestring-admin --args="purge,--dry-run" --project "$PROJECT" --region "$REGION" --wait` once (an `--args` override, read-only), then read the audit entry (hosting-evaluation.md V34) | Retention known; privacy notice states it (R-12) |
+| ☑ | Admin args retention (V34) | Measured 2026-11-23 from existing runs (infra/hosting-evaluation.md V34) | System Event audit log 400 days + execution record (no limit); privacy wording in admin-commands.md (R-12) |
 | ☑ | Backups (first dump and green heartbeat 2026-11-23) | `gcloud run jobs execute shoestring-backup --project "$PROJECT" --region "$REGION" --wait`, then `gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/"`; next morning, confirm the 09:15 scheduled run | Objects present; heartbeat green |
 | ☑ | **Restore drill** (passed 2026-11-23, 18 min) | restore.md path C | Passes; recorded in README.md |
 | ☐ | Billing | After 7 days, billing-protection.md §11 check 1 | $0.00 net |

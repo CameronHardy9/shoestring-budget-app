@@ -41,11 +41,20 @@ export OBJ="shoestring-<timestamp>.dump.age"
 gcloud storage objects describe "gs://$BACKUP_BUCKET/daily/$OBJ" --format="value(creation_time,size)"
 gcloud run jobs executions list --job shoestring-backup --region "$REGION" --project "$PROJECT" --limit 10 \
   --format="table(metadata.name,status.startTime,status.completionTime,status.succeededCount)"
-gcloud logging read 'protoPayload.methodName:"RunJob" AND protoPayload.resourceName:"jobs/shoestring-backup"' \
-  --project "$PROJECT" --freshness 40d --limit 40 --format="value(timestamp,protoPayload.authenticationInfo.principalEmail)"
+# Who started each run: the System Event audit log (_Required bucket: 400 days, locked; nobody can delete or edit it).
+# Not Admin Activity: Cloud Run logs RunJob only as Data Access, which is off (V34). Columns: finished, execution, started by, succeeded.
+gcloud logging read 'logName="projects/'"$PROJECT"'/logs/cloudaudit.googleapis.com%2Fsystem_event" AND resource.type="cloud_run_job" AND resource.labels.job_name="shoestring-backup" AND protoPayload.methodName:"Jobs.RunJob"' \
+  --project "$PROJECT" --freshness 40d --limit 40 \
+  --format="value(timestamp,protoPayload.resourceName.basename(),protoPayload.response.metadata.annotations.'run.googleapis.com/creator',protoPayload.response.status.succeededCount)"
+# Job definition changes (Admin Activity, always on): a changed job run later by the scheduler would still pass the check above.
+gcloud logging read 'logName="projects/'"$PROJECT"'/logs/cloudaudit.googleapis.com%2Factivity" AND protoPayload.serviceName="run.googleapis.com" AND protoPayload.resourceName:"jobs/shoestring-backup" AND (protoPayload.methodName:"ReplaceJob" OR protoPayload.methodName:"CreateJob" OR protoPayload.methodName:"DeleteJob")' \
+  --project "$PROJECT" --freshness 40d --limit 20 --format="value(timestamp,protoPayload.methodName,protoPayload.authenticationInfo.principalEmail)"
 #   Accept the object only if ALL hold:
 #   - its creation time falls inside a SUCCEEDED execution's start–completion window;
-#   - that execution was started by shoestring-scheduler@ (or by you, for a manual run you remember);
+#   - the audit log above says that execution was started by shoestring-scheduler@ (or by you, for a manual run you
+#     remember) and succeeded (last column 1);
+#   - no change to the job between the previous verified-good night and the chosen object's run, other than one you
+#     made yourself and remember (the backup image or config, bootstrap-production.md 12g; the deployer has no role on this job);
 #   - its size is in line with the neighbouring nights.
 #   Otherwise pick the previous night that passes, and tell the tech lead (possible poisoning).
 
