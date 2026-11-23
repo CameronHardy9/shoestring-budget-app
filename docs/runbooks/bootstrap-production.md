@@ -694,10 +694,10 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api
 ## 16. Launch measurements [needs app]
 | ☐ | Check | How | Pass |
 |---|---|---|---|
-| ☐ | **Cold start (V9)** | Pause the Better Stack monitor. Then, 20 times over a few days, each after ≥ 30 min idle: `curl -s -o /dev/null -w '%{time_total}\n' "https://shoestring.$DOMAIN/api/readyz"` | p95 ≤ 3 s. Record the numbers in infra/hosting-evaluation.md. |
-| ☐ | **Neon sleeps (V23)** | Resume the monitor; make one app request; wait 10 min with only `/healthz` pings; Neon Console → compute state | Idle / suspended |
+| ☑ | **Cold start (V9)** | **Waived by owner 2026-11-23** (not measured): two beta users in daily use, no slow first loads noticed. Measure if anyone reports one: Cloud Monitoring `run.googleapis.com/request_latencies` (free) or the original 20-sample method | Not measured; accepted on real use |
+| ☑ | **Neon sleeps (V23)** | Neon Console → Usage, 2026-11-23: **1.25 CU-hrs** since 2026-11-18 (≈ 7–8 CU-hrs/month; never sleeping would be ≈ 186), storage 32.69 MB | Pass: compute suspends when idle |
 | ☑ | Test hooks absent (F-10) | Step 15 Verify (custom domain) | 404 (2026-11-23) |
-| ☐ | Phone journeys | Sign up with an invite (admin-commands.md), add a transaction, see the month | Works on your phone |
+| ☑ | Phone journeys | Owner + one invited beta user using the app daily since 2026-11-20, no issues seen (owner, 2026-11-23) | Pass (real use) |
 | ☑ | **Hop count measured on both paths (V26, F-65)**: 1 and 1, 2026-11-23 | Step 14a (`run.app`) **and** 14b (domain mapping), both recorded in infra/CLAUDE.md "Client IP"; they agree, and the service's `TRUST_PROXY_HOPS` matches | **Launch blocker** (security-reviewer) |
 | ☐ | **DMARC at `p=reject`** | `dig +short TXT "_dmarc.mail.$DOMAIN"` | **Launch blocker** (F-29) |
 | ☑ | Admin args retention (V34) | Measured 2026-11-23 from existing runs (infra/hosting-evaluation.md V34) | System Event audit log 400 days + execution record (no limit); privacy wording in admin-commands.md (R-12) |
