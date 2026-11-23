@@ -8,6 +8,9 @@
 - If a command fails because a flag or role has changed (items marked "verify"), stop and send the error to the tech lead. Don't improvise against production.
 - **Before any step that handles key material** (steps 7, 9 and 11, rotations, restores; F-40): turn **off Handoff** (System Settings → General → AirDrop & Handoff → "Allow Handoff between this Mac and your iCloud devices"), so Universal Clipboard doesn't copy keys to your other devices. Quit or pause any **clipboard manager or history tool**. Turn Handoff back on afterwards. Better still, pipe secrets straight into your password manager's CLI instead of the clipboard, if it has one.
 - **Never paste a secret** into a command line, chat, ticket or file. Every secret is entered at a `read -rs` prompt or moved through the clipboard straight into a store.
+- **Clipboard order** (commands that read a secret with `pbpaste`): copying the command from this runbook overwrites the clipboard. Paste the command first **without pressing Return**, then copy the secret, then press Return.
+- **The commands work in zsh (macOS default) and bash.** zsh reads `$VAR:x` as a modifier (`$VAR:s…` fails with "bad substitution"; `$VAR:e…` silently becomes a different value), so a variable directly followed by `:` is always written `${VAR}:`. Keep it that way in any command you adapt.
+- **New terminal?** `source ~/shoestring-prod.env` first. An unset variable expands to nothing without an error, and several commands below would then create resources with empty settings. Steps that depend on earlier values check them with `: "${VAR:?…}"`.
 
 ## 0. Tools and variables
 ```sh
@@ -111,13 +114,13 @@ esac
 POOL="projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github"
 gcloud iam service-accounts add-iam-policy-binding "$(SA deployer)" --project "$PROJECT" \
   --role roles/iam.workloadIdentityUser \
-  --member "principal://iam.googleapis.com/$POOL/subject/$SUB_PREFIX:environment:production"
+  --member "principal://iam.googleapis.com/$POOL/subject/${SUB_PREFIX}:environment:production"
 ```
-This is the **only** WIF binding: there is no GitHub backup identity. If `use_immutable_subject` ever prints `false`, the subject is `repo:$GH_REPO:environment:production` instead: stop and tell the tech lead before binding.
+This is the **only** WIF binding: there is no GitHub backup identity. If `use_immutable_subject` ever prints `false`, the subject is `repo:${GH_REPO}:environment:production` instead: stop and tell the tech lead before binding.
 - **Never widen the binding to a `principalSet`** (`…/attribute.repository_id/…`, `…/attribute.ref/…` or any other attribute). That would hand the deployer to CI's `publish` job and every future main-branch job with `id-token: write`. If deploy authentication fails, stop and tell the tech lead.
-- **First deploy-job token:** `.github/workflows/deploy.yml` doesn't exist yet; the owner deploys by the manual path for now. When it does, its first run confirms the subject: auth succeeds only if the token's `sub` is exactly `$SUB_PREFIX:environment:production`. If it fails, compare the subject in the auth error with that value; never "fix" it by widening.
+- **First deploy-job token:** `.github/workflows/deploy.yml` doesn't exist yet; the owner deploys by the manual path for now. When it does, its first run confirms the subject: auth succeeds only if the token's `sub` is exactly `${SUB_PREFIX}:environment:production`. If it fails, compare the subject in the auth error with that value; never "fix" it by widening.
 
-**Verify:** `gcloud iam workload-identity-pools providers describe github-oidc --workload-identity-pool github --location global --project "$PROJECT" --format="yaml(attributeCondition,state)"` shows the condition (including `environment=='production'`) and `ACTIVE`. `gcloud iam service-accounts get-iam-policy "$(SA deployer)" --project "$PROJECT"` shows exactly one `workloadIdentityUser` member, the `principal://…/subject/$SUB_PREFIX:environment:production` above, and no `principalSet`. **Back out:** `gcloud iam workload-identity-pools providers update-oidc github-oidc ... --disabled` (verify flag).
+**Verify:** `gcloud iam workload-identity-pools providers describe github-oidc --workload-identity-pool github --location global --project "$PROJECT" --format="yaml(attributeCondition,state)"` shows the condition (including `environment=='production'`) and `ACTIVE`. `gcloud iam service-accounts get-iam-policy "$(SA deployer)" --project "$PROJECT"` shows exactly one `workloadIdentityUser` member, the `principal://…/subject/${SUB_PREFIX}:environment:production` above, and no `principalSet`. **Back out:** `gcloud iam workload-identity-pools providers update-oidc github-oidc ... --disabled` (verify flag).
 
 ## 7. Backup project: bucket, write-only grant, `age` key (OD-4, F-17)
 Run **billing-protection.md §7** (create the bucket: us-east1, soft delete off, 34-day lifecycle). Then give the prod project's backup job identity **create-only** access to that one bucket:
@@ -140,7 +143,7 @@ pbcopy < /dev/null
 2. **Create project** `shoestring`: Postgres **17**, region **AWS US East 1 (N. Virginia)**, database `shoestring`.
 3. **Settings → Compute:** min **0.25**, max **0.25** CU. Leave scale to zero on. Leave the Data API and Neon Auth **off**.
 4. **SQL Editor:** `select version();` → record the 17.x minor in infra/CLAUDE.md (V30). Local is 17.12; the major must match and the minor may differ.
-5. **Roles (least privilege, F-28) [needs db/]:** connect as the database owner role from your Mac, run data-engineer's role script `db/roles.sql`, and set each password with `\password`. psql hashes it locally, so the password never appears in SQL history or Neon's query log.
+5. **Roles (least privilege, F-28) [needs db/]:** connect as the database owner role from your Mac, run data-engineer's role script `db/roles.sql`, and set each password. **Neon accepts only plaintext passwords** (psql's `\password` sends a hash and Neon answers `400 … only supports being given plaintext passwords`), so the password goes in as a psql variable from a here-document: it never appears on screen, in shell history or in psql history. Neon's server receives it in plaintext and may log it where we can't see it; that is accepted (security-reviewer 2026-11-23), since Neon already holds the data these roles protect.
    - Run it from a checkout of current `main` (`git switch main && git pull`), which is the commit you deploy in step 12 or older. The app image no longer contains `db/`, so the repo checkout is the only source.
    - It must run as the **owner** (`neondb_owner`): only the owner can revoke `TEMPORARY` from PUBLIC (F-44). The migrate job re-runs it as `migrator` and **fails closed** if the owner's part is missing.
    ```sh
@@ -148,14 +151,15 @@ pbcopy < /dev/null
    git diff --quiet origin/main -- db/roles.sql && echo "roles.sql matches origin/main"   # must print that line
    read -rs OWNER_URL                          # not exported (F-64 nit); Neon → Connect → role neondb_owner, DIRECT, append ?sslmode=verify-full&sslrootcert=system
    psql "$OWNER_URL" -v ON_ERROR_STOP=1 -f db/roles.sql     # creates app, migrator, backup; database grants; F-44 revokes
-   psql "$OWNER_URL"
-   ```
-   Inside psql, for each role, paste a fresh 40-character random password from your password manager (generate with `openssl rand -base64 48 | tr -d '/+=' | cut -c1-40`, saved there first):
-   ```
-   \password app
-   \password migrator
-   \password backup
-   \q
+   set_pw() {   # $1 = role; generates a password, sets it, and copies it to the clipboard for your password manager
+     local pw; pw=$(openssl rand -base64 48 | tr -d '/+=' | cut -c1-40)
+     psql "$OWNER_URL" -v ON_ERROR_STOP=1 -v role="$1" -v pw="$pw" <<'SQL'
+   ALTER ROLE :"role" PASSWORD :'pw';
+   SQL
+     [ $? -eq 0 ] || { echo "STOP: password for $1 NOT set; nothing copied" >&2; return 1; }
+     printf '%s' "$pw" | pbcopy; echo "$1: password set and copied (Handoff off, F-40); save it in the password manager, then press Return"; read -r; pbcopy < /dev/null
+   }
+   set_pw app && set_pw migrator && set_pw backup
    ```
    Then `unset OWNER_URL`. The app never uses `neondb_owner`.
 6. **Build the three URLs** in your password manager (never in a file). Host names come from Neon → Connect.
@@ -382,7 +386,7 @@ gh api "repos/$GH_REPO/environments/sentry/deployment-branch-policies" --jq '[.b
 Replaced by deploy/cloudrun/*.yaml once that exists. The flags here are the spec.
 
 Two images per commit, both built by CI (linux/amd64 only; never push a build from your Mac, which is arm64), both deployed by digest, **always from the same SHA**: the app's `/api/readyz` requires the newest migration that its build ships with.
-- **App** `ghcr.io/$GH_REPO_LC:sha-<sha>` → AR `…/shoestring/app`: the service and the purge, admin and rewrap-mfa jobs.
+- **App** `ghcr.io/${GH_REPO_LC}:sha-<sha>` → AR `…/shoestring/app`: the service and the purge, admin and rewrap-mfa jobs.
 - **Migrate** `ghcr.io/$GH_REPO_LC-migrate:sha-<sha>` → AR `…/shoestring/migrate`: the `shoestring-migrate` job only. It holds the compiled migrate CLI, dbmate, `db/migrations` and `db/roles.sql`; the app image holds nothing of `db/`.
 - GHCR paths are lowercase (`$GH_REPO_LC`, step 0); the GitHub repo slug has capitals.
 - CI's `publish` job pushes all three images on every push to `main`, after check, e2e, audit and the image smoke pass, so an image exists only for a green main commit. It also attests each digest. **Verifying the attestation is mandatory** before every copy (F-67): copy by `@$DIGEST`, never by tag, and STOP if `gh attestation verify` fails (the `&&` below skips the copy).
@@ -393,13 +397,13 @@ export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
 gcloud auth configure-docker "$REGION-docker.pkg.dev"
 ATTEST_FLAGS=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$SHA" --deny-self-hosted-runners)   # --source-digest: built from exactly $SHA (F-67 re-check)
-DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC:sha-$SHA")
+DIGEST=$(crane digest "ghcr.io/${GH_REPO_LC}:sha-$SHA")
 gh attestation verify "oci://ghcr.io/$GH_REPO_LC@$DIGEST" "${ATTEST_FLAGS[@]}" \
-  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "$AR_REPO:sha-$SHA"
+  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "${AR_REPO}:sha-$SHA"
 export IMAGE="$AR_REPO@$DIGEST"
 MIGRATE_DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC-migrate:sha-$SHA")
 gh attestation verify "oci://ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${ATTEST_FLAGS[@]}" \
-  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "$MIGRATE_AR_REPO:sha-$SHA"
+  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${MIGRATE_AR_REPO}:sha-$SHA"
 export MIGRATE_IMAGE="$MIGRATE_AR_REPO@$MIGRATE_DIGEST"
 crane config "$IMAGE" | jq -r '.architecture'; crane config "$MIGRATE_IMAGE" | jq -r '.architecture'   # both: amd64
 : "${SENTRY_DSN_API:?run step 11b S5 first}"     # shoestring-api DSN (not secret); purge needs it for the cron check-in
@@ -464,8 +468,8 @@ gcloud scheduler jobs create http shoestring-purge-daily --project "$PROJECT" --
   --oauth-service-account-email "$(SA scheduler)"
 
 # 12f. Registry tags for the rollback guard and the cleanup policy (each package has its own prod-current)
-gcloud artifacts docker tags add "$IMAGE" "$AR_REPO:prod-current"
-gcloud artifacts docker tags add "$MIGRATE_IMAGE" "$MIGRATE_AR_REPO:prod-current"
+gcloud artifacts docker tags add "$IMAGE" "${AR_REPO}:prod-current"
+gcloud artifacts docker tags add "$MIGRATE_IMAGE" "${MIGRATE_AR_REPO}:prod-current"
 
 # 12h. Deployer rights on exactly the resources it manages (F-39). Never on shoestring-backup.
 gcloud run services add-iam-policy-binding shoestring --project "$PROJECT" --region "$REGION" \
@@ -478,20 +482,21 @@ gcloud run jobs get-iam-policy shoestring-backup --project "$PROJECT" --region "
 ```
 The first GitHub deploy proves the scoping: if it fails with a permission error, add **only** the missing permission to `shoestring-deployer`'s custom project role (V36), never a `roles/run.*` project grant.
 
-**Verify (steps 12a–12h):** the service takes 100% of traffic on its public `run.app` URL, so the probes below hit exactly what users will reach (step 16 repeats the F-10 probe on the custom domain).
+**Verify (steps 12a–12h):** the service takes 100% of traffic on its public `run.app` URL, so the probes below hit exactly what users will reach.
+- **F-10 on `run.app` returns 400, not 404, and that is expected.** The app rejects any request whose `Host` isn't `shoestring.<domain>` before it looks up a route (backend/src/http/pipeline.ts `checkHost`), so on `run.app` the probe can only show the Host check working. `healthz`/`readyz` are exempt from that check. The real F-10 probe (expect **404**) runs on the custom domain after step 15 (step 15 Verify).
 ```sh
 URL=$(gcloud run services describe shoestring --project "$PROJECT" --region "$REGION" --format 'value(status.url)')
 curl -fsS "$URL/api/healthz"; echo; curl -fsS "$URL/api/readyz"; echo
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL/api/_test/reset"      # must be 404 (F-10)
+curl -s -X POST "$URL/api/_test/reset"; echo      # expect 400 VALIDATION_FAILED naming header Host (see above); 404 only after step 15
 gcloud run jobs execute shoestring-admin --project "$PROJECT" --region "$REGION" --wait        # default args: read-only purge dry run; must succeed
 gcloud run jobs execute shoestring-rewrap-mfa --project "$PROJECT" --region "$REGION" --wait   # default args: rewrap dry run; must succeed
 gcloud scheduler jobs run shoestring-purge-daily --project "$PROJECT" --location "$REGION"   # one manual trigger; check the execution succeeds
 ```
 - The two job runs prove the job command (`/nodejs/bin/node`) and each job's least config. Their logs show counts only.
-- **`/api/_test/reset` is not 404:** test hooks are live in production. Close ingress at once (`gcloud run services update shoestring --ingress internal --region "$REGION" --project "$PROJECT"`) and tell the tech lead (security incident, F-10).
+- **`/api/_test/reset` on the custom domain (step 15) is not 404, or the `run.app` probe answers anything but the Host 400:** test hooks may be live in production. Close ingress at once (`gcloud run services update shoestring --ingress internal --region "$REGION" --project "$PROJECT"`) and tell the tech lead (security incident, F-10).
 - **The service crashes at startup** (healthz never answers; the revision log names the variable): check the env list in 12b against infra/CLAUDE.md "Non-secret runtime config". config.ts refuses to start without `TRUST_PROXY_HOPS`, `EMAIL_DAILY_QUOTA` and the rest of the production settings.
 
-Then run the **Sentry smoke check** in deploy.md "Verify → Sentry" (the purge check-in, the release in the bundle, and the CSP host). Do it after step 13, so the `purge` monitor exists to receive the check-in.
+Then run the **Sentry smoke check** in deploy.md "Verify → Sentry" (the purge check-in, the release in the bundle, and the CSP host). Do it after step 13, so the `purge` monitor exists to receive the check-in, **and after step 15**: it fetches the SPA from `https://shoestring.<domain>`, which doesn't resolve until then (`curl: (6) Could not resolve host`).
 
 After two deploys, switch the AR cleanup policy from dry-run to live (billing-protection.md §5).
 
@@ -503,10 +508,17 @@ export BK_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/backup"
 BK_DIGEST=$(crane digest "ghcr.io/$GH_REPO_LC-backup:sha-$BACKUP_SHA")
 gh attestation verify "oci://ghcr.io/$GH_REPO_LC-backup@$BK_DIGEST" --repo "$GH_REPO" \
   --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$BACKUP_SHA" --deny-self-hosted-runners \
-  && crane copy "ghcr.io/$GH_REPO_LC-backup@$BK_DIGEST" "$BK_REPO:sha-$BACKUP_SHA"   # mandatory (F-67); STOP on failure
-gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "$BK_REPO:prod-backup"     # protected by the prod- keep rule
-export AGE_PUBLIC_KEY="<age1... public key from step 7>"      # not secret
+  && crane copy "ghcr.io/$GH_REPO_LC-backup@$BK_DIGEST" "${BK_REPO}:sha-$BACKUP_SHA"   # mandatory (F-67); STOP on failure
+gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "${BK_REPO}:prod-backup"     # protected by the prod- keep rule
+export AGE_PUBLIC_KEY="<age1... public key from step 7>"      # not secret; the bare age1… value, no "# public key:" prefix
 export HEARTBEAT_URL="<Better Stack heartbeat URL from step 13>"  # plain config, see infra/CLAUDE.md
+# Add both lines to ~/shoestring-prod.env. Guards (they print STOP but do not halt a pasted block): an empty or malformed value would create a job that fails every night.
+# Run these three guard lines ON THEIR OWN first. Continue only if they print "age recipient OK", no error, and 1.
+case "$AGE_PUBLIC_KEY" in age1?*) [ ${#AGE_PUBLIC_KEY} -eq 62 ] && echo "age recipient OK" || echo "STOP: age recipient is not 62 characters" ;; *) echo "STOP: AGE_PUBLIC_KEY must start with age1" ;; esac
+: "${HEARTBEAT_URL:?set HEARTBEAT_URL first}"
+# The backup URL is read by pg_dump (libpq), so it MUST carry sslrootcert=system (step 8 item 6). Prints 1, never the URL.
+# The job below pins secret version 1, so check that version (if the job pins another, check that one):
+gcloud secrets versions access 1 --secret shoestring-backup-database-url --project "$PROJECT" | grep -c 'sslmode=verify-full&sslrootcert=system'
 
 gcloud run jobs create shoestring-backup --project "$PROJECT" --region "$REGION" --image "$BK_REPO@$BK_DIGEST" \
   --service-account "$(SA backup)" \
@@ -531,11 +543,11 @@ gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/"
 ```sh
 PREV_BK_IMAGE=$(gcloud run jobs describe shoestring-backup --project "$PROJECT" --region "$REGION" \
   --format='value(spec.template.spec.template.spec.containers[0].image)'); echo "previous: $PREV_BK_IMAGE"   # record it
-gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "$BK_REPO:prod-backup"
+gcloud artifacts docker tags add "$BK_REPO@$BK_DIGEST" "${BK_REPO}:prod-backup"
 gcloud run jobs update shoestring-backup --project "$PROJECT" --region "$REGION" --image "$BK_REPO@$BK_DIGEST"
 gcloud run jobs execute shoestring-backup --project "$PROJECT" --region "$REGION" --wait
 ```
-**Verify:** a new `daily/` object and a green heartbeat, as above. **Back out:** `gcloud run jobs update shoestring-backup --project "$PROJECT" --region "$REGION" --image "$PREV_BK_IMAGE"`, and move `prod-backup` back with `gcloud artifacts docker tags add "$PREV_BK_IMAGE" "$BK_REPO:prod-backup"`.
+**Verify:** a new `daily/` object and a green heartbeat, as above. **Back out:** `gcloud run jobs update shoestring-backup --project "$PROJECT" --region "$REGION" --image "$PREV_BK_IMAGE"`, and move `prod-backup` back with `gcloud artifacts docker tags add "$PREV_BK_IMAGE" "${BK_REPO}:prod-backup"`.
 
 ## 13. Monitoring [needs app for A3 and A6]
 Better Stack: follow **observability/README.md** "Better Stack Uptime":
@@ -547,7 +559,7 @@ Sentry: the steps below. They need step 11b. The UI paths follow Sentry's curren
 
 **13A. How alerts reach your phone.** The Developer plan sends alerts **by email only**. Slack, Discord and webhooks are Team-plan features, and Sentry's own mobile app is unmaintained and not in the US App Store (checked 2026-11-16). Phone push therefore comes from your mail app, the same way the GCP budget alerts do:
 1. Avatar → **User Settings → Notifications**: **Issue Alerts** = on, delivery **Email**. **Spike Protection** = on (email).
-2. After the first test notification in 13C arrives, open it in Gmail on the web → ⋮ → **Filter messages like this**. The "From" box is prefilled with Sentry's sender (note it here: ______, V40) → **Create filter**, then tick:
+2. After the first test notification in 13C arrives, open it in Gmail on the web → ⋮ → **Filter messages like this**. The "From" box is prefilled with Sentry's sender (`noreply@md.getsentry.com`, recorded 2026-11-23, V40) → **Create filter**, then tick:
    - **Apply the label** `Shoestring alerts` (new label)
    - **Never send it to Spam**
    - **Always mark it as important**
@@ -623,6 +635,7 @@ curl -s -H "Authorization: Bearer $(gcloud auth print-identity-token)" -H "X-For
 ```
 
 **14b. The domain-mapping path (mandatory).** Do it after step 15 item 1 (domain verified with Google). Map a temporary `xff-probe.<domain>` exactly like step 15 items 2–5: the Cloudflare CNAME `xff-probe` → `ghs.googlehosted.com`, **DNS only (grey cloud)**, then wait for `CertificateProvisioned: True`.
+- Create the mapping **after** the CNAME resolves (`dig +short CNAME "xff-probe.${DOMAIN}"` prints `ghs.googlehosted.com.`). A mapping created first reports "challenge data was not visible" and then retries only every 24 h. If that happened, delete and recreate the mapping.
 ```sh
 gcloud beta run domain-mappings create --service xff-probe --domain "xff-probe.$DOMAIN" --region "$REGION" --project "$PROJECT"
 gcloud beta run domain-mappings describe --domain "xff-probe.$DOMAIN" --region "$REGION" --project "$PROJECT" \
@@ -673,6 +686,7 @@ gcloud iam service-accounts delete "$(SA probe)" --project "$PROJECT" --quiet
 dig +short "shoestring.$DOMAIN"        # Google addresses via ghs.googlehosted.com, NOT Cloudflare 104.x/172.x ranges
 curl -sSI "https://shoestring.$DOMAIN/" | grep -iE 'strict-transport-security|content-security-policy|x-content-type-options'
 curl -sSI "https://shoestring.$DOMAIN/api/healthz" | grep -i 'cache-control'     # no-store
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api/_test/reset"   # must be 404 (F-10); else step 12 Verify's incident line
 ```
 **Back out:** delete the CNAME in Cloudflare and run `gcloud beta run domain-mappings delete --domain "shoestring.$DOMAIN" --region "$REGION" --project "$PROJECT"`.
 **Fallback** (mapping unavailable or failing): the Cloudflare proxy, infra/hosting-evaluation.md §3a. **Switch it on only after a security-reviewer review and sign-off** (owner ruling 2026-11-13), plus the backend change it needs. Until then the record stays DNS only.
@@ -682,13 +696,13 @@ curl -sSI "https://shoestring.$DOMAIN/api/healthz" | grep -i 'cache-control'    
 |---|---|---|---|
 | ☐ | **Cold start (V9)** | Pause the Better Stack monitor. Then, 20 times over a few days, each after ≥ 30 min idle: `curl -s -o /dev/null -w '%{time_total}\n' "https://shoestring.$DOMAIN/api/readyz"` | p95 ≤ 3 s. Record the numbers in infra/hosting-evaluation.md. |
 | ☐ | **Neon sleeps (V23)** | Resume the monitor; make one app request; wait 10 min with only `/healthz` pings; Neon Console → compute state | Idle / suspended |
-| ☐ | Test hooks absent (F-10) | Step 12 verify, on the custom domain | 404 |
+| ☑ | Test hooks absent (F-10) | Step 15 Verify (custom domain) | 404 (2026-11-23) |
 | ☐ | Phone journeys | Sign up with an invite (admin-commands.md), add a transaction, see the month | Works on your phone |
-| ☐ | **Hop count measured on both paths (V26, F-65)** | Step 14a (`run.app`) **and** 14b (domain mapping), both recorded in infra/CLAUDE.md "Client IP"; they agree, and the service's `TRUST_PROXY_HOPS` matches | **Launch blocker** (security-reviewer) |
+| ☑ | **Hop count measured on both paths (V26, F-65)**: 1 and 1, 2026-11-23 | Step 14a (`run.app`) **and** 14b (domain mapping), both recorded in infra/CLAUDE.md "Client IP"; they agree, and the service's `TRUST_PROXY_HOPS` matches | **Launch blocker** (security-reviewer) |
 | ☐ | **DMARC at `p=reject`** | `dig +short TXT "_dmarc.mail.$DOMAIN"` | **Launch blocker** (F-29) |
 | ☐ | Admin args retention (V34) | Run `gcloud run jobs execute shoestring-admin --args="purge,--dry-run" --project "$PROJECT" --region "$REGION" --wait` once (an `--args` override, read-only), then read the audit entry (hosting-evaluation.md V34) | Retention known; privacy notice states it (R-12) |
-| ☐ | Backups | `gcloud run jobs execute shoestring-backup --project "$PROJECT" --region "$REGION" --wait`, then `gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/"`; next morning, confirm the 09:15 scheduled run | Objects present; heartbeat green |
-| ☐ | **Restore drill** | restore.md path C | Passes; recorded in README.md |
+| ☑ | Backups (first dump and green heartbeat 2026-11-23) | `gcloud run jobs execute shoestring-backup --project "$PROJECT" --region "$REGION" --wait`, then `gcloud storage ls -l "gs://$BACKUP_BUCKET/daily/"`; next morning, confirm the 09:15 scheduled run | Objects present; heartbeat green |
+| ☑ | **Restore drill** (passed 2026-11-23, 18 min) | restore.md path C | Passes; recorded in README.md |
 | ☐ | Billing | After 7 days, billing-protection.md §11 check 1 | $0.00 net |
 
 ## Record
@@ -696,11 +710,11 @@ curl -sSI "https://shoestring.$DOMAIN/api/healthz" | grep -i 'cache-control'    
 |---|---|---|
 | 1 Operator MFA | | |
 | 2 Billing, spend cap (V0 result) | | |
-| 3–7 GCP setup | | |
-| 8 Neon (`version()` result) | | |
+| 3–7 GCP setup | 2026-11-19 | Suffix `ssba`. WIF member first bound to a zsh-mangled subject (`…/subject/nvironment:production`); rebound correctly 2026-11-19 |
+| 8 Neon (`version()` result) | 2026-11-19 | 17.12 |
 | 9–11 Secrets, GitHub, email | | |
 | 11b Sentry (org slug; trial end date; plan shown after the trial; canary result) | 2026-11-17 (S1–S9, run by the tech lead through the Sentry CLI with the owner's authorisation; S6 token in the browser UI) | Org "Cameron Hardy", slug `cameron-hardy`, region US. Trial ends **2026-12-01**: check Subscription shows Developer after that (V41). Projects `shoestring-api` (node, id 4512447711019008) and `shoestring-web` (javascript, id 4512447711084545); both DSNs on host `o4512447486558208.ingest.us.sentry.io` (S5 pass). Replace rules use `[Filtered]`; `scrubIPAddresses` and `scrapeJavaScript` set per project. Spike protection: one action per project. Org token created in the UI (API refused it). GitHub environment `sentry` had been auto-created by CI with no branch policy; main-only policy added and checked. **Canary passed on both projects** (checked through the API), including the value-only match `note: "payee …-value-match"`. The owner deletes the two canary issues in the UI (needs `event:admin`, which the CLI lacks). S10 and step 13 pending. Sentry CLI login expires ~2026-12-15; logged out: ____ |
-| 12–13 First deploy, monitoring | | |
-| 14 Hop count (`run.app` = __, domain mapping = __) | | |
-| 15 Domain | | |
+| 12–13 First deploy, monitoring | 2026-11-19 (deploy), 2026-11-23 (backup job fixed, Sentry 13C) | Release `30577e54226e96551c3382ee6c3ec02b116338e4`, revision `shoestring-00001-sg9`. Backup failed 2026-11-20→22 (empty age recipient, then the backup URL lacked `sslrootcert=system`); fixed 2026-11-23, secret v2. Sentry: 5 rules, sender V40 above |
+| 14 Hop count (`run.app` = 1, domain mapping = 1) | 2026-11-23 | Both `"203.0.113.7,<client IP>"`; `TRUST_PROXY_HOPS=1` unchanged. Probe service, mapping, SA and CNAME deleted. Security-reviewer sign-off: see PR |
+| 15 Domain | by 2026-11-23 | `shoestring.cameronhardy.work`, CNAME DNS only, certificate provisioned; F-10 404 |
 | 16 Launch checks | | |

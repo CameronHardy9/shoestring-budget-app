@@ -1,6 +1,6 @@
 # Restore the database
 - Owner: sre · Runs: **owner** (only the owner holds the `age` private key) · Status: **DRAFT, pending first deploy**
-- **Last successful restore test: never.** A drill must pass before launch (record it in README.md "Restore drill record").
+- **Last successful restore test: 2026-11-23** (drill, path C, 18 min). A drill must pass before launch (record it in README.md "Restore drill record").
 - Targets: RPO 24 h · RTO 4 h (best effort)
 
 ## When to use
@@ -75,15 +75,14 @@ git fetch origin main
 check_sha() {
   [[ "$SERVING_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "STOP: release of '$SERVING_REV' is not a full git sha" >&2; return 1; }
   git merge-base --is-ancestor "$SERVING_SHA" origin/main || { echo "STOP: $SERVING_SHA is not on origin/main" >&2; return 1; }
-  git cat-file -e "$SERVING_SHA:db/roles.sql" || { echo "STOP: no db/roles.sql at $SERVING_SHA" >&2; return 1; }
+  git cat-file -e "${SERVING_SHA}:db/roles.sql" || { echo "STOP: no db/roles.sql at $SERVING_SHA" >&2; return 1; }
 }
 check_sha && git log -1 --format='%H %cs %s' "$SERVING_SHA"   # CONFIRM: a release you recognise. Any STOP: stop, tell the tech lead
-roles_sql() { check_sha && git show "$SERVING_SHA:db/roles.sql" | psql "$1" -v ON_ERROR_STOP=1 -f -; }
+roles_sql() { check_sha && git show "${SERVING_SHA}:db/roles.sql" | psql "$1" -v ON_ERROR_STOP=1 -f -; }
 roles_sql "$RESTORE_OWNER_URL"
-#    New Neon project only: the roles were just created without passwords. Set them now with
-#    `psql "$RESTORE_OWNER_URL"` then \password app, \password migrator and \password backup
-#    (bootstrap-production.md step 8 items 5-6; new values into the password manager), then fill in
-#    RESTORE_URL (migrator) above before step 6.
+#    New Neon project only: the roles were just created without passwords. Set them with set_pw from
+#    bootstrap-production.md step 8 item 5 (OWNER_URL="$RESTORE_OWNER_URL"; Neon rejects psql's \password),
+#    new values into the password manager, then fill in RESTORE_URL (migrator) above before step 6.
 unset RESTORE_OWNER_URL                                # the owner role is not needed again in this restore
 #    After a rollback, the revision taking traffic is older than the latest revision, whose migrate image the
 #    job holds. If that newer release changed roles.sql's owner part, "After any restore" step 0 fails closed
@@ -144,7 +143,19 @@ gcloud run services update shoestring --ingress all --region "$REGION" --project
 6. Note in the incident record that steps 1–5 were done, with times.
 
 ## C. Restore drill (before launch, then quarterly)
-Run path B steps 2–8 against a **new Neon project `shoestring-drill`** (never the production project), with no change to production traffic or secrets. Step 5 there creates the roles, so set the migrator password (`\password migrator` as `neondb_owner`) before building `RESTORE_URL`; a throwaway value is fine, as the project is deleted the same day. The "After any restore" steps are **not** run for a drill (nothing serves the drill database). Then:
+Run path B steps 2–8 against a **new Neon project `shoestring-drill`** (never the production project), with no change to production traffic or secrets. Step 5 there creates the roles, so set a throwaway migrator password (the project is deleted the same day) and build `RESTORE_URL` from the owner URL, after step 5's `roles_sql` and before its `unset`. Neon rejects psql's `\password`, so:
+```sh
+PW=$(openssl rand -hex 24)
+psql "$RESTORE_OWNER_URL" -v ON_ERROR_STOP=1 -v pw="$PW" <<'SQL'
+ALTER ROLE migrator PASSWORD :'pw';
+SQL
+RESTORE_URL=$(printf '%s' "$RESTORE_OWNER_URL" | sed -E "s#^(postgres(ql)?://)[^:]+:[^@]+@#\1migrator:${PW}@#"); export RESTORE_URL
+unset PW; psql "$RESTORE_URL" -Atc "select current_user"     # migrator
+```
+- Step 3 reads the key with `pbpaste`: paste that command line first, then copy the key, then press Return (copying the command would replace the key on the clipboard). Then check it: `age-keygen -y "$KEYFILE"` must print the backup job's `BACKUP_AGE_RECIPIENT`.
+- psql and pg_restore 17 come from `brew install postgresql@17` plus the `PATH` line in bootstrap-production.md step 0.
+
+The "After any restore" steps are **not** run for a drill (nothing serves the drill database). Then:
 - Time it from step 2 to the end of step 8 and record it as RTO evidence in README.md.
 - Optionally run the app locally against the drill database, but **only with the production entrypoint**: the production image or `node dist/server.js`, with `NODE_ENV=production`, **no `TEST_HOOKS`**, and `DATABASE_URL` passed via a `read -rs` variable. **Never `make dev`**: its test hooks would act on real users' data (F-40).
 - Delete the `shoestring-drill` project the same day. Remove the key file.

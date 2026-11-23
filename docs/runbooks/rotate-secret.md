@@ -32,7 +32,7 @@ export NEW_VERSION=$(gcloud secrets versions list "$NAME" --project "$PROJECT" -
   --format='value(name.basename())')
 
 # 2. Service (if it is a consumer): new revision without traffic, readiness gate, then shift traffic
-gcloud run services update shoestring --update-secrets "$ENVVAR=$NAME:$NEW_VERSION" \
+gcloud run services update shoestring --update-secrets "$ENVVAR=${NAME}:$NEW_VERSION" \
   --no-traffic --tag candidate --region "$REGION" --project "$PROJECT"
 CANDIDATE_URL=$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format=json \
   | jq -r '.status.traffic[] | select(.tag=="candidate") | .url')
@@ -41,7 +41,7 @@ gcloud run services update-traffic shoestring --to-latest --region "$REGION" --p
 gcloud run services update-traffic shoestring --remove-tags candidate --region "$REGION" --project "$PROJECT"
 
 # 3. Each job that is a consumer (see the table)
-gcloud run jobs update "<job>" --update-secrets "$ENVVAR=$NAME:$NEW_VERSION" --region "$REGION" --project "$PROJECT"
+gcloud run jobs update "<job>" --update-secrets "$ENVVAR=${NAME}:$NEW_VERSION" --region "$REGION" --project "$PROJECT"
 
 # 4. Verify (below), then revoke the old credential at its source (table below)
 
@@ -114,7 +114,7 @@ pbcopy < /dev/null
 ```
 Then roll it out:
 1. Service: generic step 2 with `ENVVAR=APP_KEYRING`. The candidate's `/api/readyz` must pass.
-2. Rewrap job: `gcloud run jobs update shoestring-rewrap-mfa --update-secrets "APP_KEYRING=$NAME:$NEW_VERSION" --region "$REGION" --project "$PROJECT"`
+2. Rewrap job: `gcloud run jobs update shoestring-rewrap-mfa --update-secrets "APP_KEYRING=${NAME}:$NEW_VERSION" --region "$REGION" --project "$PROJECT"`
 
 **Stage 2: re-encrypt TOTP secrets under the new key**
 ```sh
@@ -146,6 +146,6 @@ Roll it out exactly as in stage 1. **If the candidate's `/api/readyz` fails, a r
 - The keyring escrow in vault B matches the pinned version: `gcloud secrets versions access <pinned> --secret shoestring-app-keyring --project "$PROJECT" | shasum -a 256` equals `pbpaste | shasum -a 256` after copying the vault item. Clear the clipboard afterwards.
 
 ## Back out
-Before the old credential is revoked or its version destroyed: re-pin `$OLD_VERSION` (`--update-secrets "$ENVVAR=$NAME:$OLD_VERSION"`) on every consumer.
+Before the old credential is revoked or its version destroyed: re-pin `$OLD_VERSION` (`--update-secrets "$ENVVAR=${NAME}:$OLD_VERSION"`) on every consumer.
 - **Keyring exception:** once the new key is `current`, rows may already be written or rewrapped under it, and the old version can't read them. So after stage 1, never re-pin an older keyring version. Roll **forward** with a version that contains every key still in use. readyz enforces this.
 - After a revocation there is no going back: generate another new value and repeat.

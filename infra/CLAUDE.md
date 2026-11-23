@@ -7,7 +7,7 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
   - The F-15 memory budget is a per-instance argon2id semaphore of 4 × 19 MiB ≈ 76 MiB, well inside 512 MiB. That gives at most 8 concurrent hashes across both instances.
 - **Database:** Neon free, project `shoestring`, region **aws-us-east-1**, branch `main`, compute fixed 0.25 CU. **Postgres major 17** to match local.
   - **Local is Postgres 17.12** (ci-engineer's compose).
-  - Neon free is believed to support 17 (it offers 14–17), but Neon manages the minor version itself, so production's 17.x minor may differ from 17.12. Majors must match; minors may drift. Verify (V30) and record `select version();` at bootstrap: ______.
+  - Neon free is believed to support 17 (it offers 14–17), but Neon manages the minor version itself, so production's 17.x minor may differ from 17.12. Majors must match; minors may drift. Verify (V30) and record `select version();` at bootstrap: 17.12.
   - `pg_dump`/`pg_restore` clients must be major 17 or newer.
 - **Connections:** the app uses the **pooled** endpoint (`-pooler` host). Migrations, `pg_dump` and restores use the **direct** endpoint. Every URL has `sslmode=verify-full` (F-28). libpq tools (`psql`, `pg_dump`, `pg_restore`, the backup URL) also add `sslrootcert=system`; the URLs node-postgres reads (`DATABASE_URL`, `MIGRATOR_DATABASE_URL`) must **not** have it (node-pg treats it as a file path and fails with ENOENT). The Neon default owner role (`neondb_owner`) is used only by the owner for role setup, never by the app (F-28).
 - **Jobs** (Cloud Run Jobs, each with its own service account and only the secrets it needs: F-02, F-28):
@@ -29,8 +29,8 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
 
 ## Client IP (F-08)
 - Normal path (domain mapping, DNS-only): Fastify `trustProxy: 1` (exact hop count, **never `true`**), set by the service env var `TRUST_PROXY_HOPS=1` (bootstrap step 12b). The client IP is the rightmost `X-Forwarded-For` entry. Expected; **measured at bootstrap** with the echo probe (V26), on **both** public paths, because the one value applies to both (F-65):
-  - `run.app` URL: hop count = ____ on ____
-  - custom domain (domain mapping): hop count = ____ on ____
+  - `run.app` URL: hop count = **1** on 2026-11-23 (`"203.0.113.7,<client IP>"`)
+  - custom domain (domain mapping): hop count = **1** on 2026-11-23 (same result, via `xff-probe.<domain>`; probe deleted)
 - **V26 must be measured before launch** (security-reviewer). Launch is blocked until **both** counts above are filled in and agree.
 - **If the two paths differ, stop:** no single `TRUST_PROXY_HOPS` is safe while both URLs are public (too low on one path shares one IP bucket among all users; too high on the other lets clients forge their IP). Escalate to security-reviewer; don't pick a value.
 - Cloudflare proxy fallback: the hop count stays 1, but the trusted client IP becomes `CF-Connecting-IP`, and only when the request carries a valid origin-auth header. That needs a backend change and an extra secret (hosting-evaluation.md §3a). **It is switched on only after a security-reviewer review and sign-off** (owner ruling 2026-11-13).
@@ -41,7 +41,7 @@ Status: **accepted platform** (owner, 2026-11-12; round 2 rulings 2026-11-13; AD
 | `local` | docker compose via OrbStack (ci-engineer owns compose), Postgres 17.12 | `.env` from `.env.example` |
 | `production` | GCP project `shoestring-prod-<suffix>` + Neon project `shoestring` | Cloud Run service/job config + Secret Manager |
 | (support) | GCP project `shoestring-backup-<suffix>`: backup bucket only | — |
-Record the chosen suffix here once picked: `<suffix>` = ______.
+Record the chosen suffix here once picked: `<suffix>` = ssba.
 
 No staging (owner decision). GitHub environments:
 - `production`: deploy only. Required reviewer = owner, branch `main` only, admins cannot bypass.

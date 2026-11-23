@@ -101,3 +101,7 @@ Rulings I made in the 2026-11-12 contract review. The full text is in docs/secur
   - **The repo uses immutable OIDC subjects** (`sub_claim_prefix` `repo:<owner>@<id>/<repo>@<id>`), so any `repo:<owner>/<repo>:…` binding fails closed.
 
 Related: [[project-review-hotspots]]
+
+- 2026-11-23: V26/F-65 signed off. Both public paths (run.app and domain mapping) measured 1 hop (`forged,<client>`); app trustProxy is `hop < TRUST_PROXY_HOPS` (=1) so rightmost XFF wins. Re-measure only if the edge changes (e.g. Cloudflare proxy on).
+- 2026-11-23: F-10 production control is now (a) the Dockerfile tripwire re-run on the exact deploy digest via `crane export` (pre-traffic) plus (b) the 404 probe on the custom domain post-shift. run.app can never 404 (checkHost 400s first). Accepted.
+- 2026-11-23: Neon only takes plaintext passwords (`\password` hash rejected). Plaintext ALTER ROLE via psql variable accepted as Low residual (Neon already holds the data); runbooks must not claim it stays out of Neon's logs.

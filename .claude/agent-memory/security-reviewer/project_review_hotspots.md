@@ -103,3 +103,5 @@ Patterns found in the 2026-11-12 and 2026-11-13 contract reviews that tend to co
 Related: [[project-security-rulings]]
 
 11. **CI caches (2026-11-17, F-69).** apt trusts a .deb already in `Dir::Cache::Archives` by size alone, with no hash check (apt 2.7.14 `acquire-item.cc`). Treat any cached binary (debs, browsers) as unverified unless a step re-hashes it. Main can only be poisoned from a main-branch job, not from PR or Dependabot scopes. `restore-keys` carries a poisoned entry across key rotations. `publish` re-checks image IDs from `image`, which is the guard that keeps e2e and caches out of the images.
+
+- Runbook guards (2026-11-23): `echo STOP` / `${VAR:?}` lines do not halt a pasted block; the owner's empty age recipient shipped that way. Ask for guards to be run alone first, or chained with `&&` into the command they protect. Also check guards read the same secret version the job pins (`:1` vs `latest`) and that helper functions don't report success after a failed psql.

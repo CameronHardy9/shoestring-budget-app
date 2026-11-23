@@ -17,7 +17,7 @@ Production commands are run by the **owner** only. Agents prepare them.
 CI builds every image (linux/amd64 only; a Mac build is arm64 and is never published) and pushes it to GHCR. Deploys first verify each digest's attestation (`gh attestation verify`, mandatory, F-67), then copy that **digest** (`crane copy …@$DIGEST`, never the tag) to the Artifact Registry repo `shoestring` (us-east1) and deploy by digest, never by tag, never rebuilt. All three GHCR packages are **public** (owner ruling 2026-11-17; free private storage is only 500 MB), so `crane digest`/`crane copy` from GHCR need no credentials (no `read:packages` token); only AR needs `gcloud auth configure-docker`. They contain no secrets, and the app image's SPA is public anyway. GHCR paths are lowercase: `GH_REPO_LC=$(printf '%s' "$GH_REPO" | tr '[:upper:]' '[:lower:]')` (the repo slug has capitals; bash 3.2 has no `${,,}`).
 | Image | GHCR | AR package | Runs | Updated by |
 |---|---|---|---|---|
-| App (Dockerfile target `runtime`) | `ghcr.io/$GH_REPO_LC:sha-<sha>` | `app` | service `shoestring`; jobs `shoestring-purge`, `shoestring-admin`, `shoestring-rewrap-mfa` (command `/nodejs/bin/node,/app/dist/admin.js`) | every deploy (deploy.md steps 4 and 6); rollback.md |
+| App (Dockerfile target `runtime`) | `ghcr.io/${GH_REPO_LC}:sha-<sha>` | `app` | service `shoestring`; jobs `shoestring-purge`, `shoestring-admin`, `shoestring-rewrap-mfa` (command `/nodejs/bin/node,/app/dist/admin.js`) | every deploy (deploy.md steps 4 and 6); rollback.md |
 | Migrate (target `migrate`) | `ghcr.io/$GH_REPO_LC-migrate:sha-<sha>` | `migrate` | job `shoestring-migrate` only; its entrypoint runs the migration (no command or args) | every deploy, **same SHA as the app** (deploy.md step 3); never on rollback |
 | Backup (`Dockerfile.backup`) | `ghcr.io/$GH_REPO_LC-backup:sha-<sha>` | `backup` | job `shoestring-backup` only | the owner, by hand (bootstrap-production.md step 12g) |
 
@@ -27,9 +27,9 @@ The app image holds nothing of `db/`. `db/roles.sql` is only in the migrate imag
 A restore drill must pass **before launch** and then every quarter, and after any change to the backup workflow or the Postgres major version.
 | Date | Backup restored (object name) | Target | Time to restore (RTO evidence) | Row-count check | Result | By |
 |---|---|---|---|---|---|---|
-| _not yet run, required before launch_ | | | | | | |
+| 2026-11-23 | `daily/shoestring-2026-11-23T162219Z.dump.age` (76 KB, manual run `shoestring-backup-fg2m7`) | New Neon project `shoestring-drill` (deleted the same day) | 18 min, steps 2–8 | users 2, budgets 2, transactions 20; latest 15:21 UTC; schema `20261114000100` (newest in the serving release); grants `t\|t\|f\|f\|f`, purge function owned by migrator | Pass | owner |
 
-**Last successful restore test: _never_** (update restore.md's header too).
+**Last successful restore test: 2026-11-23** (update restore.md's header too).
 
 ## Backup design
 **A nightly encrypted `pg_dump` run as a Cloud Run job in the prod project, written to a private Cloud Storage bucket in a separate GCP project** (owner ruling 2026-11-13, F-17). The database credential never enters GitHub.

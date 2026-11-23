@@ -27,10 +27,11 @@ The workflow (ci-engineer writes `.github/workflows/deploy.yml` to this spec) ru
 ## Steps: manual path (same commands, if the workflow is unavailable)
 ```sh
 export PROJECT="shoestring-prod-<suffix>" REGION="us-east1"
+export DOMAIN="<your domain>"                   # the F-10 probe needs the custom domain (run.app answers 400)
 export SHA="<full git sha>"
 export GH_REPO="<owner>/<repo>"
 GH_REPO_LC=$(printf '%s' "$GH_REPO" | tr '[:upper:]' '[:lower:]')     # GHCR paths are lowercase (bash 3.2: no ${,,})
-export GHCR_IMAGE="ghcr.io/$GH_REPO_LC:sha-$SHA"
+export GHCR_IMAGE="ghcr.io/${GH_REPO_LC}:sha-$SHA"
 export GHCR_MIGRATE_IMAGE="ghcr.io/$GH_REPO_LC-migrate:sha-$SHA"
 export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
@@ -41,11 +42,11 @@ export MIGRATE_AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/migrate"
 ATTEST_FLAGS=(--repo "$GH_REPO" --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "$SHA" --deny-self-hosted-runners)   # --source-digest: built from exactly $SHA (F-67 re-check)
 DIGEST=$(crane digest "$GHCR_IMAGE")
 gh attestation verify "oci://ghcr.io/$GH_REPO_LC@$DIGEST" "${ATTEST_FLAGS[@]}" \
-  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "$AR_REPO:sha-$SHA"
+  && crane copy "ghcr.io/$GH_REPO_LC@$DIGEST" "${AR_REPO}:sha-$SHA"
 IMAGE="$AR_REPO@$DIGEST"
 MIGRATE_DIGEST=$(crane digest "$GHCR_MIGRATE_IMAGE")
 gh attestation verify "oci://ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${ATTEST_FLAGS[@]}" \
-  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "$MIGRATE_AR_REPO:sha-$SHA"
+  && crane copy "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" "${MIGRATE_AR_REPO}:sha-$SHA"
 MIGRATE_IMAGE="$MIGRATE_AR_REPO@$MIGRATE_DIGEST"
 echo "$IMAGE"; echo "$MIGRATE_IMAGE"
 
@@ -72,14 +73,17 @@ CANDIDATE_URL=$(gcloud run services describe shoestring --region "$REGION" --pro
   | jq -r '.status.traffic[] | select(.tag=="candidate") | .url')
 curl -fsS -m 10 "$CANDIDATE_URL/api/readyz"  && echo
 curl -fsS -m 10 "$CANDIDATE_URL/api/healthz" && echo     # release field should equal $SHA (backend to confirm the field)
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$CANDIDATE_URL/api/_test/reset"   # must print 404: test hooks absent (F-10)
+# F-10 gate. A probe on the candidate URL can't show it: the app's Host check answers 400 to any run.app host
+# before routing. Instead re-run the Dockerfile's test-hook tripwire on the exact digest being deployed.
+F10=$(mktemp -d); crane export "$IMAGE" - | tar -xf - -C "$F10" app/dist
+rc=0; grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' -e '_test' -e '__SHOESTRING_TEST_HOOKS__' "$F10/app/dist" || rc=$?
+{ [ -s "$F10/app/dist/server.js" ] && [ "$rc" -eq 1 ] && echo "F-10 OK: no test-hook code in the image"; } || echo "F-10 STOP (grep exit $rc)"; rm -rf "$F10"
 
 # 6. Shift all traffic, drop the tag, re-probe on the PUBLIC URL, and point the jobs at the new image
 gcloud run services update-traffic shoestring --to-latest --region "$REGION" --project "$PROJECT"
 gcloud run services update-traffic shoestring --remove-tags candidate --region "$REGION" --project "$PROJECT"
-PUBLIC_URL=$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format 'value(status.url)')
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$PUBLIC_URL/api/_test/reset"   # must print 404 (F-10); else roll back NOW
-curl -fsS -m 10 "$PUBLIC_URL/api/readyz" && echo
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api/_test/reset"   # must print 404 (F-10); else roll back NOW. 000 = never reached the app (DNS/network): re-run, never a pass
+curl -fsS -m 10 "https://shoestring.$DOMAIN/api/readyz" && echo
 gcloud run jobs update shoestring-purge --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-admin --image "$IMAGE" --region "$REGION" --project "$PROJECT"
 gcloud run jobs update shoestring-rewrap-mfa --image "$IMAGE" --region "$REGION" --project "$PROJECT"
@@ -87,15 +91,15 @@ gcloud run jobs update shoestring-rewrap-mfa --image "$IMAGE" --region "$REGION"
 # Dependabot flags the backup base or packages (F-68): bootstrap-production.md 12g, "Rolling the backup image".
 
 # 7. Protect the rollback target and the images the jobs use from the registry cleanup policy
-gcloud artifacts docker tags add "$PREV_IMAGE" "$AR_REPO:prod-previous"
-gcloud artifacts docker tags add "$IMAGE" "$AR_REPO:prod-current"
-gcloud artifacts docker tags add "$MIGRATE_IMAGE" "$MIGRATE_AR_REPO:prod-current"   # the job's image; no prod-previous (rollback never migrates)
+gcloud artifacts docker tags add "$PREV_IMAGE" "${AR_REPO}:prod-previous"
+gcloud artifacts docker tags add "$IMAGE" "${AR_REPO}:prod-current"
+gcloud artifacts docker tags add "$MIGRATE_IMAGE" "${MIGRATE_AR_REPO}:prod-current"   # the job's image; no prod-previous (rollback never migrates)
 ```
 Steps 4 and 6 use `gcloud run deploy` flags until deploy/cloudrun/service.yaml exists. After that, step 4 becomes `gcloud run services replace deploy/cloudrun/service.yaml` with the image digest filled in, preceded by the same command with `--dry-run`.
 
 ## Verify
 - `curl -fsS https://shoestring.<domain>/api/healthz` returns 200 with the new release.
-- `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shoestring.<domain>/api/_test/reset` prints **404** (F-10) on the custom domain too (step 6 probed the `run.app` URL). Anything else: roll back at once (rollback.md) and tell the tech lead (security incident).
+- `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shoestring.<domain>/api/_test/reset` prints **404** (F-10). Step 6 already ran it; repeat it here as the final check. Anything else: roll back at once (rollback.md) and tell the tech lead (security incident).
 - On your phone: open the app, sign in, add a transaction, see it in the month view (J2/J3).
 - **Sentry smoke check** (below): it passes, and Sentry shows no new `production` issues within 15 minutes.
 - Better Stack monitor is green.
@@ -135,6 +139,6 @@ curl -sSI "$SITE/" | grep -i '^reporting-endpoints'                             
 ## Back out
 - **Before step 6** (gate failed): nothing serves the new revision. Run `gcloud run services update-traffic shoestring --remove-tags candidate --region "$REGION" --project "$PROJECT"`. The expand-only migration can stay.
 - **After step 6:** follow rollback.md (one command: traffic back to `$PREV_REVISION`).
-- **The candidate's `/api/_test/reset` is not 404:** stop and do not shift traffic. Drop the tag as above and tell the tech lead (F-10).
-- **Step 6's public `/api/_test/reset` probe is not 404:** roll back at once (rollback.md step 2), then tell the tech lead (security incident, F-10).
+- **Step 5's F-10 check prints STOP:** stop and do not shift traffic. Drop the tag as above and tell the tech lead (F-10).
+- **Step 6's custom-domain `/api/_test/reset` probe is not 404:** roll back at once (rollback.md step 2), then tell the tech lead (security incident, F-10).
 - **Migration job failed:** nothing was deployed (the job runs no Sentry, so this is the only place it shows). Read the job logs (`gcloud run jobs executions list --job shoestring-migrate --region "$REGION" --project "$PROJECT"`, then Logging), and hand them to the tech lead for data-engineer. Do not re-run blindly.
