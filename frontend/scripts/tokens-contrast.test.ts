@@ -83,6 +83,23 @@ describe("design token contrast (WCAG 2.2 AA)", () => {
     expect(darkManual).toEqual(darkMedia);
   });
 
+  it("keeps the lace loader's colours fixed: defined once, never themed", () => {
+    const lace = Object.keys(light).filter((name) => name.startsWith("lace-"));
+    expect(lace.sort()).toEqual([
+      "lace-eyelet",
+      "lace-eyelet-rim",
+      "lace-hole",
+      "lace-line",
+      "lace-tile",
+      "lace-tip",
+    ]);
+    for (const dark of [darkMedia, darkManual]) {
+      expect(
+        Object.keys(dark).filter((name) => name.startsWith("lace-")),
+      ).toEqual([]);
+    }
+  });
+
   for (const [theme, tokens] of Object.entries(themes)) {
     describe(theme, () => {
       it.each(TEXT_PAIRS)("text %s on %s >= 4.5:1", (fg, bg) => {

@@ -43,6 +43,16 @@
   /* Charts */
   --ss-track: #e2e5ea; /* empty part of a bar */
 
+  /* The lace loader (components/LaceLoader.tsx): fixed artwork, the same in
+     both themes, so the dark blocks never override these (dark mode's light
+     --ss-brand would turn the lace dark). Decorative: no contrast pairs. */
+  --ss-lace-tile: #4f46e5;
+  --ss-lace-line: #ffffff;
+  --ss-lace-tip: #c7caf9;
+  --ss-lace-eyelet: #dfe3e8;
+  --ss-lace-eyelet-rim: #8d94a0;
+  --ss-lace-hole: #1e1b4b;
+
   /* Focus ring and overlay */
   --ss-focus: #4f46e5;
   --ss-scrim: rgb(20 22 26 / 0.45);

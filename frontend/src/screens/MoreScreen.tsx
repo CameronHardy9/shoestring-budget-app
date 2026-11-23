@@ -1,7 +1,7 @@
 // /more: switch budget, settings, sign out.
 //
 // The budget list's length is unknown until it loads (no persisted cache,
-// ADR-0002, and long names wrap), so no skeleton can reserve its height. The
+// ADR-0002, and long names wrap), so no placeholder can reserve its height. The
 // rows below it (settings, theme, Sign out) appear only once the list has
 // settled, so nothing tappable is ever on screen and then pushed down.
 // Offline with nothing cached the read is paused, never failed: that counts as
