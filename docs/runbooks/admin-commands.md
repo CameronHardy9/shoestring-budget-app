@@ -5,7 +5,11 @@
 ## Rules (F-02, R-12)
 1. **Where:** only `gcloud run jobs execute …` from your own authenticated terminal, or the Cloud Run console. Never from a workflow, a shared machine or a chat tool.
 2. **The target email goes in `--args`** (accepted residual R-12, 2026-11-13).
-   - Cloud Run keeps the arguments on the job execution record. Admin Activity audit logs keep them for about 400 days and can't be shortened (verify V34). Both are visible only inside the owner-only prod project.
+   - **Retention (V34, measured 2026-11-23; owner ruling 2026-11-23: no cleanup):** the arguments stay in two places, both visible only inside the owner-only prod project:
+     - the **System Event audit log** (each finished execution's spec, arguments included): `_Required` bucket, **400 days**, locked, can't be shortened, excluded or deleted;
+     - the **job execution record**: no time limit; Cloud Run deletes it only once the job has 1,000 newer executions (or if you delete it).
+   - Admin Activity logs do **not** hold them: Cloud Run logs `RunJob` only as Data Access, which stays off (billing-protection.md §6). The `_Required` bucket costs nothing.
+   - Privacy-notice wording (C14.6): "When the owner runs an admin command for your account (for example an invite), your email address is kept in the owner-only Google Cloud project's job records and audit logs for at least 400 days, with no fixed end date."
    - The privacy notice discloses this. Never put anything else personal in arguments: no names, notes or reasons.
 3. **Output:** the CLI prints and logs IDs, expiry times and counts only, never emails, tokens or links. If one ever appears in job output, stop and report it (backend bug, F-02).
 4. **Least config, one job per need:**

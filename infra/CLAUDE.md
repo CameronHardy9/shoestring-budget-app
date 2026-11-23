@@ -89,7 +89,7 @@ Secret Manager, prod project, single location us-east1. **5 secrets × 1 active 
 | `shoestring-email-api-key` | `EMAIL_API_KEY` (Resend, sending access, `mail.<domain>` only) | service, admin |
 | `shoestring-backup-database-url` | `BACKUP_DATABASE_URL` (`backup` role, read-only, **direct**, `sslmode=verify-full&sslrootcert=system`) | backup job **only** |
 - Pin **numbered versions** for every secret, so a rotation is an explicit, reviewable change.
-- **Admin job arguments:** the target email goes in `--args`. This is accepted risk R-12 (2026-11-13): the email stays in owner-only execution records and Admin Activity audit logs (~400 days, V34), and the privacy notice discloses it. Nothing else personal goes in args, overrides or labels, and **no token or secret ever does**.
+- **Admin job arguments:** the target email goes in `--args`. This is accepted risk R-12 (2026-11-13): the email stays in owner-only job execution records (no time limit, until 1,000 newer runs) and the System Event audit log (400 days, locked); Admin Activity doesn't record job runs (V34, 2026-11-23). No cleanup (owner ruling 2026-11-23); the privacy notice says "at least 400 days, no fixed end date" (wording in docs/runbooks/admin-commands.md). Nothing else personal goes in args, overrides or labels, and **no token or secret ever does**.
 - `APP_KEYRING` is never stored with backups. Its **offline escrow copy** lives in a **separate password-manager vault** (vault B) from the `age` private key (vault A) (owner ruling 2026-11-13, F-17). Update the escrow on every rotation.
 - `GET /api/readyz` fails if any row references a key ID missing from the keyring, so the deploy gate blocks a bad rotation (rotate-secret.md "Application keyring").
 

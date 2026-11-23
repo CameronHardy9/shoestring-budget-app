@@ -1,6 +1,6 @@
 # Admin commands
 Owner: architect. Implemented by backend-engineer (`backend/`), run and scheduled by sre and the owner per docs/runbooks/, reviewed by security-reviewer.
-Revision 2 (2026-11-13): OD-3, F-02, F-11, F-26. Revision 3 (2026-11-13): R-12, the restore mode of `revoke-sessions` (F-11 note), `rewrap-mfa` (keyring rotation), and backups as a separate job. Revision 4 (2026-11-13): `rewrap-mfa --retire-recovery-codes` (F-38) and the comma rule for emails (F-02 note).
+Revision 2 (2026-11-13): OD-3, F-02, F-11, F-26. Revision 3 (2026-11-13): R-12, the restore mode of `revoke-sessions` (F-11 note), `rewrap-mfa` (keyring rotation), and backups as a separate job. Revision 4 (2026-11-13): `rewrap-mfa --retire-recovery-codes` (F-38) and the comma rule for emails (F-02 note). Revision 5 (2026-11-23): R-12 retention facts corrected from the V34 measurement (owner ruling: no cleanup).
 
 Owner admin powers are **CLI commands, not HTTP endpoints**. They ship in the production image as `dist/admin.js`, which is built from the same source and version as `dist/server.js`.
 
@@ -9,7 +9,7 @@ Owner admin powers are **CLI commands, not HTTP endpoints**. They ship in the pr
 - **`purge`** runs as the separate job `shoestring-purge`, triggered daily by Cloud Scheduler.
 - They **never** run in GitHub Actions: the repository, its run logs and its dispatch inputs are public.
 - Secrets stay in Secret Manager.
-- **Target emails stay in `--args` (accepted residual R-12, owner 2026-11-13):** the job execution record and Cloud Audit Logs keep the arguments, including a target email, inside the owner-only GCP project for about 400 days. No input-secret mechanism (e.g. an `ADMIN_TARGET_EMAIL` secret) is used. The command's own output never repeats the email. **The privacy notice must disclose this retention** (security-reviewer).
+- **Target emails stay in `--args` (accepted residual R-12, owner 2026-11-13):** the arguments, including a target email, stay inside the owner-only GCP project in two places (V34, measured 2026-11-23): the **System Event audit log** (`_Required` bucket, 400 days, locked; can't be shortened, excluded or deleted) and the **job execution record** (no time limit; removed only once the job has 1,000 newer executions). Admin Activity logs do not record job runs: Cloud Run logs `RunJob` only as Data Access, which is off. Owner ruling 2026-11-23: no cleanup. No input-secret mechanism (e.g. an `ADMIN_TARGET_EMAIL` secret) is used. The command's own output never repeats the email. **The privacy notice must disclose this retention as at least 400 days, with no fixed end date** (security-reviewer; exact wording in docs/runbooks/admin-commands.md rule 2).
 - **Backups are not an admin command.** The nightly `pg_dump` runs as its own Cloud Run job, `shoestring-backup`, with its own minimal image and the `backup` role (ADR-0007 constraint 10).
 - Locally: `pnpm --filter backend admin <command>` against the compose database.
 
