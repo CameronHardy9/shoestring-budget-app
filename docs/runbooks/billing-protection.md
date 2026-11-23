@@ -233,7 +233,7 @@ Neon's free plan has no billing attached, so it cannot charge you. Its limits ca
 2. Project `shoestring` in **AWS us-east-1**. Settings → Compute: **min 0.25 CU, max 0.25 CU** (verify a fixed size is allowed on free). Scale to zero stays on (5 minutes, fixed on free).
 3. **No extra branches** except during a restore drill. Delete drill branches and projects the same day.
 4. Keep Neon's other features (Data API, Neon Auth) **off**.
-5. Watch Console → **Usage** (or Billing): CU-hours (limit 100, warn at 70), storage (limit 0.5 GB per project, verify V7; warn at 70%), egress (limit 5 GB, warn at 3.5 GB).
+5. Watch Console → **Usage** (or Billing): CU-hours (limit 100 per project, warn at 70; measured ≈ 7–8 per month, 2026-11-23), storage (limit **1 GB** per project, owner-confirmed from Neon's pricing 2026-11-23, V7; warn at 70%), egress (limit 5 GB, warn at 3.5 GB).
 6. When a limit is hit: CU-hours → the compute is suspended until the next month (the API returns 503, the SPA still loads); storage → writes fail. Both show up as a Sentry error spike.
 
 ## 10. Other free services: make sure none can bill
