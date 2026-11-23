@@ -361,7 +361,7 @@ gh attestation verify "oci://${GHCR_REPO}@${PINNED}" "${ATTEST_FLAGS[@]}" \
 - Once block B shows nothing pins that digest any more, remove the extra tag: `gcloud artifacts docker tags delete "${AR_PKG}:prod-recovered-${PINNED:7:12}"` (with the G2 variables set).
 - Tell the tech lead which digest was deleted and when (V44, and an incident note if users were affected).
 
-**Record:** dry-run switched **off** on ____ (date, UTC time) by ____. Block A: ____. Block B: ____ (7 `OK`). Block C: ____ (`WOULD DELETE` count). Next-day block F: ____. Copy the date into the bootstrap-production.md Record table, row 3b.
+**Record:** dry-run switched **off** on **2026-11-23 23:14 UTC** by the owner. Block A: `dryRun: true`, 5 policies, 115,554,690 bytes, `POLICY OK`. Block B: 7 of 7 `OK`. Block C: 0 `WOULD DELETE` (5 versions, all kept). Block E: `dryRun: false`, 5 policies, one `UpdateRepository` entry from the owner. A and B re-run afterwards: `POLICY OK`, 7 of 7 `OK`. Next-day block F: ____ (due after 2026-11-24 09:30 UTC). Copy the date into the bootstrap-production.md Record table, row 3b.
 
 **Verify (any time; the monthly check, §11 row 5):**
 ```sh
