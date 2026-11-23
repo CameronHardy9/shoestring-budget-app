@@ -17,6 +17,7 @@ A release is live and users are affected (error spike, broken journey, failed sm
 ## Steps
 ```sh
 export PROJECT="shoestring-prod-<suffix>" REGION="us-east1"
+export DOMAIN="<your domain>"                   # the F-10 probe needs the custom domain (run.app answers 400)
 export AR_REPO="$REGION-docker.pkg.dev/$PROJECT/shoestring/app"
 
 # 1. Find the previous good revision (newest first; the one serving now is at the top)
@@ -36,9 +37,9 @@ gcloud run jobs update shoestring-admin --image "$PREV_IMAGE" --region "$REGION"
 gcloud run jobs update shoestring-rewrap-mfa --image "$PREV_IMAGE" --region "$REGION" --project "$PROJECT"
 
 # 4. Keep the registry tags truthful (app package only; migrate:prod-current stays on the job's image)
-gcloud artifacts docker tags add "$PREV_IMAGE" "$AR_REPO:prod-current"
+gcloud artifacts docker tags add "$PREV_IMAGE" "${AR_REPO}:prod-current"
 ```
-5. Check the rolled-back release on the public URL, as deploy.md step 6 does: `curl -s -o /dev/null -w '%{http_code}\n' -X POST "$(gcloud run services describe shoestring --region "$REGION" --project "$PROJECT" --format 'value(status.url)')/api/_test/reset"` prints **404** (F-10).
+5. Check the rolled-back release on the public URL, as deploy.md step 6 does: `curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api/_test/reset"` prints **404** (F-10); `000` means the request never reached the app (DNS or network): re-run it, and never count it as a pass. Use the custom domain: on the `run.app` URL the app's Host check answers 400 before routing.
 Traffic is now pinned to `$PREV_REVISION`. The next normal deploy's `--to-latest` un-pins it.
 
 ## Verify
