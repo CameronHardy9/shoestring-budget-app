@@ -4,30 +4,44 @@ import { isClientError, NetworkError } from "../api/errors.ts";
 import { describeError } from "../api/messages.ts";
 import { Button } from "./Button.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
+import { LACE_SIZE, LACE_SIZE_LARGE, LaceLoader } from "./LaceLoader.tsx";
 
-/** Skeleton rows; announced once as "Loading…". */
+/**
+ * The min-height `rows` reserves: what the old skeleton's rows took (each
+ * h-16, 4rem, with gap-3, 0.75rem, between them), so the loader occupies the
+ * same space as before and the content replacing it lands where it always did.
+ */
+export function loadingMinHeight(rows: number): string {
+  const n = Math.max(1, Math.round(rows));
+  return `${String(n * 4 + (n - 1) * 0.75)}rem`;
+}
+
+/**
+ * The lace loader centred in a region `rows` tall; announced once as the
+ * label (screen-reader only: the screen's heading already says where you are,
+ * and a visible line would not fit the one-row slots). `size="lg"` is for
+ * full-screen loads (boot, a lazy route).
+ */
 export function LoadingState({
   label = "Loading…",
   rows = 3,
+  size = "md",
 }: {
   label?: string;
+  /** Height hint, in old skeleton rows. */
   rows?: number;
+  size?: "md" | "lg";
 }) {
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-3"
+      className="flex items-center justify-center"
+      style={{ minHeight: loadingMinHeight(rows) }}
       data-testid="loading"
     >
       <span className="sr-only">{label}</span>
-      {Array.from({ length: rows }, (_, i) => (
-        <div
-          key={i}
-          aria-hidden="true"
-          className="h-16 animate-pulse rounded-lg bg-sunken"
-        />
-      ))}
+      <LaceLoader size={size === "lg" ? LACE_SIZE_LARGE : LACE_SIZE} />
     </div>
   );
 }
@@ -51,12 +65,12 @@ export function OfflineState({ message }: { message: string }) {
 }
 
 /**
- * The slot for data that hasn't arrived yet (`isPending`): a skeleton, or the
+ * The slot for data that hasn't arrived yet (`isPending`): a loader, or the
  * offline message when the read is paused (offline, nothing cached), so the
  * screen settles instead of loading forever.
  *
  * For a list with tappable rows below it, pass `rowsBelowShown` (latched):
- * before those rows appear the slot is a skeleton or the offline message (so
+ * before those rows appear the slot is a loader or the offline message (so
  * the rows can appear below it, not wait forever); once they are on screen the
  * slot keeps the offline box (now "back online") until the list arrives, so it
  * changes height once, after a reconnect. Without rows below (the slot is the
@@ -72,7 +86,7 @@ export function PendingSlot({
   paused: boolean;
   rowsBelowShown?: boolean;
   rows?: number;
-  /** The skeleton's screen-reader label. */
+  /** The loader's screen-reader label. */
   label?: string;
   offlineMessage: string;
 }) {

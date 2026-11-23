@@ -54,7 +54,7 @@ function Routes() {
     return (
       <FullPage>
         <h1 className="sr-only">Shoestring</h1>
-        <LoadingState rows={2} label="Starting Shoestring…" />
+        <LoadingState rows={2} size="lg" label="Starting Shoestring…" />
       </FullPage>
     );
   }
@@ -90,7 +90,7 @@ function Routes() {
     <Suspense
       fallback={
         <FullPage>
-          <LoadingState rows={2} />
+          <LoadingState rows={2} size="lg" />
         </FullPage>
       }
     >

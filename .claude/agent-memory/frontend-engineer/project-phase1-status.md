@@ -1,6 +1,6 @@
 ---
 name: project-phase1-status
-description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR) as of 2026-11-17
+description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR, lace loader) as of 2026-11-23
 metadata:
   type: project
 ---
@@ -17,3 +17,5 @@ Lost-tap follow-up (2026-11-16, fix/loading-tap-targets, owner ruling round 6): 
 
 
 Offline + F-62 web (2026-11-17, fix/offline-and-f62, owner rulings round 7/8): mutations `networkMode: "always"` (fail fast offline, no exceptions); every data screen's pending slot is `PendingSlot` (incl. Home, which wasn't on the owner's list). F-62 (b) residual: a line-break-exact message cut can't be detected; flagged to the tech lead for security-reviewer. Not done: an offline note for a paused "Load more" (Transactions) — the button just does nothing visible until reconnect.
+
+Lace loader (2026-11-23, feat/lace-loader, owner-approved "Loader D"): `LoadingState` renders `components/LaceLoader.tsx` (56 px; `size="lg"` 96 px for both full-page App states: boot and the lazy-route Suspense fallback, so they don't jump in size) centred in a min-height of the old skeleton (`loadingMinHeight(rows)`: rows x 4rem + gaps 0.75rem). Label stays sr-only (one-row slots are 64 px, headings already say where you are). Colours are fixed `--ss-lace-*` tokens in :root only (tokens-contrast test proves the dark blocks never override them). No skeletons or visual spinners remain; RAC `isPending` buttons show no spinner (just aria state).

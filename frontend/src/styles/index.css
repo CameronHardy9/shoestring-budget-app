@@ -123,6 +123,100 @@
   }
 }
 
+/*
+ * The lace loader (components/LaceLoader.tsx, used by LoadingState): the lace
+ * draws itself into an S, led by its aglet tip, holds, fades, repeats.
+ * pathLength="1" on both paths makes the dash values fractions of the path.
+ * Colours are the fixed --ss-lace-* tokens (the same in both themes).
+ */
+@layer components {
+  .ss-lace-tile {
+    fill: var(--ss-lace-tile);
+  }
+
+  .ss-lace-line {
+    stroke: var(--ss-lace-line);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 1;
+    animation: ss-lace-draw 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+  }
+
+  .ss-lace-tip {
+    stroke: var(--ss-lace-tip);
+    stroke-dasharray: 0.03 3;
+    stroke-dashoffset: 0.03;
+    animation: ss-lace-tip 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+  }
+
+  .ss-lace-eyelet {
+    fill: var(--ss-lace-eyelet);
+    stroke: var(--ss-lace-eyelet-rim);
+  }
+
+  .ss-lace-hole {
+    fill: var(--ss-lace-hole);
+  }
+
+  /*
+   * Reduced motion: the finished S, still, without the tip (it has left the
+   * tile by then). This must stop the animation outright: the base layer's
+   * global rule only shortens animations to one 0.01 ms run, which would
+   * leave the lace at its undrawn start (offset 1).
+   */
+  @media (prefers-reduced-motion: reduce) {
+    .ss-lace-line {
+      animation: none;
+      stroke-dashoffset: 0;
+      opacity: 1;
+    }
+
+    .ss-lace-tip {
+      animation: none;
+      opacity: 0;
+    }
+  }
+}
+
+@keyframes ss-lace-draw {
+  0% {
+    stroke-dashoffset: 1;
+    opacity: 1;
+  }
+  55% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  82% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  94%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+/*
+ * The tip leads the lace off the tile, then is gone before the hold (no
+ * sliver at the right edge). The 50% step sets only opacity, so the offset
+ * still eases over 0-55% as one segment, in step with the lace.
+ */
+@keyframes ss-lace-tip {
+  0% {
+    stroke-dashoffset: 0.03;
+    opacity: 1;
+  }
+  50% {
+    opacity: 1;
+  }
+  55%,
+  100% {
+    stroke-dashoffset: -0.97;
+    opacity: 0;
+  }
+}
+
 /* Top padding that clears the iPhone notch / status bar. */
 @utility pt-safe {
   padding-top: max(env(safe-area-inset-top), 0.75rem);
