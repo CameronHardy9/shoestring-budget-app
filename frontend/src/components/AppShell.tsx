@@ -7,6 +7,7 @@ import { Button } from "./Button.tsx";
 import { cx } from "./cx.ts";
 import { Icon, type IconName } from "./Icon.tsx";
 import { LogoMark } from "./Logo.tsx";
+import { usePageCovered } from "./page-loader.ts";
 
 export type NavId = "overview" | "transactions" | "budgets" | "more";
 
@@ -93,6 +94,9 @@ export function AppShell({
   children,
 }: AppShellProps) {
   const items = navItems(budgetId);
+  // Under the page loader's cover (z-20) the page is inert; the rail and the
+  // tab bar stay above it (z-30) and usable, so "+" always works.
+  const covered = usePageCovered();
   return (
     <div className="min-h-dvh bg-canvas lg:flex">
       <a
@@ -102,7 +106,7 @@ export function AppShell({
         Skip to content
       </a>
 
-      <aside className="hidden lg:sticky lg:top-0 lg:flex lg:h-dvh lg:w-60 lg:shrink-0 lg:flex-col lg:gap-6 lg:border-r lg:border-line lg:bg-surface lg:p-4">
+      <aside className="hidden lg:sticky lg:top-0 lg:z-30 lg:flex lg:h-dvh lg:w-60 lg:shrink-0 lg:flex-col lg:gap-6 lg:border-r lg:border-line lg:bg-surface lg:p-4">
         <div className="flex items-center gap-2 px-2 pt-2 text-lg font-bold text-fg">
           <LogoMark size={32} />
           <span className="flex min-w-0 flex-col leading-tight">
@@ -136,7 +140,7 @@ export function AppShell({
         </nav>
       </aside>
 
-      <main id="main" className="min-w-0 flex-1 pb-28 lg:pb-10">
+      <main id="main" inert={covered} className="min-w-0 flex-1 pb-28 lg:pb-10">
         {children}
       </main>
 

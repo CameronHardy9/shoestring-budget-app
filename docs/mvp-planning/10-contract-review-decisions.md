@@ -162,6 +162,19 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Loader centring on desktop | **Viewport centre is fine** (sits 120 px left of the content centre with the side rail). |
 | Shared loader phase across back-to-back loaders (engineer's addition) | **Keep.** The lace continues across hand-offs within 400 ms instead of restarting. |
 
+## UI fixes: loader full cycles (2026-11-24)
+| Topic | Decision |
+|---|---|
+| Deploy path | **Deploy stays manual** (owner runs it). CI-driven deploy and its drawbacks were discussed; revisit later. |
+| Page loader behaviour (owner spec) | **Always at least one full cycle; reveal only at a cycle boundary; if still loading, run another whole cycle.** Consecutive page loads are one seamless session with no restarts or cut-off cycles. Supersedes the 400 ms shared-phase ruling above. |
+| Which loaders are gated | **Page (viewport, 96 px) loaders only.** Inline 56 px loaders (quick-add chips, Overview "Recent") behave as before, so the quick-add path isn't slowed. |
+| Fast loads | **150 ms grace.** If everything has loaded by then, no loader and no delay; otherwise full cycles. |
+| Reduced motion | **No minimum.** Content shows as soon as it has loaded (grace still applies). |
+| Offline box / error during a load | **Shows immediately**, mid-cycle if needed, and ends the loader session. |
+| First visit to a lazy tab screen (React's 300 ms Suspense throttle always passes the grace) | **Preload the tab screens' code** (Overview, Transactions, Categories, More) once the first page is revealed, so opening a tab shows no loader. |
+| Overview month switch slower than 150 ms (covers the page for one cycle) | **Leave as is** (no keep-previous-month placeholder). |
+| Opaque cover over the page while the loader is up (headings hidden; tab bar and rail stay usable) | **Accepted.** |
+
 ## UI fixes: quick-add keyboard (2026-11-24)
 Root cause (debugger): tapping a chip or button moves focus off the text field, so iOS dismisses the keyboard; the sheet is also lifted by the keyboard height without capping its height.
 | Topic | Decision |

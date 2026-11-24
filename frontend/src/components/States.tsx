@@ -4,7 +4,8 @@ import { isClientError, NetworkError } from "../api/errors.ts";
 import { describeError } from "../api/messages.ts";
 import { Button } from "./Button.tsx";
 import { Icon, type IconName } from "./Icon.tsx";
-import { LACE_SIZE, LACE_SIZE_LARGE, LaceLoader } from "./LaceLoader.tsx";
+import { LACE_SIZE, LaceLoader } from "./LaceLoader.tsx";
+import { useInterruptPageLoader, usePageLoad } from "./page-loader.ts";
 
 /**
  * The min-height `rows` reserves for an inline loader: what the old skeleton's
@@ -17,14 +18,16 @@ export function loadingMinHeight(rows: number): string {
 
 /**
  * Where a loader goes. "viewport" (the default, every page-level load): the
- * 96 px lace, fixed in the middle of the viewport (owner ruling 2026-11-24).
- * It takes no space in the page, so it reserves nothing and pushes nothing
- * (the loading region is the last thing on screen anyway: see "Nothing moves
- * under a finger" in frontend/CLAUDE.md); it can't be tapped (taps pass
- * through), and it sits under the tab bar, sheets, dialogs and toasts. "inline":
- * the 56 px lace in a `rows`-tall box in the flow, for a load inside a sheet
- * (the page behind is covered) or in a section below content that has already
- * loaded (the middle of the viewport may be that content).
+ * 96 px lace in the middle of the viewport (owner ruling 2026-11-24), drawn by
+ * the one app-level <PageLoader> for every page load in a row, as one
+ * animation that always finishes its cycle (PageLoader.tsx, page-loader.ts).
+ * In the page it is an empty marker that takes no space, so it reserves
+ * nothing and pushes nothing (the loading region is the last thing on screen
+ * anyway: see "Nothing moves under a finger" in frontend/CLAUDE.md). "inline":
+ * the 56 px lace in a `rows`-tall box in the flow, at once and gone as soon as
+ * the data is, for a load inside a sheet (the page behind is covered) or in a
+ * section below content that has already loaded (the middle of the viewport
+ * may be that content).
  */
 export type LoaderPlacement =
   | { placement?: "viewport"; rows?: never }
@@ -36,7 +39,9 @@ export type LoaderPlacement =
 
 /**
  * The lace loader; announced once as the label (screen-reader only: the
- * screen's heading already says where you are).
+ * screen's heading already says where you are). A viewport loader's label is
+ * the page loader session's status text if it is the newest load when the
+ * lace appears; later loads in the same session aren't announced again.
  */
 export function LoadingState({
   label = "Loading…",
@@ -57,18 +62,13 @@ export function LoadingState({
       </div>
     );
   }
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="pointer-events-none fixed inset-0 z-20 m-auto flex size-fit items-center justify-center"
-      data-testid="loading"
-      data-placement="viewport"
-    >
-      <span className="sr-only">{label}</span>
-      <LaceLoader size={LACE_SIZE_LARGE} />
-    </div>
-  );
+  return <PageLoadSlot label={label} />;
+}
+
+/** Where a page-level load is, in the page; the lace is <PageLoader>'s. */
+function PageLoadSlot({ label }: { label: string }) {
+  usePageLoad(label);
+  return <div hidden data-testid="loading-slot" data-label={label} />;
 }
 
 /**
@@ -77,6 +77,8 @@ export function LoadingState({
  * One short message at a fixed minimum height, announced politely.
  */
 export function OfflineState({ message }: { message: string }) {
+  // Shown at once, even over a page loader mid-cycle (owner ruling 2026-11-24).
+  useInterruptPageLoader();
   return (
     <div
       role="status"
@@ -90,8 +92,8 @@ export function OfflineState({ message }: { message: string }) {
 }
 
 /**
- * The slot for data that hasn't arrived yet (`isPending`): a loader (centred
- * in the viewport unless `placement="inline"`), or the offline message when
+ * The slot for data that hasn't arrived yet (`isPending`): a loader (the page
+ * loader unless `placement="inline"`), or the offline message when
  * the read is paused (offline, nothing cached), so the screen settles instead
  * of loading forever. The offline boxes are always in the flow, where the
  * data will appear.
@@ -191,6 +193,8 @@ export function ErrorState({
   /** Replaces the network-error copy where "nothing you typed was lost" doesn't apply. */
   offlineMessage?: string;
 }) {
+  // Shown at once, even over a page loader mid-cycle (owner ruling 2026-11-24).
+  useInterruptPageLoader();
   const described = isClientError(error)
     ? describeError(error)
     : {
