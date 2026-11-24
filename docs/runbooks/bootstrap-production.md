@@ -64,7 +64,7 @@ export PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(proj
 **Verify:** `gcloud services list --enabled --project "$PROJECT"` matches the allow-list in billing-protection.md §4.
 
 ## 3. Artifact Registry
-Run **billing-protection.md §5** (create the `shoestring` repository and set the cleanup policy to dry-run).
+Run **billing-protection.md §5a** (create the `shoestring` repository and set the cleanup policy to dry-run). The switch to live deletion comes later, after the second deploy: billing-protection.md §5b (Record row 3b).
 
 ## 4. Logging limits
 Run **billing-protection.md §6**: 30-day retention, exclude Cloud Run request logs (they contain IPs and user agents), exclude DEBUG.
@@ -498,7 +498,7 @@ gcloud scheduler jobs run shoestring-purge-daily --project "$PROJECT" --location
 
 Then run the **Sentry smoke check** in deploy.md "Verify → Sentry" (the purge check-in, the release in the bundle, and the CSP host). Do it after step 13, so the `purge` monitor exists to receive the check-in, **and after step 15**: it fetches the SPA from `https://shoestring.<domain>`, which doesn't resolve until then (`curl: (6) Could not resolve host`).
 
-After two deploys, switch the AR cleanup policy from dry-run to live (billing-protection.md §5).
+**After the second deploy** (done 2026-11-23), switch the AR cleanup policy from dry-run to live: billing-protection.md **§5b**, blocks A–F in order. Blocks A–C are read-only gates (the policy matches the file, every image production uses has a `prod-` tag, nothing referenced would be deleted). Block D is the one change, and E–F verify it. Record the date in row 3b of the Record table below.
 
 ### 12g. Nightly backup job [needs only the backup image, not the app]
 This can run as soon as ci-engineer publishes the backup image (`Dockerfile.backup`) and step 13's heartbeat exists. Run it before any real user data exists, so the restore drill has something to restore.
@@ -711,6 +711,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "https://shoestring.$DOMAIN/api
 | 1 Operator MFA | | |
 | 2 Billing, spend cap (V0 result) | | |
 | 3–7 GCP setup | 2026-11-19 | Suffix `ssba`. WIF member first bound to a zsh-mangled subject (`…/subject/nvironment:production`); rebound correctly 2026-11-19 |
+| 3b AR cleanup policy live (billing-protection.md §5b; dry-run since 2026-11-18) | 2026-11-23 23:14 UTC (owner) | A: policy matches the file, dry-run on. B: 7 of 7 `prod-` tagged. C: nothing would be deleted. E: `dryRun: false`, 5 policies, audit entry present. A and B re-run afterwards pass. Next-day block F: ____ |
 | 8 Neon (`version()` result) | 2026-11-19 | 17.12 |
 | 9–11 Secrets, GitHub, email | | |
 | 11b Sentry (org slug; trial end date; plan shown after the trial; canary result) | 2026-11-17 (S1–S9, run by the tech lead through the Sentry CLI with the owner's authorisation; S6 token in the browser UI) | Org "Cameron Hardy", slug `cameron-hardy`, region US. Trial ends **2026-12-01**: check Subscription shows Developer after that (V41). Projects `shoestring-api` (node, id 4512447711019008) and `shoestring-web` (javascript, id 4512447711084545); both DSNs on host `o4512447486558208.ingest.us.sentry.io` (S5 pass). Replace rules use `[Filtered]`; `scrubIPAddresses` and `scrapeJavaScript` set per project. Spike protection: one action per project. Org token created in the UI (API refused it). GitHub environment `sentry` had been auto-created by CI with no branch policy; main-only policy added and checked. **Canary passed on both projects** (checked through the API), including the value-only match `note: "payee …-value-match"`. The owner deletes the two canary issues in the UI (needs `event:admin`, which the CLI lacks). S10 and step 13 pending. Sentry CLI login expires ~2026-12-15; logged out: ____ |

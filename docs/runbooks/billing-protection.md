@@ -162,26 +162,220 @@ Allowed in backup: `storage`, `iam`, `iamcredentials`, plus defaults.
 **Never enable** `containerscanning.googleapis.com` ($0.26 per scanned image, verify V21), `compute.googleapis.com`, `sqladmin.googleapis.com`. If one appears: `gcloud services disable <name> --project="$PROJECT"`.
 
 ## 5. Artifact Registry cleanup (0.5 GB free)
+Two stages: **5a** at bootstrap (repository plus the policy in dry-run; done 2026-11-18), then **5b** after the second deploy (dry-run off).
+
+### 5a. Create the repository, policy in dry-run (bootstrap step 3)
 ```sh
 gcloud services enable artifactregistry.googleapis.com --project="$PROJECT"
 gcloud artifacts repositories create shoestring --project="$PROJECT" --location="$REGION" \
   --repository-format=docker --description="Deployed Shoestring images only (copied from GHCR)"
 
-# Dry run first: the policy only logs what it would delete
+# Writes the policy AND sets the repository to dry-run mode. This is a production change, not a preview.
 gcloud artifacts repositories set-cleanup-policies shoestring --project="$PROJECT" \
   --location="$REGION" --policy=infra/artifact-registry/cleanup-policy.json --dry-run
-# After the first two deploys, switch it on
-gcloud artifacts repositories set-cleanup-policies shoestring --project="$PROJECT" \
-  --location="$REGION" --policy=infra/artifact-registry/cleanup-policy.json --no-dry-run
 ```
-The policy keeps anything tagged `prod-*` in any package (the deploy moves `app:prod-current`, `app:prod-previous` and `migrate:prod-current`; the owner sets `backup:prod-backup`), keeps the 3 newest `app` and `backup` versions and the 2 newest `migrate` versions, and deletes untagged images after 1 day and everything else after 7 days. Keep rules win over delete rules. The migrate image shares the pinned distroless base layers with the app image, so each one adds only its own ~33 MB (uncompressed) layer, and less if `db/` didn't change (verify with `sizeBytes` after the first two deploys). Policies run about once a day, and storage is billed per GB-month, so short peaks are fine.
+**`--dry-run` / `--no-dry-run` on `set-cleanup-policies` is the repository's setting, not a gcloud preview flag.** Running the command with `--dry-run` switches deletion **off**; with `--no-dry-run` it switches deletion **on**. Neither one previews anything. The read-only preview is 5b block C.
 
-**Verify:**
+**What the policy does** (infra/artifact-registry/cleanup-policy.json):
+- **Keep** rules: anything with a tag starting `prod-` in any package (`app:prod-current`, `app:prod-previous`, `migrate:prod-current`, `backup:prod-backup`); the 3 newest versions of `app` and of `backup` (per package, V44); the 2 newest of `migrate`.
+- **Delete** rules: untagged versions older than 1 day; any version older than 7 days.
+- A version is deleted only if a delete rule matches it and **no** keep rule does. Keep always wins.
+- Policies run about once a day. Storage is billed per GB-month, so short peaks are fine.
+- Size after the first two deploys (2 app, 2 migrate, 1 backup version): **115,554,690 bytes** (2026-11-23). The five images list ~287 MB between them, but they share the pinned distroless base layers, which are stored once.
+
+**What protects production.** The service, the five jobs and the rollback target all pin images **by digest**, and every one of those digests carries a `prod-` tag:
+
+| Referenced by | Image | Tag that keeps it | Moved by |
+|---|---|---|---|
+| Serving revision | `app@<digest>` | `prod-current` | deploy.md step 7; rollback.md step 4 |
+| Rollback target (the previous revision) | `app@<digest>` | `prod-previous` | deploy.md step 7 |
+| `shoestring-purge`, `-admin`, `-rewrap-mfa` | same digest as the serving revision | `prod-current` | deploy.md steps 6–7; rollback.md steps 3–4 |
+| `shoestring-migrate` | `migrate@<digest>` | `migrate:prod-current` | deploy.md steps 3 and 7 (rollback leaves it) |
+| `shoestring-backup` | `backup@<digest>` | `prod-backup` | bootstrap-production.md 12g "Rolling the backup image" (F-68), never by deploys |
+
+The keep-newest rules are a second net. They cover the gap inside a deploy between moving a job's or the service's image (steps 3 and 6) and moving the tags (step 7), and an aborted deploy that never reached step 7. Block B below checks the whole table in one go.
+- Revisions **older** than the rollback target lose their images once they are neither `prod-` tagged nor among the newest versions. Those revisions can no longer start. rollback.md step 1b checks this before any traffic shift.
+- The backup project (`shoestring-backup-<suffix>`) has **no** Artifact Registry. The API is not enabled there (checked 2026-11-23), and the backup image lives in this repository as `backup`.
+- There is no `gcf-artifacts` repository (§2B, the kill switch, was not deployed; checked 2026-11-23). If §2B is ever used, its own policy is set there directly.
+
+### 5b. Switch the policy from dry-run to live (after the second deploy)
+- **When:** once, after the second deploy (2026-11-23, release `01dbb059`). Run blocks A to F in order, at a time outside the 08:00–09:30 UTC purge and backup window.
+- **Where to record:** the line at the end of this section, plus the bootstrap-production.md Record table row "3b".
+- Each block sets its own variables, so it works on its own in a new shell or through Claude Code's `!` prefix. Run them from the repo root (blocks A and C read infra/artifact-registry/cleanup-policy.json).
+- Blocks A, B, C, E and F are read-only. **Block D is the only change.** Block G (recovery) is only for when block B finds a pinned image missing.
+- If you also do the rollback rehearsal (rollback.md status line) around now, either order is safe. Re-run block B after its roll-forward.
+
+**A. Pre-check: the live policy is the reviewed file, and dry-run is on** (read-only)
 ```sh
-gcloud artifacts repositories describe shoestring --project="$PROJECT" --location="$REGION" \
-  --format="yaml(sizeBytes,cleanupPolicyDryRun,cleanupPolicies)"
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+cd "$(git rev-parse --show-toplevel)"
+gcloud artifacts repositories describe shoestring --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '{dryRun: (.cleanupPolicyDryRun // false), policies: (.cleanupPolicies | length)}'
+gcloud artifacts repositories list --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '.[] | select(.name | endswith("/repositories/shoestring")) | {sizeBytes}'
+NORM='def secs: if type=="string" and endswith("d") then (.[:-1] | tonumber * 86400 | tostring + "s") else . end;
+  map({name, action: (.action.type | ascii_upcase), mostRecentVersions,
+       condition: (.condition // null | if . then (.olderThan |= (if . then secs else . end)) | with_entries(select(.value != null)) else . end)})
+  | sort_by(.name)'
+diff <(jq -S "${NORM}" infra/artifact-registry/cleanup-policy.json) \
+     <(gcloud artifacts repositories list-cleanup-policies shoestring --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null | jq -S "${NORM}") \
+  && echo "POLICY OK: live policy matches infra/artifact-registry/cleanup-policy.json" \
+  || echo "STOP: the live policy differs from the file (diff above). Do not continue; tell the tech lead"
 ```
-`sizeBytes` should stay under ~350,000,000 (70% of 0.5 GB). **Back out:** `gcloud artifacts repositories delete-cleanup-policies shoestring --location="$REGION" --project="$PROJECT" --policynames=<name>`.
+**Pass:** `"dryRun": true`, `"policies": 5`, `sizeBytes` under 350,000,000, and `POLICY OK`.
+
+**B. Reference check: every image production uses carries a `prod-` tag** (read-only)
+This is the safety gate. Re-run it after every deploy, rollback or backup-image roll.
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+R="${REGION}-docker.pkg.dev/${PROJECT}/shoestring"
+VERSIONS=$(for PKG in app migrate backup; do gcloud artifacts docker images list "${R}/${PKG}" --include-tags --format=json 2>/dev/null; done | jq -s 'add')
+{
+  gcloud run services describe shoestring --region="${REGION}" --project="${PROJECT}" --format=json \
+    | jq -r '.status.traffic[] | select(.percent > 0) | .revisionName' \
+    | while read -r REV; do
+        printf 'service %s\t%s\n' "${REV}" "$(gcloud run revisions describe "${REV}" --region="${REGION}" --project="${PROJECT}" --format='value(spec.containers[0].image)')"
+      done
+  for JOB in shoestring-migrate shoestring-purge shoestring-admin shoestring-rewrap-mfa shoestring-backup; do
+    printf 'job %s\t%s\n' "${JOB}" "$(gcloud run jobs describe "${JOB}" --region="${REGION}" --project="${PROJECT}" --format='value(spec.template.spec.template.spec.containers[0].image)')"
+  done
+  printf 'rollback app:prod-previous\t%s\n' "$(gcloud artifacts docker images describe "${R}/app:prod-previous" --format='value(image_summary.fully_qualified_digest)' 2>/dev/null)"
+} | jq -R -r --argjson v "${VERSIONS}" '
+  split("\t") as [$who, $img]
+  | ([$img | capture("^(?<pkg>.+)@(?<dig>sha256:[0-9a-f]{64})$")] | first) as $m
+  | if $m == null then "STOP  \($who): not pinned by digest: \($img)"
+    else ([$v[] | select(.package == $m.pkg and .version == $m.dig)] | first) as $e
+    | if $e == null then "STOP  \($who): digest is NOT in the registry: \($img)"
+      elif ([$e.tags[]? | select(startswith("prod-"))] | length) == 0 then "STOP  \($who): no prod- tag (tags: \($e.tags // [] | join(","))) \($m.dig)"
+      elif ($e.metadata.mediaType | test("index|list")) then "STOP  \($who): image index; its child manifests are untagged (tell sre)"
+      else "OK    \($who): \($m.pkg | split("/") | last)@\($m.dig[7:19]) [\($e.tags | join(","))]" end end'
+```
+**Pass:** exactly 7 lines (1 service revision, 5 jobs, the rollback target), all `OK`. Result on 2026-11-23 (sre, read-only): all 7 `OK`. The service and the purge, admin and rewrap-mfa jobs on `app@d118648fb1c2` (`prod-current`); migrate on `migrate@8edda3863022` (`prod-current`); backup on `backup@1c20afbceeca` (`prod-backup`); rollback `app@09d34dd381fd` (`prod-previous`, revision `shoestring-00001-sg9`). All five versions are single-platform Docker v2 manifests, not image indexes.
+**Any `STOP`:** don't run block D. Fix the tag with the deploy.md step 7 or bootstrap 12g command for that image, then re-run B. If the line says "image index", tell the tech lead (sre and ci-engineer): an index's per-platform manifests are untagged versions, and the 1-day rule could delete them (V44).
+
+**C. Preview: what the policy would delete right now** (read-only)
+Five days of dry-run left nothing readable: on 2026-11-23 the project's Artifact Registry audit entries were only your own create and tag calls. AR may write dry-run results only as Data Access audit logs, which are off here on purpose (§3; verify V44). Nothing would have been deleted yet anyway. So this block works the policy's rules out from the live version list. It models AR's evaluation rather than reading it, so treat a surprise as a reason to stop, not as proof.
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+R="${REGION}-docker.pkg.dev/${PROJECT}/shoestring"
+NOW=$(date -u +%s)
+for PKG in app migrate backup; do
+  case "${PKG}" in migrate) KEEP=2 ;; *) KEEP=3 ;; esac
+  gcloud artifacts docker images list "${R}/${PKG}" --include-tags --format=json 2>/dev/null \
+  | jq -r --arg pkg "${PKG}" --argjson keep "${KEEP}" --argjson now "${NOW}" '
+      sort_by(.createTime) | reverse | to_entries[]
+      | .key as $i | .value as $e | ($e.tags // []) as $t
+      | (($now - ($e.createTime | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 86400) as $age
+      | (if any($t[]; startswith("prod-")) then "keep (prod- tag)"
+         elif $i < $keep then "keep (\($keep) newest)"
+         elif ($t | length) == 0 and $age > 1 then "WOULD DELETE (untagged, older than 1d)"
+         elif $age > 7 then "WOULD DELETE (older than 7d)"
+         else "keep for now (no delete rule matches yet)" end) as $verdict
+      | "\($pkg)\t\($e.version[7:19])\t\($age * 10 | floor / 10)d\t\($t | join(","))\t\($verdict)"'
+done | column -t -s "$(printf '\t')"
+```
+**Pass:** no `WOULD DELETE` on any digest that block B listed. Result on 2026-11-23 (sre): 5 versions, all `keep`, so the live policy deletes nothing yet. The first real deletion is expected after the **next** deploy, once 2026-11-26 has passed (7 days after the first copy). Then `migrate@b7eaaa030963` (release `30577e54`, referenced by nothing) falls out of the 2 newest. `app@09d34dd381fd` (revision `shoestring-00001-sg9`) loses `prod-previous` at the next deploy but stays among the 3 newest. It goes at the deploy after that.
+To see whether AR wrote anything itself (expect nothing):
+```sh
+PROJECT="shoestring-prod-ssba"
+gcloud logging read 'protoPayload.serviceName="artifactregistry.googleapis.com" AND NOT protoPayload.authenticationInfo.principalEmail:"@gmail.com"' \
+  --project="${PROJECT}" --freshness=7d --limit=20 --format="table(timestamp,logName.basename(),protoPayload.methodName,protoPayload.authenticationInfo.principalEmail)"
+```
+Don't switch on Data Access audit logs to get dry-run output. That is a production change, it adds log volume (image pulls are data reads), and §3 requires them off.
+
+**D. Switch dry-run off (the only change)**
+This changes only the dry-run flag. It doesn't send the policy file, so it can't alter the rules that block A just checked.
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+gcloud artifacts repositories set-cleanup-policies shoestring --project="${PROJECT}" --location="${REGION}" --no-dry-run
+```
+It prints the 5 policies **without** the line `Dry run is enabled.`
+
+**E. Verify straight away** (read-only)
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+gcloud artifacts repositories describe shoestring --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '{dryRun: (.cleanupPolicyDryRun // false), policies: (.cleanupPolicies | length)}'
+gcloud artifacts repositories list --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '.[] | select(.name | endswith("/repositories/shoestring")) | {sizeBytes}'
+gcloud logging read 'protoPayload.serviceName="artifactregistry.googleapis.com" AND protoPayload.methodName:"UpdateRepository"' \
+  --project="${PROJECT}" --freshness=1h --limit=3 --format="table(timestamp,protoPayload.methodName,protoPayload.authenticationInfo.principalEmail)"
+```
+**Pass:** `"dryRun": false`, `"policies": 5`, and one `UpdateRepository` entry from you at the time you ran D. Then re-run **block A**: it should print `"dryRun": false` and `POLICY OK`. Re-run **block B**: all 7 `OK`.
+
+**F. Verify the next day** (after at least 24 hours, so a cleanup run has happened)
+1. Re-run **block B**: all 7 `OK`. If any line says "NOT in the registry", run the one-line revert below at once, then recover that digest with block G.
+2. The morning's scheduled jobs prove their images still pull. The 08:00 UTC purge shows a green check-in on the Sentry `purge` cron monitor, and the 09:15 UTC backup turns the Better Stack heartbeat green. Block B's "digest is in the registry" covers the service, whose instances pull the same digest.
+3. Re-run the `gcloud logging read` line from block C. Entries from a Google service agent are cleanup deletions. Every deleted digest must be one block C marked `WOULD DELETE`. Record what you see under V44.
+
+**One-line revert to dry-run:**
+```sh
+gcloud artifacts repositories set-cleanup-policies shoestring --project="shoestring-prod-ssba" --location="us-east1" --dry-run
+```
+Reverting stops further deletions, but AR has no undelete. To bring an image back, use block G.
+
+**G. Recover a deleted image that production pins** (F-70)
+Use this when block B prints `STOP … digest is NOT in the registry: …/<pkg>@sha256:<64 hex>`.
+- The revisions and jobs pin that **exact digest**, so you must copy that digest back. A different build of the same commit won't do.
+- GHCR still holds the digest: no workflow deletes GHCR versions, and the packages are public.
+- **Don't recover with deploy.md step 1 or the bootstrap 12g copy lines.** Both look the digest up through the `sha-<sha>` tag. A CI re-run of the same commit republishes that tag as a new build with a different digest, so you would copy the wrong image and the pinned revisions and jobs would stay broken.
+- **`gh attestation verify` is mandatory here too (F-67).** Never skip it because you "already know" the digest. The `&&` means nothing is copied unless verification passes.
+- Prerequisites: run from the repo checkout (`gh` logged in; `gcloud auth configure-docker us-east1-docker.pkg.dev` done once, as in deploy.md).
+
+G1 (read-only). Find the commit the attestation names, and check it:
+```sh
+PINNED="sha256:<64 hex from the block B STOP line>"; PKG="<app|migrate|backup>"   # PKG = the package in the STOP line's path
+GH_REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"; GH_REPO_LC=$(printf '%s' "${GH_REPO}" | tr '[:upper:]' '[:lower:]')
+GHCR_REPO="ghcr.io/${GH_REPO_LC}"; [ "${PKG}" = app ] || GHCR_REPO="${GHCR_REPO}-${PKG}"
+SRC_SHA=$(gh attestation verify "oci://${GHCR_REPO}@${PINNED}" --repo "${GH_REPO}" \
+  --signer-workflow "${GH_REPO}/.github/workflows/ci.yml" --source-ref refs/heads/main --deny-self-hosted-runners \
+  --format json --jq '.[0].verificationResult.signature.certificate.sourceRepositoryDigest')
+echo "attested commit: ${SRC_SHA:-NONE (verification failed: STOP)}"
+git fetch -q origin main && git merge-base --is-ancestor "${SRC_SHA}" origin/main && git log -1 --format='%H %cs %s' "${SRC_SHA}"
+```
+Continue only if all of these hold:
+- It prints a 40-hex commit that is on `main`.
+- The commit is the one you expect:
+  - `app`: the release the broken service revision or job runs (`APP_RELEASE` in `gcloud run revisions describe <rev>` or `gcloud run jobs describe <job>`).
+  - `migrate`: the same release (deploys always copy app and migrate from one SHA).
+  - `backup`: the `BACKUP_SHA` you recorded when that digest was rolled (bootstrap 12g).
+- If anything differs, stop and tell the tech lead.
+
+G2 (the change). Verify again, pinned to that commit, then copy that exact digest:
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+PINNED="sha256:<same 64 hex as G1>"; PKG="<same as G1>"; SRC_SHA="<40-hex commit G1 printed>"
+GH_REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"; GH_REPO_LC=$(printf '%s' "${GH_REPO}" | tr '[:upper:]' '[:lower:]')
+GHCR_REPO="ghcr.io/${GH_REPO_LC}"; [ "${PKG}" = app ] || GHCR_REPO="${GHCR_REPO}-${PKG}"
+AR_PKG="${REGION}-docker.pkg.dev/${PROJECT}/shoestring/${PKG}"
+ATTEST_FLAGS=(--repo "${GH_REPO}" --signer-workflow "${GH_REPO}/.github/workflows/ci.yml" --source-ref refs/heads/main --source-digest "${SRC_SHA}" --deny-self-hosted-runners)
+gh attestation verify "oci://${GHCR_REPO}@${PINNED}" "${ATTEST_FLAGS[@]}" \
+  && crane copy "${GHCR_REPO}@${PINNED}" "${AR_PKG}:prod-recovered-${PINNED:7:12}" \
+  && crane digest "${AR_PKG}@${PINNED}"      # must print exactly ${PINNED}
+```
+- The `prod-recovered-<12 hex>` tag protects the copy from the moment it lands, through the `prod-` keep rule. It moves no existing `prod-` tag, so it can't unprotect anything else.
+- Then re-run **block B**: every line `OK`.
+- Then put the standard tag back on the image that role should use:
+  - `app` or `migrate`: deploy.md step 7's `tags add` lines, with `IMAGE` / `MIGRATE_IMAGE` / `PREV_IMAGE` set to the digests block B shows for the service and jobs.
+  - `backup` (F-68): if the backup job and `backup:prod-backup` now point at different digests, put them back together through bootstrap-production.md 12g "Rolling the backup image" (it verifies and tags). Don't hand-edit the job.
+- Once block B shows nothing pins that digest any more, remove the extra tag: `gcloud artifacts docker tags delete "${AR_PKG}:prod-recovered-${PINNED:7:12}"` (with the G2 variables set).
+- Tell the tech lead which digest was deleted and when (V44, and an incident note if users were affected).
+
+**Record:** dry-run switched **off** on **2026-11-23 23:14 UTC** by the owner. Block A: `dryRun: true`, 5 policies, 115,554,690 bytes, `POLICY OK`. Block B: 7 of 7 `OK`. Block C: 0 `WOULD DELETE` (5 versions, all kept). Block E: `dryRun: false`, 5 policies, one `UpdateRepository` entry from the owner. A and B re-run afterwards: `POLICY OK`, 7 of 7 `OK`. Next-day block F: ____ (due after 2026-11-24 09:30 UTC). Copy the date into the bootstrap-production.md Record table, row 3b.
+
+**Verify (any time; the monthly check, §11 row 5):**
+```sh
+PROJECT="shoestring-prod-ssba"; REGION="us-east1"
+gcloud artifacts repositories describe shoestring --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '{dryRun: (.cleanupPolicyDryRun // false), policies: (.cleanupPolicies | length)}'
+gcloud artifacts repositories list --project="${PROJECT}" --location="${REGION}" --format=json 2>/dev/null \
+  | jq '.[] | select(.name | endswith("/repositories/shoestring")) | {sizeBytes}'
+```
+`sizeBytes` should stay under ~350,000,000 (70% of 0.5 GB). Once 5b is done, `dryRun` must be `false`. (`describe` doesn't return `sizeBytes` and `list` doesn't return the policies, hence two commands.)
+
+**Back out:**
+- Live deletions: the one-line revert above.
+- A single rule: `gcloud artifacts repositories delete-cleanup-policies shoestring --location="$REGION" --project="$PROJECT" --policynames=<name>`. Make the same change in infra/artifact-registry/cleanup-policy.json first, so block A keeps passing.
 
 ## 6. Log retention and volume (50 GiB ingestion, 30 days retention free)
 ```sh

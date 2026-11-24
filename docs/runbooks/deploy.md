@@ -103,6 +103,7 @@ Steps 4 and 6 use `gcloud run deploy` flags until deploy/cloudrun/service.yaml e
 - On your phone: open the app, sign in, add a transaction, see it in the month view (J2/J3).
 - **Sentry smoke check** (below): it passes, and Sentry shows no new `production` issues within 15 minutes.
 - Better Stack monitor is green.
+- **Registry protection:** billing-protection.md §5b block B prints 7 `OK` lines. Every image the service, the five jobs and the rollback target use carries a `prod-` tag, so the live cleanup policy can't delete it. A `STOP` usually means step 7 didn't run: run it, then re-check.
 
 ### Sentry smoke check (read-only; sends no user data)
 It proves the release is wired to Sentry without creating a fake error from user traffic. Run it from your Mac with `~/shoestring-prod.env` sourced (it provides `DOMAIN` and `SENTRY_DSN_WEB`) and `SHA` set.

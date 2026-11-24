@@ -1659,3 +1659,38 @@ Scope: `git diff chore/pre-deploy`. That covers ci-engineer's `publish` job, the
   
   Every failure path deletes the file and apt downloads it again, which is fail-closed. Nothing writes the dir between the check and playwright's install. The ci.yml and setup.sh comments are now accurate, so keeping `restore-keys` is fine.
 - **Residual, not new and accepted as Low:** `~/.cache/ms-playwright` browser binaries are still restored without verification, as they were before this branch. Reaching them still needs code running in a main-branch job, and they can't reach the images because publish checks the image IDs.
+
+## AR cleanup go-live review (2026-11-23, branch `chore/ar-cleanup-go-live`, uncommitted runbook tree)
+Scope: billing-protection.md §5 (5a, 5b blocks A–F), rollback.md step 1b, the deploy.md verify bullet, the infra/CLAUDE.md `--dry-run` correction, and hosting-evaluation.md V44. **No Critical, High or Medium findings. Approve; the owner may run block D.** One new Low, F-70, which is a wording fix for sre. **F-70 was fixed and verified the same day (block G).**
+
+### F-70 Low (new, sre): the "recover a deleted image" path resolves the digest from the `sha-<sha>` tag, not from the pinned digest. **Fixed and verified 2026-11-23 (same branch)**
+- **Location:** docs/runbooks/billing-protection.md:315 (the 5b recovery note); rollback.md:33 (step 1b's "re-copy that digest").
+- **Scenario:** an image that production pins gets deleted (a policy surprise, or a STOP in block F). The note says to re-copy "the same digest" using deploy.md step 1 or bootstrap 12g. But those steps compute `DIGEST=$(crane digest …:sha-$SHA)`. A CI re-run of the same commit (GitHub "Re-run jobs" on main) republishes `sha-$GITHUB_SHA` as a new, non-reproducible build, so the tag can now point at a different digest. Followed literally, the recovery copies an attested image, so the F-67 chain holds. But it's the wrong digest. The pinned revisions and jobs stay broken, and the note's "the digest is unchanged" is false. An operator who sees the mismatch might then set `DIGEST` by hand and skip the `gh attestation verify` line, because they "know" the digest. That would weaken F-67 in the one place it's run under pressure. It's defense in depth (nothing can swap content behind a digest), hence Low.
+- **Recommended fix (sre):** give the recovery as an explicit block that starts from the digest block B printed:
+  ```sh
+  PINNED="sha256:<64 hex from the block B STOP line>"; PKG="<app|migrate|backup>"
+  GHCR_REPO="ghcr.io/$GH_REPO_LC"; [ "$PKG" = app ] || GHCR_REPO="$GHCR_REPO-$PKG"
+  gh attestation verify "oci://$GHCR_REPO@$PINNED" --repo "$GH_REPO" \
+    --signer-workflow "$GH_REPO/.github/workflows/ci.yml" --source-ref refs/heads/main --deny-self-hosted-runners \
+    && crane copy "$GHCR_REPO@$PINNED" "$REGION-docker.pkg.dev/$PROJECT/shoestring/$PKG:recovered-${PINNED:7:12}"
+  ```
+  Then re-tag `prod-*` if the image had one, and re-run block B. Leave out `--source-digest` unless the SHA is known for certain: the attestation itself names the commit. Say plainly that verification is mandatory here too (F-67), and that step 1 should not be used for recovery because it resolves the digest from the tag.
+- **Owner:** sre. Not a gate for block D.
+- **Re-check 2026-11-23: verified.** sre added billing-protection.md §5b block G and rewrote the rollback.md step 1b note.
+  - The recovery now starts from the digest on block B's STOP line. It explicitly forbids deploy.md step 1 and the 12g copy lines, and it says attestation verification is mandatory (F-67).
+  - G1 is read-only. It verifies the attestation on `@${PINNED}` and reads the attested commit (`sourceRepositoryDigest`). If verification fails, the commit is empty and the `git merge-base --is-ancestor` check fails, so the chain stops. G1 then checks the commit is on `main` and has the owner match it to the expected release (`APP_RELEASE`, or `BACKUP_SHA` for backup).
+  - G2 verifies again with `--source-digest`, then runs `&& crane copy` of `@${PINNED}` (no tag lookup), then checks the digest.
+  - The `prod-recovered-<12 hex>` tag protects the copy through the existing keep rule and doesn't move any existing `prod-` tag. Block B accepts it, and the standard tags are restored through deploy.md step 7 or 12g.
+  - This is stronger than my recommendation, because it adds the commit binding.
+
+### Checked, no issue
+- **Can live cleanup delete what production relies on?** No, as long as block B passes.
+  - The `keep-prod-tags` rule covers every image production pins by digest: the serving revision and the purge, admin and rewrap-mfa jobs (`app:prod-current`), migrate (`migrate:prod-current`), backup (`prod-backup`) and the rollback target (`prod-previous`).
+  - Keep beats delete. The keep-newest rules cover the window between steps 3 or 6 and step 7, and aborted deploys.
+  - Block B resolves each digest live, checks it's in the registry with a `prod-` tag, and fails closed on tag-pinned images, GHCR paths and image indexes. The single-platform manifests mean there are no untagged child manifests for the 1-day rule to catch.
+  - Re-running B after deploys, rollbacks and backup rolls, plus rollback step 1b before any traffic shift, closes the known gap for revisions older than `prod-previous`.
+- **F-67 chain:** cleanup can only delete. It can't substitute content, and a re-copy of the same digest is byte-identical. Deploys still verify and copy by digest.
+- **F-66:** nothing here uses WIF or changes a binding. The owner's own credential runs block D (`repositories.update`).
+- **Logging and access:** nothing enables Data Access audit logs. Block C forbids it explicitly, in line with §3. No IAM change. The `describe` calls use `--format=value(image)` and `jq` projections, so job and service env and secret references aren't printed. Output run through Claude Code's `!` contains only the project ID, digests and the owner's principal in E's log table, and no secrets.
+- **The infra/CLAUDE.md correction is right.** `set-cleanup-policies --dry-run` writes the policy and sets the repository mode (gcloud help: "Disable deleting images according to cleanup policies"). It's not a preview. Block D's `--no-dry-run` with no `--policy` is valid ("at least one of" `--dry-run`, `--policy`), and E re-runs A to confirm the rules didn't change.
+- **GHCR as the recovery source:** no workflow deletes GHCR package versions, and a re-run moves a tag but leaves the old digest in place, so the pinned digest stays fetchable (see F-70 for the tag caveat). The packages are public per the 2026-11-17 ruling, so recovery needs no credential.
