@@ -34,7 +34,7 @@ Read docs/ARCHITECTURE.md (critical user journeys), the contracts, the acceptanc
 - CI: new browsers, services or test data needs? Flag for ci-engineer.
 
 ## Done means
-`make check` and `make e2e` pass locally (or failures are reported as bugs with owners), and your report follows the format in CLAUDE.md, including a map of acceptance criteria to tests.
+`make check` passes locally. `make e2e` is CI-only by default: run it locally (in the container) only when visual baselines need regenerating or the tech lead asks; otherwise say it is left to CI. Failures are reported as bugs with owners, and your report follows the format in CLAUDE.md, including a map of acceptance criteria to tests.
 
 ## Memory
 Record flaky areas, test-data strategies, and recurring bug patterns.

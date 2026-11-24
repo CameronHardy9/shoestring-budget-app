@@ -86,7 +86,6 @@ export default function MoreScreen() {
             <PendingSlot
               paused={budgets.isPaused}
               rowsBelowShown={rowsShown}
-              rows={2}
               offlineMessage="You're offline. Your budgets will appear when you reconnect."
             />
           ) : budgets.isError ? (

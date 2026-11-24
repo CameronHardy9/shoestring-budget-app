@@ -64,8 +64,8 @@ describe("theme-color", () => {
   it("follows a manual theme and restores the media queries for system", () => {
     document.head.replaceChildren(
       ...[
-        ["#f4f5f7", "(prefers-color-scheme: light)"],
-        ["#0e1014", "(prefers-color-scheme: dark)"],
+        ["#f4efe6", "(prefers-color-scheme: light)"],
+        ["#121214", "(prefers-color-scheme: dark)"],
       ].map(([content, media]) => {
         const meta = document.createElement("meta");
         meta.name = "theme-color";
@@ -79,13 +79,13 @@ describe("theme-color", () => {
     ];
     applyTheme("dark");
     expect(metas().map((m) => [m.media, m.content])).toEqual([
-      ["all", "#0e1014"],
-      ["all", "#0e1014"],
+      ["all", "#121214"],
+      ["all", "#121214"],
     ]);
     applyTheme("system");
     expect(metas().map((m) => [m.media, m.content])).toEqual([
-      ["(prefers-color-scheme: light)", "#f4f5f7"],
-      ["(prefers-color-scheme: dark)", "#0e1014"],
+      ["(prefers-color-scheme: light)", "#f4efe6"],
+      ["(prefers-color-scheme: dark)", "#121214"],
     ]);
   });
 });

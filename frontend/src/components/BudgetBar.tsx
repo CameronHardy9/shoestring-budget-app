@@ -48,12 +48,7 @@ export function BudgetBar({
             patternUnits="userSpaceOnUse"
             patternTransform="rotate(45)"
           >
-            <rect
-              width="3"
-              height="8"
-              className="fill-surface"
-              opacity="0.55"
-            />
+            <rect width="3" height="8" className="fill-danger-stripe" />
           </pattern>
         </defs>
       ) : null}

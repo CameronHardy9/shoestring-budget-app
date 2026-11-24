@@ -25,6 +25,13 @@ import {
 } from "../e2e/fixtures.ts";
 
 async function settle(page: Page): Promise<void> {
+  // No loader in the shot: neither the viewport-centred one (position: fixed,
+  // so it can sit over finished content) nor an inline one (Overview's
+  // "Recent", the quick-add sheet's chips), including behind a sheet's scrim.
+  await expect(
+    page.getByTestId("loading"),
+    "a loader is still on screen; wait for the data it stands for before the screenshot",
+  ).toHaveCount(0);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();
@@ -174,7 +181,7 @@ for (const scheme of ["light", "dark"] as const) {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
       // The page behind the sheet's scrim is part of the screenshot: let it
-      // finish loading first, or the baseline would catch a skeleton.
+      // finish loading first, or the baseline would catch a loader.
       await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       await page.keyboard.type("12.50");
@@ -189,7 +196,7 @@ for (const scheme of ["light", "dark"] as const) {
       const b = await household(page);
       await page.goto(`/budgets/${b.id}`);
       // The page behind the sheet's scrim is part of the screenshot: let it
-      // finish loading first, or the baseline would catch a skeleton.
+      // finish loading first, or the baseline would catch a loader.
       await expect(page.getByTestId("total-remaining")).toBeVisible();
       await page.getByTestId("quick-add-open").click();
       const sheet = page.getByTestId("quick-add-sheet");

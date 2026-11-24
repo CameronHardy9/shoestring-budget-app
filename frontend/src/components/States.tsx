@@ -7,9 +7,8 @@ import { Icon, type IconName } from "./Icon.tsx";
 import { LACE_SIZE, LACE_SIZE_LARGE, LaceLoader } from "./LaceLoader.tsx";
 
 /**
- * The min-height `rows` reserves: what the old skeleton's rows took (each
- * h-16, 4rem, with gap-3, 0.75rem, between them), so the loader occupies the
- * same space as before and the content replacing it lands where it always did.
+ * The min-height `rows` reserves for an inline loader: what the old skeleton's
+ * rows took (each h-16, 4rem, with gap-3, 0.75rem, between them).
  */
 export function loadingMinHeight(rows: number): string {
   const n = Math.max(1, Math.round(rows));
@@ -17,31 +16,57 @@ export function loadingMinHeight(rows: number): string {
 }
 
 /**
- * The lace loader centred in a region `rows` tall; announced once as the
- * label (screen-reader only: the screen's heading already says where you are,
- * and a visible line would not fit the one-row slots). `size="lg"` is for
- * full-screen loads (boot, a lazy route).
+ * Where a loader goes. "viewport" (the default, every page-level load): the
+ * 96 px lace, fixed in the middle of the viewport (owner ruling 2026-11-24).
+ * It takes no space in the page, so it reserves nothing and pushes nothing
+ * (the loading region is the last thing on screen anyway: see "Nothing moves
+ * under a finger" in frontend/CLAUDE.md); it can't be tapped (taps pass
+ * through), and it sits under the tab bar, sheets, dialogs and toasts. "inline":
+ * the 56 px lace in a `rows`-tall box in the flow, for a load inside a sheet
+ * (the page behind is covered) or in a section below content that has already
+ * loaded (the middle of the viewport may be that content).
+ */
+export type LoaderPlacement =
+  | { placement?: "viewport"; rows?: never }
+  | {
+      placement: "inline";
+      /** Height hint, in old skeleton rows. */
+      rows?: number;
+    };
+
+/**
+ * The lace loader; announced once as the label (screen-reader only: the
+ * screen's heading already says where you are).
  */
 export function LoadingState({
   label = "Loading…",
-  rows = 3,
-  size = "md",
-}: {
-  label?: string;
-  /** Height hint, in old skeleton rows. */
-  rows?: number;
-  size?: "md" | "lg";
-}) {
+  ...where
+}: { label?: string } & LoaderPlacement) {
+  if (where.placement === "inline") {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex items-center justify-center"
+        style={{ minHeight: loadingMinHeight(where.rows ?? 3) }}
+        data-testid="loading"
+        data-placement="inline"
+      >
+        <span className="sr-only">{label}</span>
+        <LaceLoader size={LACE_SIZE} />
+      </div>
+    );
+  }
   return (
     <div
       role="status"
       aria-live="polite"
-      className="flex items-center justify-center"
-      style={{ minHeight: loadingMinHeight(rows) }}
+      className="pointer-events-none fixed inset-0 z-20 m-auto flex size-fit items-center justify-center"
       data-testid="loading"
+      data-placement="viewport"
     >
       <span className="sr-only">{label}</span>
-      <LaceLoader size={size === "lg" ? LACE_SIZE_LARGE : LACE_SIZE} />
+      <LaceLoader size={LACE_SIZE_LARGE} />
     </div>
   );
 }
@@ -65,9 +90,11 @@ export function OfflineState({ message }: { message: string }) {
 }
 
 /**
- * The slot for data that hasn't arrived yet (`isPending`): a loader, or the
- * offline message when the read is paused (offline, nothing cached), so the
- * screen settles instead of loading forever.
+ * The slot for data that hasn't arrived yet (`isPending`): a loader (centred
+ * in the viewport unless `placement="inline"`), or the offline message when
+ * the read is paused (offline, nothing cached), so the screen settles instead
+ * of loading forever. The offline boxes are always in the flow, where the
+ * data will appear.
  *
  * For a list with tappable rows below it, pass `rowsBelowShown` (latched):
  * before those rows appear the slot is a loader or the offline message (so
@@ -79,24 +106,20 @@ export function OfflineState({ message }: { message: string }) {
 export function PendingSlot({
   paused,
   rowsBelowShown = false,
-  rows,
   label,
   offlineMessage,
+  ...where
 }: {
   paused: boolean;
   rowsBelowShown?: boolean;
-  rows?: number;
   /** The loader's screen-reader label. */
   label?: string;
   offlineMessage: string;
-}) {
+} & LoaderPlacement) {
   if (paused) return <OfflineState message={offlineMessage} />;
   if (rowsBelowShown) return <OfflineState message="Back online. Loading…" />;
   return (
-    <LoadingState
-      {...(rows !== undefined ? { rows } : {})}
-      {...(label !== undefined ? { label } : {})}
-    />
+    <LoadingState {...where} {...(label !== undefined ? { label } : {})} />
   );
 }
 

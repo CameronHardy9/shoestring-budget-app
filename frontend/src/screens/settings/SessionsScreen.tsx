@@ -95,7 +95,6 @@ export default function SessionsScreen() {
         {sessions.isPending ? (
           <PendingSlot
             paused={sessions.isPaused}
-            rows={2}
             offlineMessage="You're offline. Your signed-in devices will appear when you reconnect."
           />
         ) : sessions.isError ? (

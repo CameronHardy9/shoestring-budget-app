@@ -64,6 +64,8 @@ const TEXT_PAIRS: [string, string][] = [
   ["success", "success-soft"],
   ["warning", "surface"],
   ["warning", "warning-soft"],
+  // Add transaction: the desktop rail button has a visible label.
+  ["on-fab", "fab"],
 ];
 
 const UI_PAIRS: [string, string][] = [
@@ -76,6 +78,10 @@ const UI_PAIRS: [string, string][] = [
   ["brand", "track"],
   ["danger", "track"],
   ["brand", "sunken"],
+  // The add buttons against the tab bar / rail (surface) and the page the
+  // phone's + overhangs.
+  ["fab", "surface"],
+  ["fab", "canvas"],
 ];
 
 describe("design token contrast (WCAG 2.2 AA)", () => {
@@ -86,12 +92,16 @@ describe("design token contrast (WCAG 2.2 AA)", () => {
   it("keeps the lace loader's colours fixed: defined once, never themed", () => {
     const lace = Object.keys(light).filter((name) => name.startsWith("lace-"));
     expect(lace.sort()).toEqual([
+      "lace-border",
+      "lace-dark",
       "lace-eyelet",
       "lace-eyelet-rim",
       "lace-hole",
       "lace-line",
       "lace-tile",
       "lace-tip",
+      "lace-tongue",
+      "lace-tongue-line",
     ]);
     for (const dark of [darkMedia, darkManual]) {
       expect(

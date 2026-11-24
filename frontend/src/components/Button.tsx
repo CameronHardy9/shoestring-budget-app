@@ -13,7 +13,7 @@ import {
 import { cx } from "./cx.ts";
 
 export type ButtonVariant =
-  "primary" | "secondary" | "selected" | "ghost" | "quiet" | "danger";
+  "primary" | "secondary" | "selected" | "ghost" | "quiet" | "danger" | "fab";
 export type ButtonSize = "sm" | "md" | "lg" | "icon" | "fab";
 export type ButtonShape = "rounded" | "pill";
 export type ButtonAlign = "center" | "between";
@@ -31,6 +31,10 @@ const VARIANTS: Record<ButtonVariant, string> = {
   quiet: "bg-transparent text-fg data-[pressed]:bg-sunken",
   danger:
     "bg-danger text-on-brand data-[pressed]:bg-danger-soft data-[pressed]:text-danger",
+  // Add transaction (the phone's + and the desktop rail button): forest green
+  // with white text/icon, >= 4.5:1 (tokens-contrast test). There's no darker
+  // green token, so a press shrinks it instead.
+  fab: "bg-fab text-on-fab shadow-1 data-[pressed]:scale-95",
 };
 
 const SIZES: Record<ButtonSize, string> = {

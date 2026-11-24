@@ -117,6 +117,7 @@ export function AppShell({
         {onAdd ? (
           <Button
             onPress={onAdd}
+            variant="fab"
             className="w-full"
             data-testid="quick-add-open-rail"
           >
@@ -158,6 +159,7 @@ export function AppShell({
                 onPress={onAdd}
                 aria-label="Add transaction"
                 data-testid="quick-add-open"
+                variant="fab"
                 size="fab"
                 shape="pill"
                 className="-mt-6 shadow-2"

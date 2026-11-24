@@ -50,7 +50,6 @@ export default function DeletedBudgetsScreen() {
         {deleted.isPending ? (
           <PendingSlot
             paused={deleted.isPaused}
-            rows={2}
             offlineMessage="You're offline. Deleted budgets will appear when you reconnect."
           />
         ) : deleted.isError ? (
