@@ -54,7 +54,7 @@ Unit tests live next to the code they test and belong to that code's owner.
 make setup   # install dependencies
 make dev     # run the whole app locally
 make check   # lint + typecheck + unit tests — must pass before any report says "done"
-make e2e     # integration, contract, end-to-end and visual tests
+make e2e     # integration, contract, end-to-end and visual tests — CI-only by default; run locally only to regenerate visual baselines
 make audit   # dependency audit + secret scan + static security analysis
 ```
 

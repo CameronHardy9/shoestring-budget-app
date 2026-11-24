@@ -76,7 +76,6 @@ export default function InvitationsScreen() {
         {invitations.isPending ? (
           <PendingSlot
             paused={invitations.isPaused}
-            rows={2}
             offlineMessage="You're offline. Your invitations will appear when you reconnect."
           />
         ) : invitations.isError ? (

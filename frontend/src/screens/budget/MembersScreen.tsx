@@ -146,7 +146,6 @@ function Invitations({ budgetId }: { budgetId: string }) {
       <PendingSlot
         paused={invitations.isPaused}
         rowsBelowShown
-        rows={1}
         offlineMessage="You're offline. Invitations will appear when you reconnect."
       />
     );
@@ -411,7 +410,6 @@ export default function MembersScreen() {
           <PendingSlot
             paused={members.isPaused}
             rowsBelowShown={settled}
-            rows={2}
             offlineMessage="You're offline. Members will appear when you reconnect."
           />
         ) : members.isError ? (

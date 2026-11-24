@@ -61,7 +61,7 @@ export function applyTheme(
       meta.content = meta.dataset.content;
     } else {
       meta.media = "all";
-      meta.content = preference === "dark" ? "#0e1014" : "#f4f5f7";
+      meta.content = preference === "dark" ? "#121214" : "#f4efe6";
     }
   }
 }

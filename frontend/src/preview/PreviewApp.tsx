@@ -1,5 +1,5 @@
 // DEV PREVIEW ONLY: renders one proposal screen from the query string, e.g.
-// /preview.html?screen=overview&theme=dark&brand=teal&view=table
+// /preview.html?screen=overview&theme=dark&view=table
 // Mock data only; makes no API calls.
 import { AppShell } from "../components/AppShell.tsx";
 import { MockKeypad, KEYPAD_HEIGHT } from "./MockKeypad.tsx";

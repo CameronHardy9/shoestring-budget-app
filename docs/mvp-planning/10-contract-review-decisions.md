@@ -147,3 +147,17 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Path to the first test user (cheapest) | **Publish PR next** (main-only GHCR push of app, migrate and backup images, plus `Dockerfile.backup`); no `deploy.yml` yet (manual deploy path). Owner runs bootstrap. |
 | F-63 | **Finished and parked** as draft PR #23; security review and e2e after the first tester is in. |
 | Architect integration review | **After the first tester, scoped** to how well the contracts match the code since the last review, plus the deploy path. |
+
+## Brand recolour: ivory & navy + Loader E (2026-11-24)
+| Topic | Decision |
+|---|---|
+| Loader | **Loader E, Colour 4** (ivory tile, tan tongue with two navy $ lines, white lace with a dark edge, grey tip; small size is just the dark S). Loader colours are fixed, never themed. |
+| App palette | **Ivory & navy.** Light: ivory canvas `#f4efe6`, navy brand `#1e2a47`. Dark: near-black canvas `#121214`, ivory brand `#f2ede3`. Danger and warning unchanged unless a contrast test fails. |
+| + (add transaction) button | **Forest green** (`--ss-fab`: `#2e6a4f` light, `#3f8a65` dark) with a white +. |
+| + green vs income/success green | **Aligned: one green.** Success/income moves to the forest hue (dark theme uses a lighter shade of it for text contrast). Owner overrode "keep separate". |
+| Loader position and size | **Centred in the viewport at 96 px** (was 56 px in the content slot). |
+| App icon / favicon | **Still on hold**; a logo may grow out of the ivory Loader E tile. |
+| Local verification (usage budget) | **`make check` stays local before every commit. `make e2e` is CI-only by default** from the PR after this one; it runs locally (in the container) only when visual baselines need regenerating. Supersedes the "one local `make e2e` per PR" ruling (Build round 8). |
+| Desktop rail "Add transaction" button | **Forest green too**, sharing `--ss-fab`; dark shade darkened (from `#3f8a65`) so its white label passes 4.5:1. |
+| Loader centring on desktop | **Viewport centre is fine** (sits 120 px left of the content centre with the side rail). |
+| Shared loader phase across back-to-back loaders (engineer's addition) | **Keep.** The lace continues across hand-offs within 400 ms instead of restarting. |

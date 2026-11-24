@@ -15,77 +15,95 @@
 :root {
   color-scheme: light;
 
-  /* Surfaces */
-  --ss-canvas: #f4f5f7; /* app background */
-  --ss-surface: #ffffff; /* cards, sheets, bars */
-  --ss-sunken: #edeff2; /* chips, inputs at rest, table stripes */
-  --ss-line: #e0e3e8; /* dividers (decorative, no contrast requirement) */
-  --ss-line-strong: #7d8591; /* input and control borders (>= 3:1) */
+  /* Surfaces: warm ivory */
+  --ss-canvas: #f4efe6; /* app background */
+  --ss-surface: #fffdf8; /* cards, sheets, bars */
+  --ss-sunken: #ece5d7; /* chips, inputs at rest, table stripes */
+  --ss-line: #e3dacb; /* dividers (decorative, no contrast requirement) */
+  --ss-line-strong: #8a8170; /* input and control borders (>= 3:1) */
 
   /* Text */
-  --ss-fg: #14161a;
-  --ss-fg-muted: #585f6a;
+  --ss-fg: #1b1b1d;
+  --ss-fg-muted: #5e5748;
 
-  /* Brand: indigo (recommended option A) */
-  --ss-brand: #4f46e5;
-  --ss-brand-strong: #4338ca; /* pressed, brand text on brand-soft */
-  --ss-brand-soft: #eef0fe; /* selected chip, active nav pill */
+  /* Brand: navy on ivory (owner-approved recolour, 2026-11-24) */
+  --ss-brand: #1e2a47;
+  --ss-brand-strong: #131c33; /* pressed, brand text on brand-soft */
+  --ss-brand-soft: #e1e5ee; /* selected chip, active nav pill */
   --ss-on-brand: #ffffff;
+
+  /* Add transaction (the phone's + and the desktop rail's labelled button):
+     forest green with white on it, >= 4.5:1 because the rail button has text.
+     The same green as success (income), so the app has one green. Dark uses
+     #3c8461, the lightest shade of the owner's #3f8a65 hue that reaches
+     4.5:1 with white (owner ruling 2026-11-24). */
+  --ss-fab: #2e6a4f;
+  --ss-on-fab: #ffffff;
 
   /* Status: always paired with text or an icon, never colour alone */
   --ss-danger: #b42318;
   --ss-danger-soft: #fef1f0;
-  --ss-success: #067647;
-  --ss-success-soft: #e9f7ef;
+  --ss-danger-stripe: #f6dcd8; /* over-budget bar stripes, over danger */
+  --ss-success: #2e6a4f;
+  --ss-success-soft: #e3eee7;
   --ss-warning: #a15c07;
   --ss-warning-soft: #fdf4e3;
 
   /* Charts */
-  --ss-track: #e2e5ea; /* empty part of a bar */
+  --ss-track: #e6dccb; /* empty part of a bar */
 
-  /* The lace loader (components/LaceLoader.tsx): fixed artwork, the same in
-     both themes, so the dark blocks never override these (dark mode's light
-     --ss-brand would turn the lace dark). Decorative: no contrast pairs. */
-  --ss-lace-tile: #4f46e5;
+  /* The lace loader (components/LaceLoader.tsx, "Loader E"): fixed artwork,
+     the same in both themes, so the dark blocks never override these (dark
+     mode's ivory --ss-brand would change the tongue lines). Decorative: no
+     contrast pairs. */
+  --ss-lace-tile: #f2ede3;
+  --ss-lace-border: #d9cfba;
+  --ss-lace-tongue: #e3d9c4;
+  --ss-lace-tongue-line: #1e2a47;
+  --ss-lace-dark: #2b2b2e; /* the lace's edge; the whole lace at <= 24 px */
   --ss-lace-line: #ffffff;
-  --ss-lace-tip: #c7caf9;
+  --ss-lace-tip: #9aa1ab;
   --ss-lace-eyelet: #dfe3e8;
   --ss-lace-eyelet-rim: #8d94a0;
-  --ss-lace-hole: #1e1b4b;
+  --ss-lace-hole: #2b2b2e;
 
   /* Focus ring and overlay */
-  --ss-focus: #4f46e5;
-  --ss-scrim: rgb(20 22 26 / 0.45);
+  --ss-focus: #1e2a47;
+  --ss-scrim: rgb(27 27 29 / 0.45);
 
-  /* Elevation */
-  --ss-shadow-1: 0 1px 2px rgb(16 24 40 / 0.06), 0 1px 3px rgb(16 24 40 / 0.08);
+  /* Elevation (warm-tinted shadows) */
+  --ss-shadow-1: 0 1px 2px rgb(40 30 10 / 0.06), 0 1px 3px rgb(40 30 10 / 0.08);
   --ss-shadow-2:
-    0 6px 16px -4px rgb(16 24 40 / 0.12), 0 2px 4px -2px rgb(16 24 40 / 0.06);
-  --ss-shadow-3: 0 -12px 32px -8px rgb(16 24 40 / 0.18);
+    0 6px 16px -4px rgb(40 30 10 / 0.12), 0 2px 4px -2px rgb(40 30 10 / 0.06);
+  --ss-shadow-3: 0 -12px 32px -8px rgb(40 30 10 / 0.18);
 }
 
+/* Dark: a black canvas, ivory brand. */
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
-    --ss-canvas: #0e1014;
-    --ss-surface: #171a20;
-    --ss-sunken: #21252d;
-    --ss-line: #2a2f38;
-    --ss-line-strong: #6e7682;
-    --ss-fg: #eceef1;
-    --ss-fg-muted: #a3aab5;
-    --ss-brand: #a5acff;
-    --ss-brand-strong: #c3c7ff;
-    --ss-brand-soft: #272b52;
-    --ss-on-brand: #0e1014;
+    --ss-canvas: #121214;
+    --ss-surface: #1c1c1f;
+    --ss-sunken: #26262a;
+    --ss-line: #2f2f34;
+    --ss-line-strong: #7b766d;
+    --ss-fg: #f2ede3;
+    --ss-fg-muted: #b3ab9c;
+    --ss-brand: #f2ede3;
+    --ss-brand-strong: #fffaf0;
+    --ss-brand-soft: #34312b;
+    --ss-on-brand: #1b1b1d;
+    --ss-fab: #3c8461;
+    --ss-on-fab: #ffffff;
     --ss-danger: #ff8a7a;
     --ss-danger-soft: #3a1d1a;
-    --ss-success: #4fd69c;
-    --ss-success-soft: #143024;
+    --ss-danger-stripe: #824e48;
+    --ss-success: #6fc79a;
+    --ss-success-soft: #173025;
     --ss-warning: #f5b544;
     --ss-warning-soft: #352a12;
-    --ss-track: #2b3039;
-    --ss-focus: #a5acff;
+    --ss-track: #2f2f34;
+    --ss-focus: #f2ede3;
     --ss-scrim: rgb(0 0 0 / 0.6);
     --ss-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
     --ss-shadow-2: 0 8px 20px -6px rgb(0 0 0 / 0.6);
@@ -95,25 +113,28 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --ss-canvas: #0e1014;
-  --ss-surface: #171a20;
-  --ss-sunken: #21252d;
-  --ss-line: #2a2f38;
-  --ss-line-strong: #6e7682;
-  --ss-fg: #eceef1;
-  --ss-fg-muted: #a3aab5;
-  --ss-brand: #a5acff;
-  --ss-brand-strong: #c3c7ff;
-  --ss-brand-soft: #272b52;
-  --ss-on-brand: #0e1014;
+  --ss-canvas: #121214;
+  --ss-surface: #1c1c1f;
+  --ss-sunken: #26262a;
+  --ss-line: #2f2f34;
+  --ss-line-strong: #7b766d;
+  --ss-fg: #f2ede3;
+  --ss-fg-muted: #b3ab9c;
+  --ss-brand: #f2ede3;
+  --ss-brand-strong: #fffaf0;
+  --ss-brand-soft: #34312b;
+  --ss-on-brand: #1b1b1d;
+  --ss-fab: #3c8461;
+  --ss-on-fab: #ffffff;
   --ss-danger: #ff8a7a;
   --ss-danger-soft: #3a1d1a;
-  --ss-success: #4fd69c;
-  --ss-success-soft: #143024;
+  --ss-danger-stripe: #824e48;
+  --ss-success: #6fc79a;
+  --ss-success-soft: #173025;
   --ss-warning: #f5b544;
   --ss-warning-soft: #352a12;
-  --ss-track: #2b3039;
-  --ss-focus: #a5acff;
+  --ss-track: #2f2f34;
+  --ss-focus: #f2ede3;
   --ss-scrim: rgb(0 0 0 / 0.6);
   --ss-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
   --ss-shadow-2: 0 8px 20px -6px rgb(0 0 0 / 0.6);

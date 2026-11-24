@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { LACE_CYCLE_MS } from "../src/components/lace-timing.ts";
 
 const css = readFileSync(
   fileURLToPath(new URL("../src/styles/index.css", import.meta.url)),
@@ -51,25 +52,37 @@ describe("lace loader styles (index.css)", () => {
     css.indexOf(".ss-lace-tile"),
   );
 
-  it("animates both paths for 3.2 s, forever, with the spec's easing", () => {
+  it("animates the lace (edge + white, as one) and the tip for one LACE_CYCLE_MS cycle, forever, with the spec's easing, offset by the shared phase", () => {
+    expect(LACE_CYCLE_MS).toBe(3200);
     for (const [selector, keyframes] of [
-      [".ss-lace-line", "ss-lace-draw"],
+      [".ss-lace-dark,\n  .ss-lace-line", "ss-lace-draw"],
       [".ss-lace-tip", "ss-lace-tip"],
     ] as const) {
-      expect(rule(css, selector)).toContain(
-        `animation: ${keyframes} 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;`,
+      const body = rule(css, selector);
+      expect(body).toContain(
+        `animation: ${keyframes} ${String(LACE_CYCLE_MS / 1000)}s cubic-bezier(0.45, 0, 0.35, 1) infinite;`,
       );
+      // After the shorthand, which would otherwise reset it.
+      expect(
+        body.indexOf("animation-delay: var(--ss-lace-delay, 0ms);"),
+      ).toBeGreaterThan(body.indexOf("animation:"));
       expect(css).toContain(`@keyframes ${keyframes} {`);
     }
+  });
+
+  it("starts the tip half a tip ahead of the lace's end (it leads)", () => {
+    const tip = rule(css, ".ss-lace-tip");
+    expect(tip).toContain("stroke-dasharray: 0.03 3;");
+    expect(tip).toContain("stroke-dashoffset: 0.015;");
   });
 
   it("fades the tip out between 50% and 55%, before the hold, and keeps it hidden", () => {
     const tip = keyframes("ss-lace-tip");
     expect(tip).toEqual({
-      "0%": { "stroke-dashoffset": "0.03", opacity: "1" },
+      "0%": { "stroke-dashoffset": "0.015", opacity: "1" },
       "50%": { opacity: "1" },
-      "55%": { "stroke-dashoffset": "-0.97", opacity: "0" },
-      "100%": { "stroke-dashoffset": "-0.97", opacity: "0" },
+      "55%": { "stroke-dashoffset": "-0.985", opacity: "0" },
+      "100%": { "stroke-dashoffset": "-0.985", opacity: "0" },
     });
   });
 
@@ -83,11 +96,11 @@ describe("lace loader styles (index.css)", () => {
     });
   });
 
-  it("under reduced motion shows the finished S, still, without the tip", () => {
+  it("under reduced motion shows the finished lace (edge + white), still, without the tip", () => {
     // Its own block: the global base rule only shortens animations, which
     // would leave the lace undrawn.
     expect(reduced).toBeGreaterThan(0);
-    const line = rule(css, ".ss-lace-line", reduced);
+    const line = rule(css, ".ss-lace-dark,\n    .ss-lace-line", reduced);
     expect(line).toContain("animation: none;");
     expect(line).toContain("stroke-dashoffset: 0;");
     expect(line).toContain("opacity: 1;");

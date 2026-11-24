@@ -66,7 +66,7 @@ export default function SignupScreen() {
   if (preview.isPending) {
     return (
       <AuthLayout title="Create your account">
-        <LoadingState rows={2} label="Checking your invitation…" />
+        <LoadingState label="Checking your invitation…" />
       </AuthLayout>
     );
   }

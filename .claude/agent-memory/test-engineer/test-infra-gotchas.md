@@ -46,3 +46,7 @@ Learned on the offline PR (2026-11-17, PW 1.65):
 - **Every screen is lazy:** offline, a never-fetched screen module fails to import on the dev server. Preload online with `import("/src/app/lazy-screen.tsx").preloadAllScreens()` in page.evaluate (same module instance), which caches no data.
 - An offline (refused) fetch still emits Playwright `request` events with its headers (Idempotency-Key observable). `page.request` ignores setOffline.
 - **Recurring false-alarm class: digit patterns vs clock-derived IDs (2026-11-17).** The Sentry gate's `8765` amount regex matched "-8765-" inside a UUIDv7 (leading groups = clock), only at certain times. Mask UUIDs, 32-hex IDs and lineno/colno/timestamp/status_code values first (support/pii-scan.ts, unit-tested). Apply the same masking to any new "value must not appear" scan.
+
+Learned regenerating visual baselines (2026-11-24, PW 1.65):
+- **Regenerate = delete the PNGs, then `make e2e`** (no update-snapshots knob in .github/scripts/e2e.sh; local config is `updateSnapshots: "missing"`). A "writing actual" test PASSES in 1.65, so the regenerate run proves nothing: always run `make e2e` a second time to compare. A full run takes about 7.5 min.
+- `snap()` now asserts no `data-testid="loading"` before every shot: the page-level loader is `position: fixed` (data-placement="viewport") and can sit over finished content, and an inline one can hide behind a sheet's scrim.

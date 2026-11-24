@@ -357,7 +357,6 @@ export default function SecurityScreen() {
         {mfa.isPending ? (
           <PendingSlot
             paused={mfa.isPaused}
-            rows={2}
             offlineMessage="You're offline. Your two-step verification settings will appear when you reconnect."
           />
         ) : mfa.isError ? (

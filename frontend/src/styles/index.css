@@ -21,8 +21,11 @@
   --color-brand-strong: var(--ss-brand-strong);
   --color-brand-soft: var(--ss-brand-soft);
   --color-on-brand: var(--ss-on-brand);
+  --color-fab: var(--ss-fab);
+  --color-on-fab: var(--ss-on-fab);
   --color-danger: var(--ss-danger);
   --color-danger-soft: var(--ss-danger-soft);
+  --color-danger-stripe: var(--ss-danger-stripe);
   --color-success: var(--ss-success);
   --color-success-soft: var(--ss-success-soft);
   --color-warning: var(--ss-warning);
@@ -124,28 +127,53 @@
 }
 
 /*
- * The lace loader (components/LaceLoader.tsx, used by LoadingState): the lace
- * draws itself into an S, led by its aglet tip, holds, fades, repeats.
- * pathLength="1" on both paths makes the dash values fractions of the path.
- * Colours are the fixed --ss-lace-* tokens (the same in both themes).
+ * The lace loader (components/LaceLoader.tsx, used by LoadingState): over a
+ * static tongue, the lace (dark edge + white lace, drawn as one) draws itself
+ * into an S (a "$" with the tongue's two lines), led by its aglet tip, holds,
+ * fades, repeats. pathLength="1" on every lace path makes the dash values
+ * fractions of the path. Colours are the fixed --ss-lace-* tokens (the same in
+ * both themes).
  */
 @layer components {
   .ss-lace-tile {
     fill: var(--ss-lace-tile);
+    stroke: var(--ss-lace-border);
+  }
+
+  .ss-lace-tongue {
+    fill: var(--ss-lace-tongue);
+  }
+
+  .ss-lace-tongue-line {
+    stroke: var(--ss-lace-tongue-line);
+  }
+
+  /* The edge under the white lace, and the whole lace at <= 24 px. */
+  .ss-lace-dark {
+    stroke: var(--ss-lace-dark);
   }
 
   .ss-lace-line {
     stroke: var(--ss-lace-line);
+  }
+
+  .ss-lace-dark,
+  .ss-lace-line {
     stroke-dasharray: 1 1;
     stroke-dashoffset: 1;
     animation: ss-lace-draw 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+    /* The shared phase (LaceLoader.tsx), set on the <svg> at mount. */
+    animation-delay: var(--ss-lace-delay, 0ms);
   }
 
   .ss-lace-tip {
     stroke: var(--ss-lace-tip);
     stroke-dasharray: 0.03 3;
-    stroke-dashoffset: 0.03;
+    /* Half the tip ahead of the lace's end, so the butt-capped tip leads the
+       lace's round cap instead of sitting inside it. */
+    stroke-dashoffset: 0.015;
     animation: ss-lace-tip 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;
+    animation-delay: var(--ss-lace-delay, 0ms);
   }
 
   .ss-lace-eyelet {
@@ -164,6 +192,7 @@
    * leave the lace at its undrawn start (offset 1).
    */
   @media (prefers-reduced-motion: reduce) {
+    .ss-lace-dark,
     .ss-lace-line {
       animation: none;
       stroke-dashoffset: 0;
@@ -204,7 +233,7 @@
  */
 @keyframes ss-lace-tip {
   0% {
-    stroke-dashoffset: 0.03;
+    stroke-dashoffset: 0.015;
     opacity: 1;
   }
   50% {
@@ -212,7 +241,7 @@
   }
   55%,
   100% {
-    stroke-dashoffset: -0.97;
+    stroke-dashoffset: -0.985;
     opacity: 0;
   }
 }

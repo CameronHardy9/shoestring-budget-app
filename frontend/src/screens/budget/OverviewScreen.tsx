@@ -352,8 +352,11 @@ export default function OverviewScreen() {
                 onRetry={() => void recent.refetch()}
               />
             ) : recent.isPending ? (
+              // Inline: below the month's totals and chart, which have
+              // already loaded and may fill the middle of the viewport.
               <PendingSlot
                 paused={recent.isPaused}
+                placement="inline"
                 rows={2}
                 offlineMessage="You're offline. Recent transactions will appear when you reconnect."
               />

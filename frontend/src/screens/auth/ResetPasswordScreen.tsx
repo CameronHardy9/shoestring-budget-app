@@ -178,7 +178,7 @@ function ChooseNewPassword({ token }: { token: string }) {
   if (check.isPending) {
     return (
       <AuthLayout title="Choose a new password">
-        <LoadingState rows={2} label="Checking your link…" />
+        <LoadingState label="Checking your link…" />
       </AuthLayout>
     );
   }

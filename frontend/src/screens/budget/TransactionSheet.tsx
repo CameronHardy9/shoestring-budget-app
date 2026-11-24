@@ -235,7 +235,11 @@ function SheetPending({
       <OfflineState message="You're offline. The categories will appear when you reconnect." />
     );
   }
-  return <LoadingState rows={2} label="Loading categories…" />;
+  // Inline: inside the sheet, where the chips will be (the page behind is
+  // covered by the sheet and its scrim).
+  return (
+    <LoadingState placement="inline" rows={2} label="Loading categories…" />
+  );
 }
 
 function Editor({
