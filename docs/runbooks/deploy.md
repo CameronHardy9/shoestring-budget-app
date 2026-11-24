@@ -75,9 +75,15 @@ curl -fsS -m 10 "$CANDIDATE_URL/api/readyz"  && echo
 curl -fsS -m 10 "$CANDIDATE_URL/api/healthz" && echo     # release field should equal $SHA (backend to confirm the field)
 # F-10 gate. A probe on the candidate URL can't show it: the app's Host check answers 400 to any run.app host
 # before routing. Instead re-run the Dockerfile's test-hook tripwire on the exact digest being deployed.
-F10=$(mktemp -d); crane export "$IMAGE" - | tar -xf - -C "$F10" app/dist
+# Read it from public GHCR by @$DIGEST (never a tag), NOT from AR: AR has no free internet egress, so
+# exporting "$IMAGE" billed the Nov 2026 $0.01 (billing-protection.md §5c). The digest is content-addressed
+# and crane verifies every blob against it, so these are exactly the bytes Cloud Run runs from
+# "$AR_REPO@$DIGEST"; step 1 attested this GHCR digest and copied from it. Any failure falls through to STOP.
+# F-71: export to a file first, so crane's exit status (including its digest checks) is part of the OK
+# condition; a partial export can no longer pass on a half-extracted app/dist.
+F10=$(mktemp -d); ex=0; crane export "ghcr.io/$GH_REPO_LC@$DIGEST" "$F10/fs.tar" && tar -xf "$F10/fs.tar" -C "$F10" app/dist || ex=$?
 rc=0; grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' -e '_test' -e '__SHOESTRING_TEST_HOOKS__' "$F10/app/dist" || rc=$?
-{ [ -s "$F10/app/dist/server.js" ] && [ "$rc" -eq 1 ] && echo "F-10 OK: no test-hook code in the image"; } || echo "F-10 STOP (grep exit $rc)"; rm -rf "$F10"
+{ [ "$ex" -eq 0 ] && [ -s "$F10/app/dist/server.js" ] && [ "$rc" -eq 1 ] && echo "F-10 OK: no test-hook code in the image"; } || echo "F-10 STOP (export $ex, grep $rc)"; rm -rf "$F10"
 
 # 6. Shift all traffic, drop the tag, re-probe on the PUBLIC URL, and point the jobs at the new image
 gcloud run services update-traffic shoestring --to-latest --region "$REGION" --project "$PROJECT"

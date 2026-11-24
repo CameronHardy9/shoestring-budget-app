@@ -353,6 +353,7 @@ No new API endpoint or role.
 New artifacts and flows:
 - A second image per commit, `migrate` (distroless, nonroot): it holds the compiled migrate CLI, pg, dbmate, migrations and roles.sql, and runs only as the `shoestring-migrate` job with `MIGRATOR_DATABASE_URL`. The app image holds nothing of `db/`.
 - The owner ruled that the **GHCR packages (app, migrate, backup) are public** (2026-11-17). The deploy copies from them by digest without credentials.
+  - Since 2026-11-24 any operator read of image *contents* (the deploy.md F-10 gate) also comes from public GHCR by `@digest`, never from Artifact Registry (AR internet egress is billed; billing-protection.md §5c). Same digest, same bytes; AR is read by the operator for metadata only.
 - The runbooks now run roles.sql as the database owner from a repo checkout or `git show` (bootstrap 8, the deploy precondition, restore 5).
 - `TRUST_PROXY_HOPS=1` is set on the service.
 
@@ -474,6 +475,7 @@ Accepted risks need the owner's sign-off and a date. "Proposed" risks are ones t
 | 2026-11-17 | v3.3 | Pre-deploy pass (`chore/pre-deploy`): §5.12 T134–T137 (separate migrate image, public GHCR packages per the owner's ruling, owner-run roles.sql, `TRUST_PROXY_HOPS`). F-43 closed (T103); F-47 still closed; F-10 post-deploy probes and the F-44 owner runs are now in the runbooks. New F-64 and F-65 (Low, sre). |
 | 2026-11-17 | v3.4 | Image publish review (`feat/image-publish`): §5.13 T138–T142 (the publish job, the artifact handoff, WIF and the first main-branch OIDC token, the backup image, Rekor); T134 updated. New F-66 and F-67 (Low, sre) and F-68 (Low, ci-engineer and sre; follow-up). Same day: F-66 and F-67 fixed and verified; the F-68 sre half done. |
 | 2026-11-23 | v3.5 | Measured audit-log facts (`fix/v34-execution-provenance`): R-12, T88 and the data inventory corrected. Admin args live in execution records (no time limit) and System Event audit entries (400 days, locked), not Admin Activity; owner ruled no cleanup; privacy notice wording "at least 400 days, no fixed end date" (C14.6). Reviewed the restore.md step 2 provenance check (System Event creator + succeededCount) for F-39. |
+| 2026-11-24 | v3.6 | `fix/deploy-check-ghcr-egress`: the F-10 gate exports the deployed digest from public GHCR instead of AR (§5.12 note). No new endpoint, role or trust boundary. New F-71 (Low, sre, pre-existing): the gate ignores the export's exit status. |
 
 ## 11. Cloudflare proxy fallback: sign-off criteria (security-reviewer is the gate)
 The owner ruling (2026-11-13) says neither variant in infra/hosting-evaluation.md §3a is switched on without a recorded security-reviewer review. That review checks the following and records the result here.
