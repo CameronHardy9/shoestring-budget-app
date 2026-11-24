@@ -377,6 +377,12 @@ gcloud artifacts repositories list --project="${PROJECT}" --location="${REGION}"
 - Live deletions: the one-line revert above.
 - A single rule: `gcloud artifacts repositories delete-cleanup-policies shoestring --location="$REGION" --project="$PROJECT" --policynames=<name>`. Make the same change in infra/artifact-registry/cleanup-policy.json first, so block A keeps passing.
 
+### 5c. Never download image layers from AR to your machine
+Artifact Registry has **no free internet egress** (about $0.10/GiB, SKU "Artifact Registry Network Internet Egress"). Only Cloud Run's same-region pulls are free. So no operator command may read image **layers** from `us-east1-docker.pkg.dev`: no `crane export`/`pull`/`copy`/`flatten` with AR as the source, no `docker pull`/`run` of an AR image.
+- Need the bytes of a deployed image? Read the same digest from **public GHCR**: `crane export "ghcr.io/$GH_REPO_LC@$DIGEST" -` (always `@digest`, never a tag). The digest is content-addressed and crane verifies each blob against it, so the bytes are exactly what Cloud Run runs. deploy.md step 5 (F-10 gate) does this.
+- Fine against AR (metadata, a few KB): `gcloud artifacts docker images list/describe`, `gcloud artifacts docker tags add/delete`, `crane digest`, `crane config`, and `crane copy` **into** AR from GHCR (ingress is free).
+- Cause of the November 2026 bill of **$0.01**: 0.06 GiB of AR internet egress, from the F-10 gate exporting the app image from AR during the 2026-11-23 deploy (fixed 2026-11-24). Recorded in the §11 log.
+
 ## 6. Log retention and volume (50 GiB ingestion, 30 days retention free)
 ```sh
 gcloud logging buckets describe _Default --location=global --project="$PROJECT" --format="value(retentionDays)"
@@ -465,7 +471,7 @@ Do this in the first week of each month for the **previous** month. Record a row
 ### Monthly check log
 | Month checked | Date | By | Net cost | Notes |
 |---|---|---|---|---|
-| | | | | |
+| 2026-11 (partial, from the billing CSV) | 2026-11-24 | owner | **$0.01** (Warn) | Only non-free line: "Artifact Registry Network Internet Egress North America to North America", 0.06 GiB = $0.0063, billed $0.01. Cause: deploy.md step 5's F-10 gate ran `crane export` against AR on the 2026-11-23 deploy. Fixed 2026-11-24: it now reads the same digest from GHCR (§5c). Everything else was covered by free tiers. **Watch only:** "Cloud Run Network Internet Data Transfer Out Intercontinental" $0.00036, probably an outbound call to a host outside North America (Sentry or the email API); act if it ever bills ≥ $0.01. Re-check the full month in early December. |
 
 ## Verify (whole runbook)
 - Two budgets listed (section 1), cap or kill switch recorded (section 2), quota values visible in the console (section 3), cleanup policy and log exclusions described (sections 5 and 6), bucket settings correct (section 7).

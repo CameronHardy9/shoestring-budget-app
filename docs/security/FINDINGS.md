@@ -1516,7 +1516,7 @@ Scope: ci-engineer's split into the migrate image and app image and its smoke ch
   ```
   - Reword the comment to say "the release of the latest revision, which is what the migrate job runs".
   - Don't `export RESTORE_OWNER_URL`, and `unset` it as soon as step 5 (and any `\password`) is done.
-  - Optionally, read roles.sql from the job's own image instead (`crane export "$MIGRATE_IMAGE" - | tar -xOf - app/roles.sql`), which ties it to the digest that actually runs.
+  - Optionally, read roles.sql from the job's own image instead (`crane export "ghcr.io/$GH_REPO_LC-migrate@$MIGRATE_DIGEST" - | tar -xOf - app/roles.sql`), which ties it to the digest that actually runs. Read it from public GHCR by digest, not from `$MIGRATE_IMAGE` in AR: AR internet egress is billed (billing-protection.md §5c), and the same digest is the same bytes. (Wording updated 2026-11-24.)
   - Same idea for bootstrap step 8 and the deploy precondition, which run roles.sql from a local checkout: add `git status --porcelain db/roles.sql` must print nothing.
 - **Owner:** sre. Fix before the first restore drill.
 
@@ -1709,3 +1709,28 @@ No new findings. Nothing in this change affects data handling, storage, network 
 - **Storage:** `preferences.ts` changes only the theme-colour literals. The localStorage use (theme and last budget) is unchanged.
 - **`make e2e` is now CI-only by default** (CLAUDE.md, `.claude/agents/test-engineer.md`). This does not weaken a security check: CI still runs the full suite on every PR, `make check` and `make audit` stay mandatory, and no test is skipped or removed. The cost is that agents may report done before the security-relevant e2e suites (permission matrix, isolation, headers) have run. The tech lead should wait for CI to pass before treating those as verified.
 - **`make audit`** (2026-11-24) passed. The two Semgrep findings in `frontend/scripts/dist-checks.test.ts` and osv glob@13.0.7 / minimatch@10.2.6 are already ruled dev-only and Info. Housekeeping for ci-engineer: osv reports that the `GHSA-fc5q-39xc-vjpf` ignore in `.github/osv-scanner.toml` is no longer used and can be removed.
+
+## Review 2026-11-24: fix/deploy-check-ghcr-egress (uncommitted; F-10 gate reads GHCR by digest, billing §5c)
+Scope: deploy.md step 5 (F-10 gate source), billing-protection.md §5c and the §11 log row, infra/cost-sheet.md, infra/CLAUDE.md. **No Critical, High or Medium findings. Approve.** One new Low, F-71, which predates this change (it applied equally to the AR export) and is not a blocker.
+
+### F-71 Low (new, sre; pre-existing): the F-10 gate ignores the exit status of `crane export | tar`
+- **Location:** docs/runbooks/deploy.md:82–84.
+- **Scenario:** the OK condition checks only that `server.js` exists and grep exited 1. If the export stops part-way (network drop, or a blob that fails crane's digest check, which crane only reports at the end of that blob), tar may already have extracted a partial `app/dist`. `mutate.Extract` writes the top layer first, so `server.js` can be present while a later file is missing, and grep over the partial tree then prints "F-10 OK". A false OK needs both this and a test hook in an attested CI build (which the Dockerfile tripwire already blocks), so it's defense in depth only.
+- **Recommended fix (sre):** export to a file so crane's status (including blob verification) is checked before anything is read, and make that status part of the OK condition:
+  ```sh
+  F10=$(mktemp -d); ex=0; crane export "ghcr.io/$GH_REPO_LC@$DIGEST" "$F10/fs.tar" && tar -xf "$F10/fs.tar" -C "$F10" app/dist || ex=$?
+  rc=0; grep -rIlw --include='*.js' --include='*.mjs' --include='*.cjs' -e '_test' -e '__SHOESTRING_TEST_HOOKS__' "$F10/app/dist" || rc=$?
+  { [ "$ex" -eq 0 ] && [ -s "$F10/app/dist/server.js" ] && [ "$rc" -eq 1 ] && echo "F-10 OK: no test-hook code in the image"; } || echo "F-10 STOP (export $ex, grep $rc)"; rm -rf "$F10"
+  ```
+- **Owner:** sre. Any time before the next deploy; not a gate for this change.
+
+### Checked, no issue
+- **F-10 still inspects the bytes Cloud Run runs.** Step 1 sets `DIGEST` from GHCR, verifies the attestation on `ghcr.io/$GH_REPO_LC@$DIGEST`, and `crane copy`s that same reference to AR. Step 4 deploys `$AR_REPO@$DIGEST`. A cross-registry copy keeps the manifest bytes, so the digest is identical. The gate now exports `ghcr.io/$GH_REPO_LC@$DIGEST`: crane fetches the manifest by digest and rejects a mismatch, and every layer and the config are content-addressed and checked against their digests. Same digest, same filesystem. (Single-platform amd64 manifests, so no index platform choice is involved.)
+- **Cannot be pointed at a tag.** The reference is built with `@`, so the only input is `$DIGEST`, which comes from `crane digest` in step 1. It fails closed:
+  - empty `$DIGEST` (`…@`) or empty `$GH_REPO_LC` (`ghcr.io/@…`): invalid reference, crane exits non-zero, tar gets empty input, no `server.js`, so "F-10 STOP".
+  - export failure, or the package gone private (`UNAUTHORIZED` from anonymous GHCR): same path, "F-10 STOP". deploy.md's preconditions already say `UNAUTHORIZED` means stop and tell the tech lead.
+  - The residual gap is a *partial* export, F-71 above.
+- **No credential or exposure change.** Anonymous GHCR reads of a package that is already public (2026-11-17 ruling); no token, no `crane auth login`. AR still needs only metadata calls from the operator. The billing log row and cost-sheet line contain no account IDs, project IDs or personal data.
+- **§5c and infra/CLAUDE.md are a cost rule, not a weakening.** `crane copy` from GHCR into AR (step 1) is unchanged and still attestation-gated. "Always `@digest`, never a tag" is stated in both places. No other runbook pulls layers from AR (grepped `crane export|pull|flatten` and `docker pull` across docs/, infra/, .github/; the CI hits are GHCR/local only). The one AR read in my own text, F-64's optional roles.sql export, now uses GHCR by digest.
+- **"Watch only" Cloud Run intercontinental egress ($0.00036):** consistent with the known outbound peers (Sentry, email API). Not a security concern on its own; if it grows, confirm which host before assuming it's benign.
+- **`make audit`** (2026-11-24) passed: gitleaks clean (history and tree), Semgrep 2 known non-high, osv 2 known non-high, zizmor no high. The unused `GHSA-fc5q-39xc-vjpf` ignore is still the ci-engineer housekeeping item from the previous review.

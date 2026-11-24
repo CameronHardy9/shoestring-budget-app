@@ -124,6 +124,7 @@ Non-secret runtime config (plain env vars on the service): `NODE_ENV=production`
 ## Never do (cost or safety traps)
 - `gcloud run deploy --source`. Enabling `containerscanning.googleapis.com`, Cloud Build (except for the fallback kill switch), Compute Engine, Cloud SQL or a load balancer.
 - `--min-instances` ≥ 1, `--no-cpu-throttling`, max instances > 2, `_Default` log retention > 30 days.
+- Download image layers from Artifact Registry to any machine outside GCP (`crane export/pull/copy` from AR, `docker pull`): AR has no free internet egress. Read the same `@digest` from public GHCR instead (billing-protection.md §5c).
 - Run an admin command or a backup in GitHub Actions. Put any database credential into GitHub.
 - Put a token, secret or any personal data other than the target email (R-12) into job args, overrides or labels.
 - Print anything from a dump in logs, or store a dump anywhere but the backup bucket.
