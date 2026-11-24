@@ -1,5 +1,5 @@
 import { onlineManager } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { apiError, json, mockApi } from "../../test/api-mock.ts";
@@ -41,6 +41,19 @@ afterEach(() => {
 });
 
 const sheet = () => screen.getByTestId("quick-add-sheet");
+
+/**
+ * Return in a field submits the form. Twice before React re-renders (so the
+ * Save button can't show "pending" yet): the race keepFocus makes possible.
+ */
+function returnTwiceInOneTick(field: HTMLElement) {
+  const form = field.closest("form");
+  if (!form) throw new Error("no form");
+  act(() => {
+    form.requestSubmit();
+    form.requestSubmit();
+  });
+}
 const chip = (name: string) => within(sheet()).getByText(name, { exact: true });
 
 describe("quick-add", () => {
@@ -288,6 +301,199 @@ describe("quick-add", () => {
     expect(view.closed()).toBe(0);
   });
 
+  it("keeps focus in the text fields while chips and buttons are tapped (iOS keyboard stays up)", async () => {
+    const api = mockApi({ ...base, [`POST ${TX}`]: json(201, transaction(1)) });
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "3");
+    await userEvent.click(chip("Groceries"));
+    expect(
+      within(sheet()).getByRole("radio", { name: "Groceries" }),
+    ).toBeChecked();
+    expect(amount).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Note" }));
+    expect(amount).toHaveFocus();
+    const payee = screen.getByRole("textbox", { name: "Payee" });
+    await userEvent.click(payee);
+    await userEvent.click(chip("Groceries"));
+    expect(payee).toHaveFocus();
+    // Save & new leaves the field, then hands focus back to the amount.
+    await userEvent.click(screen.getByTestId("quick-add-save-new"));
+    await waitFor(() => {
+      expect(api.find("POST", TX)).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(amount).toHaveFocus();
+    });
+  });
+
+  it("moves focus to Amount when Note is hidden while typing in Payee or Memo", async () => {
+    mockApi(base);
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    const note = await screen.findByRole("button", { name: "Note" });
+    await userEvent.click(note);
+    await userEvent.click(screen.getByRole("textbox", { name: "Memo" }));
+    await userEvent.click(note);
+    expect(screen.queryByRole("textbox", { name: "Memo" })).toBeNull();
+    expect(amount).toHaveFocus();
+    await userEvent.click(note);
+    await userEvent.click(screen.getByRole("textbox", { name: "Payee" }));
+    await userEvent.click(note);
+    expect(amount).toHaveFocus();
+    // Focus somewhere else: hiding Note leaves it there.
+    await userEvent.click(note);
+    const spent = screen.getByRole("radio", { name: "Spent" });
+    spent.focus();
+    await userEvent.click(note);
+    expect(screen.queryByRole("textbox", { name: "Payee" })).toBeNull();
+    expect(spent).toHaveFocus();
+  });
+
+  it("moves focus to the main Amount when Split is turned off from a row", async () => {
+    mockApi(base);
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "10");
+    await userEvent.click(chip("Groceries"));
+    const split = screen.getByRole("button", { name: "Split" });
+    await userEvent.click(split);
+    await userEvent.click(
+      within(screen.getByTestId("split-editor")).getByRole("textbox", {
+        name: /Amount 2/,
+      }),
+    );
+    // Focus must move inside the tap, before the row goes: React Aria's
+    // FocusScope would also rescue it, but later, which on iOS is after the
+    // keyboard has closed.
+    let movedBeforeRemoval: boolean | null = null;
+    amount.addEventListener(
+      "focus",
+      () => {
+        movedBeforeRemoval = screen.queryByTestId("split-editor") !== null;
+      },
+      { once: true },
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Split, on" }));
+    expect(screen.queryByTestId("split-editor")).toBeNull();
+    expect(amount).toHaveFocus();
+    expect(movedBeforeRemoval).toBe(true);
+  });
+
+  it("moves focus to the neighbouring row when the row being typed in is removed", async () => {
+    mockApi(base);
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "10");
+    await userEvent.click(chip("Groceries"));
+    await userEvent.click(screen.getByRole("button", { name: "Split" }));
+    const editor = screen.getByTestId("split-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add category" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add category" }));
+    const rowAmounts = () => within(editor).getAllByRole("textbox");
+    const removes = () =>
+      within(editor).getAllByRole("button", { name: /^Remove/ });
+    expect(rowAmounts()).toHaveLength(4);
+    const [first, second, , fourth] = rowAmounts();
+
+    // Not the focused row: focus stays.
+    await userEvent.click(second!);
+    await userEvent.click(removes()[3]!);
+    expect(rowAmounts()).toHaveLength(3);
+    expect(second).toHaveFocus();
+    expect(fourth).not.toBeInTheDocument();
+
+    // The focused row: the next one takes focus.
+    await userEvent.click(first!);
+    await userEvent.click(removes()[0]!);
+    expect(rowAmounts()).toHaveLength(2);
+    expect(second).toHaveFocus();
+
+    // Two rows left: removing one ends the split, so the main amount takes
+    // focus.
+    const [, last] = rowAmounts();
+    await userEvent.click(last!);
+    await userEvent.click(removes()[1]!);
+    expect(screen.queryByTestId("split-editor")).toBeNull();
+    expect(amount).toHaveFocus();
+  });
+
+  it("moves focus to the previous row when the last of several rows is removed", async () => {
+    mockApi(base);
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "10");
+    await userEvent.click(chip("Groceries"));
+    await userEvent.click(screen.getByRole("button", { name: "Split" }));
+    const editor = screen.getByTestId("split-editor");
+    await userEvent.click(screen.getByRole("button", { name: "Add category" }));
+    const [, second, third] = within(editor).getAllByRole("textbox");
+    await userEvent.click(third!);
+    const removes = within(editor).getAllByRole("button", { name: /^Remove/ });
+    await userEvent.click(removes[2]!);
+    expect(third).not.toBeInTheDocument();
+    expect(second).toHaveFocus();
+  });
+
+  it("keeps focus in Amount when Spent/Received is tapped", async () => {
+    mockApi(base);
+    open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.click(screen.getByRole("radio", { name: "Received" }));
+    expect(screen.getByRole("radio", { name: "Received" })).toBeChecked();
+    expect(amount).toHaveFocus();
+  });
+
+  it("creates once when Return is pressed twice quickly", async () => {
+    const reply = deferred<ReturnType<typeof json>>();
+    const api = mockApi({ ...base, [`POST ${TX}`]: () => reply.promise });
+    const view = open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "5");
+    await userEvent.click(chip("Groceries"));
+    expect(amount).toHaveFocus();
+    returnTwiceInOneTick(amount);
+    await userEvent.keyboard("{Enter}");
+    expect(api.find("POST", TX)).toHaveLength(1);
+    reply.resolve(json(201, transaction(1)));
+    await waitFor(() => {
+      expect(view.closed()).toBe(1);
+    });
+    expect(api.find("POST", TX)).toHaveLength(1);
+  });
+
+  it("goes from Payee to Memo on Return (Next) and saves on Return in Memo", async () => {
+    const api = mockApi({ ...base, [`POST ${TX}`]: json(201, transaction(1)) });
+    const view = open();
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.type(amount, "4");
+    await userEvent.click(chip("Groceries"));
+    await userEvent.click(screen.getByRole("button", { name: "Note" }));
+    const payee = screen.getByRole("textbox", { name: "Payee" });
+    const memo = screen.getByRole("textbox", { name: "Memo" });
+    expect(payee).toHaveAttribute("enterkeyhint", "next");
+    await userEvent.click(payee);
+    await userEvent.keyboard("Corner shop{Enter}");
+    expect(memo).toHaveFocus();
+    expect(api.find("POST", TX)).toHaveLength(0);
+    await userEvent.keyboard("Milk{Enter}");
+    await waitFor(() => {
+      expect(view.closed()).toBe(1);
+    });
+    const [post] = api.find("POST", TX);
+    expect(post?.body).toMatchObject({ payee: "Corner shop", memo: "Milk" });
+  });
+
+  it("still closes on Escape from Payee", async () => {
+    mockApi(base);
+    const view = open();
+    await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.click(await screen.findByRole("button", { name: "Note" }));
+    await userEvent.click(screen.getByRole("textbox", { name: "Payee" }));
+    await userEvent.keyboard("{Escape}");
+    expect(view.closed()).toBe(1);
+  });
+
   it("validates before sending and maps server field errors", async () => {
     const api = mockApi({
       ...base,
@@ -380,12 +586,24 @@ describe("quick-add", () => {
       "$6.40 left to assign",
     );
     await expectNoAxeViolations(view.baseElement);
+    // Split-row buttons leave the keyboard where it was (Amount 2).
+    const amount2 = within(editor).getByRole("textbox", { name: /Amount 2/ });
+    expect(amount2).toHaveFocus();
     await userEvent.click(
       screen.getByRole("button", { name: "Put the rest on Household" }),
     );
     expect(screen.getByTestId("split-left-to-assign")).toHaveTextContent(
       "Fully assigned",
     );
+    expect(amount2).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Add category" }));
+    expect(within(editor).getAllByRole("combobox")).toHaveLength(3);
+    expect(amount2).toHaveFocus();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove line 3" }),
+    );
+    expect(within(editor).getAllByRole("combobox")).toHaveLength(2);
+    expect(amount2).toHaveFocus();
     await userEvent.click(screen.getByTestId("quick-add-save"));
     await waitFor(() => {
       expect(api.find("POST", TX)[0]?.body).toMatchObject({
@@ -406,6 +624,22 @@ describe("edit and delete", () => {
     splits: [{ categoryId: uuid(2), amountCents: 23000 }],
   });
   const ONE = `${TX}/${existing.id}`;
+
+  it("sends one save when Return is pressed twice quickly", async () => {
+    const reply = deferred<ReturnType<typeof json>>();
+    const api = mockApi({ ...base, [`PUT ${ONE}`]: () => reply.promise });
+    const view = open({ kind: "edit", transaction: existing });
+    const amount = await screen.findByRole("textbox", { name: "Amount" });
+    await userEvent.clear(amount);
+    await userEvent.type(amount, "23.10");
+    returnTwiceInOneTick(amount);
+    await userEvent.keyboard("{Enter}");
+    reply.resolve(json(200, { ...existing, amountCents: 2310, version: 4 }));
+    await waitFor(() => {
+      expect(view.closed()).toBe(1);
+    });
+    expect(api.find("PUT", ONE)).toHaveLength(1);
+  });
 
   it("sends the version and shows both versions on a conflict", async () => {
     const theirs = {

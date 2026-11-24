@@ -61,6 +61,7 @@ import {
   OfflineState,
 } from "../../components/States.tsx";
 import { TextField } from "../../components/TextField.tsx";
+import { isTextEntry } from "../../components/text-entry.ts";
 import { dayLabel } from "../../lib/dates.ts";
 import {
   centsToInputString,
@@ -133,6 +134,7 @@ function OptionPill({
       shape="pill"
       className="flex-1"
       aria-pressed={pressed}
+      keepFocus
       onPress={onPress}
       {...(label ? { "aria-label": label } : {})}
     >
@@ -305,7 +307,14 @@ function Editor({
     draft.payee !== "" || draft.memo !== "",
   );
   const keyRef = useRef(newIdempotencyKey());
+  // A save in flight, read synchronously: Save and Save & new keep focus in
+  // the text field, so Return can arrive again before `isPending` renders.
+  const savingRef = useRef(false);
   const amountRef = useRef<HTMLDivElement>(null);
+  const payeeRef = useRef<HTMLInputElement>(null);
+  const memoRef = useRef<HTMLInputElement>(null);
+  const splitRef = useRef<HTMLFieldSetElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const confirmRef = useRef<HTMLDivElement>(null);
   // Move focus to the confirmation when it appears (screen readers hear it).
   useEffect(() => {
@@ -375,6 +384,34 @@ function Editor({
     setSavedNote("");
   };
 
+  // A tap that removes the field being typed in (hiding Note, ending the
+  // split, removing a split row) hands focus to the nearest field that stays,
+  // right inside the tap, so iOS keeps the keyboard up. Nothing moves unless
+  // the field going away had focus.
+  const typingIn = (gone: (el: HTMLElement) => boolean) => {
+    const active = document.activeElement;
+    return isTextEntry(active) && gone(active);
+  };
+  const focusAmount = () => {
+    amountRef.current?.querySelector("input")?.focus();
+  };
+  const removeRow = (i: number) => {
+    const row = draft.rows[i];
+    const rows = draft.rows.filter((_, j) => j !== i);
+    const ending = rows.length === 1;
+    if (
+      row &&
+      typingIn((el) => rowRefs.current.get(row.key)?.contains(el) === true)
+    ) {
+      // The next row, or the previous one if this was the last; the main
+      // amount if the split ends.
+      const neighbour = draft.rows[i + 1] ?? draft.rows[i - 1];
+      if (ending || !neighbour) focusAmount();
+      else rowRefs.current.get(neighbour.key)?.querySelector("input")?.focus();
+    }
+    update(ending ? endSplit({ ...draft, rows }) : { rows });
+  };
+
   const categoryName = (id: string) =>
     allCategories.find((c) => c.id === id)?.name ?? "category";
 
@@ -384,9 +421,13 @@ function Editor({
   ) {
     // Enter in the amount field while the rest is still loading.
     if (!ready) return;
+    // One save at a time: a second Return (or tap) while one is in flight
+    // would re-send (edit mode: a 409 against our own first save).
+    if (savingRef.current) return;
     setShowErrors(true);
     setFailure(null);
     if (!built.ok) return;
+    savingRef.current = true;
     try {
       if (editing) {
         await replace.mutateAsync({
@@ -454,6 +495,8 @@ function Editor({
         }
       }
       setFailure(error);
+    } finally {
+      savingRef.current = false;
     }
   }
 
@@ -551,6 +594,7 @@ function Editor({
 
       <SegmentedControl
         label="Type"
+        keepFocus
         value={draft.direction}
         onChange={(direction) => {
           update({ direction });
@@ -583,6 +627,7 @@ function Editor({
               <ChipGroup
                 label="Category"
                 hideLabel
+                keepTextFocus
                 chips={visibleChips.map((c) => ({ id: c.id, label: c.name }))}
                 value={draft.categoryId}
                 onChange={(categoryId) => {
@@ -596,6 +641,7 @@ function Editor({
                   size="sm"
                   className="self-start"
                   aria-expanded={showAll}
+                  keepFocus
                   onPress={() => {
                     setShowAll((v) => !v);
                   }}
@@ -610,12 +656,20 @@ function Editor({
             <fieldset
               className="flex flex-col gap-2"
               data-testid="split-editor"
+              ref={splitRef}
             >
               <legend className="mb-2 text-sm font-medium text-fg">
                 Split between categories
               </legend>
               {draft.rows.map((row, i) => (
-                <div key={row.key} className="flex items-start gap-2">
+                <div
+                  key={row.key}
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(row.key, el);
+                    else rowRefs.current.delete(row.key);
+                  }}
+                  className="flex items-start gap-2"
+                >
                   <CategorySelect
                     label={`Category ${String(i + 1)}`}
                     categories={ordered}
@@ -646,14 +700,10 @@ function Editor({
                   <Button
                     variant="quiet"
                     size="icon"
+                    keepFocus
                     aria-label={`Remove ${row.categoryId ? categoryName(row.categoryId) : `line ${String(i + 1)}`}`}
                     onPress={() => {
-                      const rows = draft.rows.filter((_, j) => j !== i);
-                      update(
-                        rows.length === 1
-                          ? endSplit({ ...draft, rows })
-                          : { rows },
-                      );
+                      removeRow(i);
                     }}
                   >
                     <Icon name="trash" />
@@ -665,6 +715,7 @@ function Editor({
                   variant="ghost"
                   size="md"
                   className="self-start"
+                  keepFocus
                   onPress={() => {
                     update({ rows: [...draft.rows, newRow()] });
                   }}
@@ -689,6 +740,7 @@ function Editor({
               {rest !== null && balance?.kind === "under" && lastCategory ? (
                 <Button
                   variant="secondary"
+                  keepFocus
                   onPress={() => {
                     update({
                       rows: draft.rows.map((r, j) =>
@@ -723,6 +775,13 @@ function Editor({
               icon="note"
               pressed={showNote}
               onPress={() => {
+                if (
+                  showNote &&
+                  typingIn(
+                    (el) => el === payeeRef.current || el === memoRef.current,
+                  )
+                )
+                  focusAmount();
                 setShowNote((v) => !v);
               }}
             >
@@ -733,6 +792,11 @@ function Editor({
               pressed={draft.split}
               label={draft.split ? "Split, on" : "Split"}
               onPress={() => {
+                if (
+                  draft.split &&
+                  typingIn((el) => splitRef.current?.contains(el) === true)
+                )
+                  focusAmount();
                 update(draft.split ? endSplit(draft) : startSplit(draft));
               }}
             >
@@ -761,6 +825,18 @@ function Editor({
                 label="Payee"
                 description="Optional, e.g. the shop's name."
                 maxLength={100}
+                inputRef={payeeRef}
+                enterKeyHint="next"
+                onKeyDown={(e) => {
+                  // Return ("Next" on the phone) goes on to Memo rather than
+                  // saving; Return in Memo saves.
+                  if (e.key !== "Enter" || e.nativeEvent.isComposing) {
+                    e.continuePropagation();
+                    return;
+                  }
+                  e.preventDefault();
+                  memoRef.current?.focus();
+                }}
                 value={draft.payee}
                 onChange={(payee) => {
                   update({ payee });
@@ -770,6 +846,7 @@ function Editor({
               <TextField
                 label="Memo"
                 maxLength={500}
+                inputRef={memoRef}
                 value={draft.memo}
                 onChange={(memo) => {
                   update({ memo });
@@ -866,6 +943,7 @@ function Editor({
                 size="lg"
                 className="flex-1"
                 isPending={create.isPending}
+                keepFocus
                 onPress={() => void save(true)}
                 data-testid="quick-add-save-new"
               >
@@ -876,6 +954,7 @@ function Editor({
               type="submit"
               size="lg"
               className="flex-[1.4]"
+              keepFocus
               isPending={create.isPending || replace.isPending}
               data-testid="quick-add-save"
             >

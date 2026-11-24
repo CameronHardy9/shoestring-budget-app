@@ -1,2 +1,2 @@
-- [Test infra gotchas](test-infra-gotchas.md) — edge/X-E2E-Client-IP, Vite proxy, pool 5, outbox, bfcache, WebKit style, reset deadlock, Sentry/SW, offline, UUIDv7, baselines, reduced motion + loader timing, Suspense-hidden stale props
+- [Test infra gotchas](test-infra-gotchas.md) — edge/X-E2E-Client-IP, Vite proxy, pool 5, outbox, bfcache, WebKit style, reset deadlock, Sentry/SW, offline, UUIDv7, baselines, reduced motion + loader timing, Suspense-hidden stale props, focus/keyboard stubs, safe mutation checks
 - [Test data strategy](test-data-strategy.md) — serial + per-test reset, recipes/oracle design, Phase A timing, BUG-1 closed, local-only env, randomPassword() (GitGuardian)

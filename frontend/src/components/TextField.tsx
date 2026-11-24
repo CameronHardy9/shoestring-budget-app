@@ -1,6 +1,6 @@
 // Labelled text input on React Aria: visible label, description and error
 // wired with aria-describedby / aria-invalid. Text is 16 px so iOS never zooms.
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import {
   FieldError,
   Input,
@@ -27,6 +27,8 @@ export interface TextFieldProps extends Omit<
   max?: string;
   /** Rendered inside the field's right edge (e.g. a show-password button). */
   trailing?: ReactNode;
+  /** The <input> itself, e.g. to move focus to it. */
+  inputRef?: Ref<HTMLInputElement>;
   className?: string;
 }
 
@@ -41,6 +43,7 @@ export function TextField({
   spellCheck,
   min,
   max,
+  inputRef,
   ...rest
 }: TextFieldProps) {
   const inputProps = {
@@ -60,6 +63,7 @@ export function TextField({
       <div className="relative flex items-center">
         <Input
           {...inputProps}
+          {...(inputRef ? { ref: inputRef } : {})}
           className={cx(
             "min-h-touch w-full rounded-md border border-line-strong bg-surface pl-3 text-base text-fg",
             "placeholder:text-fg-muted data-[invalid]:border-danger",

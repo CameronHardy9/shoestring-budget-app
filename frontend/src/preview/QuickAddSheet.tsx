@@ -40,6 +40,7 @@ function OptionPill({
       weight="medium"
       shape="pill"
       className="flex-1"
+      keepFocus
       {...(label ? { "aria-label": label } : {})}
     >
       <Icon name={icon} size={18} />
@@ -51,10 +52,15 @@ function OptionPill({
 function SaveRow() {
   return (
     <div className="flex gap-2 pt-1">
-      <Button variant="secondary" size="lg" className="flex-1">
+      <Button variant="secondary" size="lg" className="flex-1" keepFocus>
         Save &amp; new
       </Button>
-      <Button size="lg" className="flex-[1.4]" data-testid="quick-add-save">
+      <Button
+        size="lg"
+        className="flex-[1.4]"
+        keepFocus
+        data-testid="quick-add-save"
+      >
         Save
       </Button>
     </div>
@@ -71,6 +77,7 @@ function SingleCategory() {
     <div className="flex flex-col gap-4 pt-2">
       <SegmentedControl
         label="Type"
+        keepFocus
         value={direction}
         onChange={setDirection}
         options={[
@@ -91,6 +98,7 @@ function SingleCategory() {
       <ChipGroup
         label="Category"
         hideLabel
+        keepTextFocus
         chips={[
           ...recentCategories.map((c) => ({ id: c.id, label: c.name })),
           { id: "more", label: "More…" },
@@ -168,13 +176,14 @@ function SplitEditor() {
             <Button
               variant="quiet"
               size="icon"
+              keepFocus
               aria-label={`Remove ${categoryName(line.categoryId)}`}
             >
               <Icon name="trash" />
             </Button>
           </div>
         ))}
-        <Button variant="ghost" size="md" className="self-start">
+        <Button variant="ghost" size="md" className="self-start" keepFocus>
           <Icon name="plus" /> Add category
         </Button>
       </fieldset>
@@ -199,6 +208,7 @@ function SplitEditor() {
           variant="secondary"
           size="md"
           className="-mt-2"
+          keepFocus
           onPress={() => {
             setLines((all) =>
               all.map((l, j) =>

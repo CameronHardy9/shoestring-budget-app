@@ -174,3 +174,14 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | First visit to a lazy tab screen (React's 300 ms Suspense throttle always passes the grace) | **Preload the tab screens' code** (Overview, Transactions, Categories, More) once the first page is revealed, so opening a tab shows no loader. |
 | Overview month switch slower than 150 ms (covers the page for one cycle) | **Leave as is** (no keep-previous-month placeholder). |
 | Opaque cover over the page while the loader is up (headings hidden; tab bar and rail stay usable) | **Accepted.** |
+
+## UI fixes: quick-add keyboard (2026-11-24)
+Root cause (debugger): tapping a chip or button moves focus off the text field, so iOS dismisses the keyboard; the sheet is also lifted by the keyboard height without capping its height.
+| Topic | Decision |
+|---|---|
+| Category chip tap while typing | **Keyboard stays up**: focus goes straight back to the field (refocus approach). If it flickers on device, fall back to custom chips that never take focus. |
+| Split-row category picker (native select swaps keyboard for the iOS wheel) | **Keep the native picker**; the swap is accepted. |
+| Focus after "Add category" in a split | **Stays where it is.** |
+| Return on Payee | **"Next" to Memo**; Memo's Return still saves. |
+| Spent / Received toggle tap while typing | **Keyboard stays up** (same treatment as the sheet's buttons). |
+| The focused field disappears (Note hidden, Split off, row deleted) | **Focus moves to the nearest remaining field** (Amount, or the neighbouring row's amount) so the keyboard stays up. |

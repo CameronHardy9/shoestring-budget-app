@@ -14,6 +14,7 @@ Build: ____________  Date: ____________  iPhone / iOS: ____________  Android / C
 ## 1. Smoke test on your phone (iPhone Safari, then installed app)
 - [ ] Sign in with your password (and second factor if you use one). A "new sign-in" email arrives.
 - [ ] **Quick-add, one-handed:** tap **+**. The **numeric keypad opens by itself** with the amount focused. Type an amount, tap a category, tap **Save**: 3 taps, under 10 seconds.
+- [ ] **The keyboard stays up** while you tap in the sheet: with the keypad up, tap a category chip, **Received** then **Spent**, **Note**, **Split** and **Add category**, and a split row's bin while typing in that row. The keyboard never closes and the sheet never jumps; the title and amount stay on screen. In **Payee** the Return key says **Next** and moves to Memo without saving. (Playwright's WebKit shows no keyboard; e2e proves focus only.)
 - [ ] While the keypad is up, **Save stays visible above the keyboard** (not hidden behind it), and the sheet does not jump or zoom when typing (inputs are 16 px).
 - [ ] The overview's "Left to spend" changes by exactly that amount; the transaction shows under Recent with today's date.
 - [ ] Split a transaction across two categories: "left to assign" counts down, Save works when it reaches "Fully assigned".
