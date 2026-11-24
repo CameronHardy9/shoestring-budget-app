@@ -1,6 +1,6 @@
 ---
 name: project-phase1-status
-description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR, lace loader) as of 2026-11-23
+description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR, lace loader, page loader session) as of 2026-11-24
 metadata:
   type: project
 ---
@@ -20,4 +20,4 @@ Offline + F-62 web (2026-11-17, fix/offline-and-f62, owner rulings round 7/8): m
 
 Lace loader (2026-11-23, "Loader D") was replaced on 2026-11-24 (feat/ivory-navy-recolour) by **Loader E** (ivory tile + border, tongue with navy lines making a "$", dark-edged white lace, grey tip leading at dashoffset 0.015) and the **ivory & navy recolour** (dark = black canvas + ivory brand). Owner rulings: one green (success = + button forest `#2e6a4f`; dark success lightened to `#6fc79a` for text contrast; `--ss-fab` dark darkened to `#3c8461` (4.50:1 with white) so the desktop rail "Add transaction" button can be green too); loader **centred in the viewport at 96 px**.
 **Why:** owner reviewed mockups on the design canvas and chose these.
-**How to apply:** `LoadingState` default = fixed, centred, pointer-events-none, z-20 (under nav z-30 / sheet z-40 / dialogs z-50), no space reserved; `placement="inline"` (56 px, rows min-height) only inside the quick-add sheet and Overview's Recent (below loaded content). Consecutive loaders share an animation phase (module-level epoch, `lace-timing.ts`) so cold-start chains don't restart the lace. Both add buttons use variant="fab" (owner ruling 2026-11-24). Favicon/app icons still indigo: logo on hold.
+**How to apply:** `LoadingState` default = fixed, centred, pointer-events-none, z-20 (under nav z-30 / sheet z-40 / dialogs z-50), no space reserved; `placement="inline"` (56 px, rows min-height) only inside the quick-add sheet and Overview's Recent (below loaded content). Superseded 2026-11-24 (fix/loader-full-cycles, owner rulings): viewport loads form one **page loader session** (`components/page-loader.ts` + `<PageLoader>`): 150 ms grace, opaque cover + inert mains, reveal only at a 3.2 s cycle boundary (reduced motion: at once), chain window 100 ms, Offline/ErrorState interrupt, inline loaders untouched. React's 300 ms Suspense reveal throttle makes every un-preloaded lazy screen pass grace and hold a full cycle (~3.4 s); owner chose (a): `TAB_SCREENS` preloaded at idle after the first session ends, once signed in (`app/preload.ts`). Owner also accepted: cover hides page chrome; Overview month switch holds a cycle (no placeholderData). Both add buttons use variant="fab" (owner ruling 2026-11-24). Favicon/app icons still indigo: logo on hold.

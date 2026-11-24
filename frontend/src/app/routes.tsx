@@ -65,6 +65,17 @@ const MembersScreen = lazyScreen(
   async () => (await import("../screens/budget/MembersScreen.tsx")).default,
 );
 
+/**
+ * The tab bar's screens, preloaded once the first page is revealed
+ * (app/preload.ts), so a first tab visit renders without suspending.
+ */
+export const TAB_SCREENS = [
+  OverviewScreen,
+  TransactionsScreen,
+  CategoriesScreen,
+  MoreScreen,
+] as const;
+
 export type Access = "public" | "guest" | "auth";
 
 export interface RouteDef {

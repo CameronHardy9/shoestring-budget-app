@@ -162,7 +162,9 @@
     stroke-dasharray: 1 1;
     stroke-dashoffset: 1;
     animation: ss-lace-draw 3.2s cubic-bezier(0.45, 0, 0.35, 1) infinite;
-    /* The shared phase (LaceLoader.tsx), set on the <svg> at mount. */
+    /* The page loader session's phase (LaceLoader.tsx, page-loader.ts), set
+       on the <svg> at mount: the session's cycle boundaries are this
+       animation's iteration boundaries. */
     animation-delay: var(--ss-lace-delay, 0ms);
   }
 

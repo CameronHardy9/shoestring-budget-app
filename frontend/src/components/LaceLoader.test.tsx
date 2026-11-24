@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { LaceLoader } from "./LaceLoader.tsx";
-import { LACE_CONTINUE_MS, LACE_CYCLE_MS } from "./lace-timing.ts";
+import { LaceLoader, laceDelay } from "./LaceLoader.tsx";
+import { LACE_CYCLE_MS } from "./lace-timing.ts";
 import { LoadingState, PendingSlot, loadingMinHeight } from "./States.tsx";
 
 function svg(): SVGSVGElement {
@@ -81,39 +81,29 @@ describe("LaceLoader", () => {
     );
   });
 
-  it("continues the running loader's phase, and starts afresh after a pause", () => {
+  it("starts its CSS animation at its epoch's phase (a negative delay), wrapping at one cycle", () => {
+    expect(laceDelay(0)).toBe("0ms");
+    expect(laceDelay(1000)).toBe("-1000ms");
+    expect(laceDelay(LACE_CYCLE_MS + 500.4)).toBe("-500ms");
     const now = vi.spyOn(performance, "now");
     now.mockReturnValue(100_000);
-    const first = render(<LaceLoader />);
-    expect(svg().style.getPropertyValue("--ss-lace-delay")).toBe("0ms");
-
-    // Replaced in the same moment (one commit): picks up the running phase.
-    now.mockReturnValue(101_000);
-    first.unmount();
-    const second = render(<LaceLoader />);
+    const first = render(<LaceLoader epoch={100_000 - 1000} />);
     expect(svg().style.getPropertyValue("--ss-lace-delay")).toBe("-1000ms");
+    first.unmount();
+    render(<LaceLoader epoch={100_000 - 2 * LACE_CYCLE_MS - 250} />);
+    expect(svg().style.getPropertyValue("--ss-lace-delay")).toBe("-250ms");
+  });
 
-    // A short gap still continues, wrapping at one cycle.
-    now.mockReturnValue(100_000 + LACE_CYCLE_MS + 500);
-    second.unmount();
-    now.mockReturnValue(100_000 + LACE_CYCLE_MS + 500 + LACE_CONTINUE_MS);
-    const third = render(<LaceLoader />);
-    expect(svg().style.getPropertyValue("--ss-lace-delay")).toBe(
-      `-${String(500 + LACE_CONTINUE_MS)}ms`,
-    );
-
-    // After a longer pause the next one starts from the beginning.
-    now.mockReturnValue(200_000);
-    third.unmount();
-    now.mockReturnValue(200_000 + LACE_CONTINUE_MS + 1);
+  it("without an epoch and no page loader on screen, starts from the beginning", () => {
+    vi.spyOn(performance, "now").mockReturnValue(100_000);
     render(<LaceLoader />);
     expect(svg().style.getPropertyValue("--ss-lace-delay")).toBe("0ms");
   });
 });
 
 describe("LoadingState", () => {
-  it("is a polite status named by its label, with the loader inside", () => {
-    render(<LoadingState label="Loading categories…" />);
+  it("inline is a polite status named by its label, with the loader inside, at once", () => {
+    render(<LoadingState placement="inline" label="Loading categories…" />);
     const status = screen.getByRole("status");
     expect(status).toBe(screen.getByTestId("loading"));
     expect(status).toHaveAttribute("aria-live", "polite");
@@ -122,21 +112,14 @@ describe("LoadingState", () => {
     expect(status.querySelector(".animate-pulse")).toBeNull();
   });
 
-  it("by default is the 96 px loader fixed in the middle of the viewport, taking no space and no taps", () => {
-    render(<LoadingState />);
-    const status = screen.getByTestId("loading");
-    expect(status).toHaveAttribute("data-placement", "viewport");
-    for (const name of [
-      "fixed",
-      "inset-0",
-      "m-auto",
-      "size-fit",
-      "pointer-events-none",
-      "z-20",
-    ])
-      expect(status).toHaveClass(name);
-    expect(status.style.minHeight).toBe("");
-    expect(svg()).toHaveAttribute("width", "96");
+  it("by default is only an empty marker in the page: the lace is the app-level PageLoader's", () => {
+    render(<LoadingState label="Loading your budget…" />);
+    const slot = screen.getByTestId("loading-slot");
+    expect(slot).toBeEmptyDOMElement();
+    expect(slot).not.toBeVisible();
+    expect(slot).toHaveAttribute("data-label", "Loading your budget…");
+    expect(screen.queryByTestId("loading")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("inline is the 56 px loader in a box the old skeleton's height (h-16 rows, gap-3)", () => {
@@ -156,7 +139,7 @@ describe("LoadingState", () => {
 });
 
 describe("PendingSlot", () => {
-  it("shows the viewport loader with its label while not paused", () => {
+  it("is a page load with its label while not paused", () => {
     render(
       <PendingSlot
         paused={false}
@@ -164,9 +147,10 @@ describe("PendingSlot", () => {
         offlineMessage="Offline."
       />,
     );
-    const status = screen.getByTestId("loading");
-    expect(status).toHaveTextContent("Loading members…");
-    expect(status).toHaveAttribute("data-placement", "viewport");
+    expect(screen.getByTestId("loading-slot")).toHaveAttribute(
+      "data-label",
+      "Loading members…",
+    );
     expect(screen.queryByTestId("offline")).toBeNull();
   });
 
@@ -190,6 +174,7 @@ describe("PendingSlot", () => {
     );
     expect(screen.getByTestId("offline")).toHaveTextContent("You're offline.");
     expect(screen.queryByTestId("loading")).toBeNull();
+    expect(screen.queryByTestId("loading-slot")).toBeNull();
     expect(screen.queryByTestId("lace-loader")).toBeNull();
     rerender(
       <PendingSlot

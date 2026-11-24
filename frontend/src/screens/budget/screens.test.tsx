@@ -280,7 +280,10 @@ describe("quick-add before the budget has loaded", () => {
   it("opens the sheet on the first tap, takes the amount at once, and saves with the budget's today", async () => {
     const reply = deferred<Reply>();
     const { api, view } = renderLoading(() => reply.promise);
-    expect(screen.getByText("Loading your budget…")).toBeInTheDocument();
+    expect(screen.getByTestId("loading-slot")).toHaveAttribute(
+      "data-label",
+      "Loading your budget…",
+    );
 
     await userEvent.click(screen.getByTestId("quick-add-open"));
     const sheet = await screen.findByRole("dialog", {

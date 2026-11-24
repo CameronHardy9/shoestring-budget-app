@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from "react";
 import { RouterProvider } from "react-aria-components";
+import { whenPageUncovered } from "../components/page-loader.ts";
 import { safeReturnPath } from "../lib/return-path.ts";
 
 const listeners = new Set<() => void>();
@@ -133,12 +134,17 @@ export function AppRouter({ children }: { children: ReactNode }) {
     if (!focusOnNextRender) return;
     focusOnNextRender = false;
     // Wait for lazy screens to render their heading.
-    const timer = window.setTimeout(() => {
+    const focusHeading = () => {
       const heading = document.querySelector<HTMLElement>("main h1");
       if (heading) {
         heading.tabIndex = -1;
         heading.focus({ preventScroll: true });
       }
+    };
+    // Under the page loader's cover the page is inert and can't take focus:
+    // then the heading the cover reveals.
+    const timer = window.setTimeout(() => {
+      whenPageUncovered(focusHeading);
     }, 50);
     return () => {
       window.clearTimeout(timer);

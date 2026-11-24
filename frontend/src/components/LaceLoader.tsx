@@ -5,9 +5,10 @@
 // carries the meaning. Keyframes, colours (fixed --ss-lace-* tokens, the same
 // in both themes) and the reduced-motion still frame live in styles/index.css.
 // No style attributes (CSP): colours are classes, geometry is SVG attributes,
-// and the one runtime value (the phase, below) is set through the CSSOM.
+// and the one runtime value (the phase: laceDelay) is set through the CSSOM.
 import { useLayoutEffect, useRef } from "react";
-import { LACE_CONTINUE_MS, LACE_CYCLE_MS } from "./lace-timing.ts";
+import { LACE_CYCLE_MS } from "./lace-timing.ts";
+import { shownEpoch } from "./page-loader.ts";
 
 /** The lace, from off the left edge, through all four eyelets, off the right. */
 const LACE =
@@ -38,41 +39,34 @@ export const LACE_SIZE = 56;
 /** The viewport-centred loader (every page-level load). */
 export const LACE_SIZE_LARGE = 96;
 
-// Shared phase. Every page-level loader sits in the same place (the middle of
-// the viewport), and a cold start chains several (boot, budgets, the lazy
-// route, the budget, the month): each new one picks up where the last one
-// was, so the lace keeps drawing instead of snapping back. After a pause
-// longer than LACE_CONTINUE_MS the next loader starts from the beginning.
-let mounted = 0;
-let epoch = 0;
-let lastSeen = Number.NEGATIVE_INFINITY;
-
-function startPhase(now: number): number {
-  if (mounted === 0 && now - lastSeen > LACE_CONTINUE_MS) epoch = now;
-  mounted += 1;
-  return (((now - epoch) % LACE_CYCLE_MS) + LACE_CYCLE_MS) % LACE_CYCLE_MS;
+/** The CSS animation's delay that puts it `ms` into its cycle. */
+export function laceDelay(ms: number): string {
+  const into = ((ms % LACE_CYCLE_MS) + LACE_CYCLE_MS) % LACE_CYCLE_MS;
+  return `${String(-Math.round(into))}ms`;
 }
 
-function endPhase(now: number): void {
-  mounted -= 1;
-  lastSeen = now;
-}
-
-export function LaceLoader({ size = LACE_SIZE }: { size?: number }) {
+/**
+ * `epoch`: the performance.now() its cycle 0 started (the page loader
+ * session's, page-loader.ts), so the CSS animation and the session's cycle
+ * boundaries share one clock. Without one (an inline loader) it joins the page
+ * loader's phase if that is on screen, else starts from the beginning.
+ */
+export function LaceLoader({
+  size = LACE_SIZE,
+  epoch,
+}: {
+  size?: number;
+  epoch?: number | undefined;
+}) {
   const small = size <= LACE_SMALL_MAX;
   const ref = useRef<SVGSVGElement>(null);
   useLayoutEffect(() => {
-    const phase = startPhase(performance.now());
-    // A negative delay starts the CSS animation `phase` ms in. CSSOM, not a
+    const now = performance.now();
+    const start = epoch ?? shownEpoch() ?? now;
+    // A negative delay starts the CSS animation that far in. CSSOM, not a
     // style attribute, so a strict style-src allows it.
-    ref.current?.style.setProperty(
-      "--ss-lace-delay",
-      `${String(-Math.round(phase))}ms`,
-    );
-    return () => {
-      endPhase(performance.now());
-    };
-  }, []);
+    ref.current?.style.setProperty("--ss-lace-delay", laceDelay(now - start));
+  }, [epoch]);
   return (
     <svg
       ref={ref}
