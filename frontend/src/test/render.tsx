@@ -8,6 +8,7 @@ import { createQueryClient } from "../app/query.ts";
 import { ReauthProvider } from "../app/reauth.tsx";
 import { AppRouter } from "../app/router.tsx";
 import { ToastProvider } from "../app/toast.tsx";
+import { PageLoader } from "../components/PageLoader.tsx";
 import { CSRF, me, session } from "./fixtures.ts";
 
 export const signedIn: AuthStatus = { kind: "signedIn", me, session };
@@ -32,7 +33,10 @@ export function renderWithApp(
         <AuthProvider initial={auth}>
           <ToastProvider>
             <ReauthProvider>
-              <AppRouter>{ui}</AppRouter>
+              <AppRouter>
+                {ui}
+                <PageLoader />
+              </AppRouter>
             </ReauthProvider>
           </ToastProvider>
         </AuthProvider>

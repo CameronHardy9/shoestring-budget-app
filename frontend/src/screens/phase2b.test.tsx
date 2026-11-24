@@ -280,7 +280,8 @@ describe("members", () => {
       [`GET ${B}/members`]: () => list.promise,
       [`GET ${B}/invitations`]: () => invites.promise,
     });
-    const loading = await screen.findByTestId("loading");
+    // The page loader's slot: where the lists will appear.
+    const loading = await screen.findByTestId("loading-slot");
     const main = document.getElementById("main")!;
     expect(tappableAfter(loading, main)).toEqual([]);
     list.resolve(json(200, { items: members }));
@@ -654,7 +655,7 @@ describe("account-level screens", () => {
     const reply = deferred<ReturnType<typeof json>>();
     mockApi({ "GET /budgets": () => reply.promise });
     const view = renderWithApp(<MoreScreen />, { path: "/more" });
-    const loading = screen.getByTestId("loading");
+    const loading = screen.getByTestId("loading-slot");
     const main = document.getElementById("main")!;
     // While the list's length is unknown, nothing follows it that it could
     // push down: no settings rows, theme switch or Sign out yet.

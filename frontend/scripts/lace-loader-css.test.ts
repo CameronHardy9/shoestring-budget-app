@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { LACE_CYCLE_MS } from "../src/components/lace-timing.ts";
+import { LACE_CYCLE_MS, LACE_SEAM_MS } from "../src/components/lace-timing.ts";
 
 const css = readFileSync(
   fileURLToPath(new URL("../src/styles/index.css", import.meta.url)),
@@ -52,7 +52,7 @@ describe("lace loader styles (index.css)", () => {
     css.indexOf(".ss-lace-tile"),
   );
 
-  it("animates the lace (edge + white, as one) and the tip for one LACE_CYCLE_MS cycle, forever, with the spec's easing, offset by the shared phase", () => {
+  it("animates the lace (edge + white, as one) and the tip for one LACE_CYCLE_MS cycle, forever, with the spec's easing, offset by the page loader session's phase", () => {
     expect(LACE_CYCLE_MS).toBe(3200);
     for (const [selector, keyframes] of [
       [".ss-lace-dark,\n  .ss-lace-line", "ss-lace-draw"],
@@ -94,6 +94,19 @@ describe("lace loader styles (index.css)", () => {
       "94%": { "stroke-dashoffset": "0", opacity: "0" },
       "100%": { "stroke-dashoffset": "0", opacity: "0" },
     });
+  });
+
+  it("has the lace invisible for LACE_SEAM_MS before each boundary, where the page loader may reveal the page", () => {
+    // From the first keyframe with opacity 0 to the end of the cycle.
+    const draw = keyframes("ss-lace-draw");
+    const faded = Object.entries(draw)
+      .filter(([, values]) => values.opacity === "0")
+      .map(([offset]) => Number.parseFloat(offset) / 100);
+    const from = Math.min(...faded);
+    expect(draw["100%"]?.opacity).toBe("0");
+    expect(LACE_SEAM_MS).toBeLessThanOrEqual(LACE_CYCLE_MS * (1 - from));
+    // The tip has gone long before.
+    expect(keyframes("ss-lace-tip")["100%"]?.opacity).toBe("0");
   });
 
   it("under reduced motion shows the finished lace (edge + white), still, without the tip", () => {

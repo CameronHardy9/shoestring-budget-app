@@ -6,10 +6,13 @@ import { queryClient } from "./app/query.ts";
 import { ReauthProvider } from "./app/reauth.tsx";
 import { lazyScreen } from "./app/lazy-screen.tsx";
 import { AppRouter, navigate, Redirect, useLocation } from "./app/router.tsx";
-import { findRoute } from "./app/routes.tsx";
+import { usePreloadAfterFirstReveal } from "./app/preload.ts";
+import { findRoute, TAB_SCREENS } from "./app/routes.tsx";
 import { applyUpdate, useUpdateAvailable } from "./app/sw-register.ts";
 import { ToastProvider } from "./app/toast.tsx";
 import { Button } from "./components/Button.tsx";
+import { usePageCovered } from "./components/page-loader.ts";
+import { PageLoader } from "./components/PageLoader.tsx";
 import { ErrorState, LoadingState } from "./components/States.tsx";
 import { rememberReturnPath, takeReturnPath } from "./lib/return-path.ts";
 import { NotFoundScreen } from "./screens/NotFoundScreen.tsx";
@@ -20,7 +23,11 @@ const PendingDeletionScreen = lazyScreen(
 );
 
 function FullPage({ children }: { children: React.ReactNode }) {
-  return <main className="mx-auto max-w-md px-6 pt-16">{children}</main>;
+  return (
+    <main inert={usePageCovered()} className="mx-auto max-w-md px-6 pt-16">
+      {children}
+    </main>
+  );
 }
 
 function SendToSignIn({ href }: { href: string }) {
@@ -42,6 +49,9 @@ function Routes() {
   const location = useLocation();
   const { status, refresh } = useAuth();
   const found = findRoute(location.pathname);
+  // A first tab visit then renders at once instead of suspending (and holding
+  // the page loader for a whole cycle).
+  usePreloadAfterFirstReveal(status.kind === "signedIn", TAB_SCREENS);
 
   useEffect(() => {
     document.title =
@@ -126,6 +136,7 @@ export function App() {
           <ReauthProvider>
             <AppRouter>
               <Routes />
+              <PageLoader />
               <UpdateBanner />
             </AppRouter>
           </ReauthProvider>

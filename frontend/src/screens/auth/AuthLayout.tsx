@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { LogoMark } from "../../components/Logo.tsx";
+import { usePageCovered } from "../../components/page-loader.ts";
 
 /** Signed-out pages: logo, one column, footer note. */
 export function AuthLayout({
@@ -13,8 +14,12 @@ export function AuthLayout({
   children: ReactNode;
   footer?: ReactNode;
 }) {
+  const covered = usePageCovered();
   return (
-    <main className="mx-auto flex min-h-dvh max-w-sm flex-col px-6 pt-12 pb-8">
+    <main
+      inert={covered}
+      className="mx-auto flex min-h-dvh max-w-sm flex-col px-6 pt-12 pb-8"
+    >
       <div className="flex items-center gap-2.5 text-xl font-bold text-fg">
         <LogoMark />
         Shoestring

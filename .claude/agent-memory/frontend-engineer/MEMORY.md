@@ -1,3 +1,3 @@
-- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP, Tailwind v4, React 19 lazy, jsdom seams, V8 stacks, TanStack, reduced-motion, pnpm shim
-- [Build status](project-phase1-status.md) — owner decisions, MVP + hardening + lost-tap + offline/F-62 + Loader E / ivory-navy recolour, centred loader, open items
+- [Browser and tooling quirks](browser-and-tooling-quirks.md) — React Aria CSP, Tailwind v4, React 19 lazy, jsdom seams, V8 stacks, TanStack, reduced-motion, pnpm shim, fake timers/inert
+- [Build status](project-phase1-status.md) — owner decisions, MVP + hardening + lost-tap + offline/F-62 + Loader E / recolour, page loader session, open items
 - [No .env secrets](feedback-no-env-secrets.md) — don't read seed passwords from .env for checks; use test hooks or ask
