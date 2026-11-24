@@ -10,14 +10,20 @@
 // sees the hold. The loader is observed from inside the page: an init script
 // records, on the page's own performance.now() clock, every time the cover
 // appears or goes, which cover and lace elements those were, whether every
-// <main> was inert while the cover was up, and which page loads mounted. The
-// test runner's clock never enters the timing.
+// rendered <main> was inert while the cover was up, and which page loads
+// mounted. The test runner's clock never enters the timing.
 //
-// Determinism: the month summary is held (page.route) until the lace has run
-// 1.5 cycles, so the lace certainly shows (the grace is 150 ms), the first
-// boundary certainly passes while a load is pending, and the load ends half a
-// cycle away from any boundary. A loader that revealed as soon as loading
-// ended would miss a boundary by ~1600 ms, far outside the tolerance below.
+// Determinism: two loads of the chain are held with page.route.
+//   - The Overview screen's module, until the cover is up. The budget's shell
+//     (AppShell) is then already on screen when Overview suspends, so React
+//     hides it (display: none) behind the lazy-route fallback under the cover,
+//     and unhides it under the cover later: the case where a stale `inert`
+//     would show (CI run 45469953508 met the first half by chance on WebKit).
+//   - The month summary, until the lace has run 1.5 cycles, so the first
+//     boundary certainly passes while a load is pending, and the load ends
+//     half a cycle away from any boundary. A loader that revealed as soon as
+//     loading ended would miss a boundary by ~1600 ms, far outside the
+//     tolerance below.
 //
 // Failures here belong to frontend-engineer (frontend/src/components/
 // page-loader.ts, PageLoader.tsx, frontend/src/app/preload.ts).
@@ -52,8 +58,16 @@ interface LoaderLog {
   covers: number;
   /** Distinct lace <svg> elements seen inside a cover. */
   laces: number;
-  /** Times a <main> was not inert while the cover was up. */
-  mainNotInert: number[];
+  /**
+   * A rendered <main> (checkVisibility) that was not inert while the cover
+   * was up: "time: id or class". A <main> React has hidden behind a Suspense
+   * fallback (display: none) isn't counted: it can't be seen, focused or
+   * read, and React doesn't re-render it while hidden, so its `inert` is
+   * stale until it is shown again (then it is counted).
+   */
+  mainNotInert: string[];
+  /** Samples with the cover up and a <main> hidden by React (the held module). */
+  hiddenMainSamples: number;
   /** Page-load slots (viewport LoadingStates) as they mounted. */
   slots: { label: string; t: number }[];
   /** fetchStart of the Transactions screen module (the idle preload). */
@@ -93,6 +107,7 @@ test.describe("page loader in full motion", () => {
         covers: 0,
         laces: 0,
         mainNotInert: [],
+        hiddenMainSamples: 0,
         slots: [],
         transactionsModuleAt: null,
       };
@@ -114,7 +129,11 @@ test.describe("page loader in full motion", () => {
         }
         if (cover) {
           for (const main of document.querySelectorAll("main")) {
-            if (!main.hasAttribute("inert")) log.mainNotInert.push(t);
+            if (!main.checkVisibility()) log.hiddenMainSamples += 1;
+            else if (!main.hasAttribute("inert"))
+              log.mainNotInert.push(
+                `${String(Math.round(t))}: ${main.id || main.className}`,
+              );
           }
         }
         for (const slot of document.querySelectorAll(SLOT)) {
@@ -128,7 +147,9 @@ test.describe("page loader in full motion", () => {
         childList: true,
         subtree: true,
         attributes: true,
-        attributeFilter: ["inert"],
+        // inert, and what React toggles to hide and unhide a suspended tree
+        // (style display), so an unhidden <main> is sampled too.
+        attributeFilter: ["inert", "style", "hidden"],
       });
       // An observer, not getEntries(): the dev server's hundreds of modules
       // overflow the resource timing buffer.
@@ -158,6 +179,22 @@ test.describe("page loader in full motion", () => {
         held += 1;
         await gate;
         await route.fallback();
+      },
+    );
+
+    // Hold the Overview screen's module until the cover is up (the page's own
+    // signal). Never longer than 20 s: then the checks below fail instead.
+    await page.route(
+      (url) => url.pathname === "/src/screens/budget/OverviewScreen.tsx",
+      async (route: Route) => {
+        await page
+          .waitForFunction(
+            () => (window.__pageLoaderLog?.changes.length ?? 0) > 0,
+            undefined,
+            { timeout: 20_000 },
+          )
+          .catch(() => undefined);
+        await route.fallback().catch(() => undefined);
       },
     );
 
@@ -270,13 +307,22 @@ test.describe("page loader in full motion", () => {
     expect(log.laces, `one lace element. ${trace}`).toBe(1);
     expect(
       log.mainNotInert,
-      `<main> was inert whenever the cover was up. ${trace}`,
+      `every rendered <main> was inert whenever the cover was up. ${trace}`,
     ).toEqual([]);
+    expect(
+      log.hiddenMainSamples,
+      `the budget's shell was hidden behind the lazy-route fallback under the cover (the held Overview module), so the check above saw it unhidden. ${trace}`,
+    ).toBeGreaterThan(0);
     expect(
       log.slots.map((s) => s.label),
       `the cold start chained the boot, route and data loads, ending with the held month. ${trace}`,
     ).toEqual(
-      expect.arrayContaining(["Starting Shoestring…", "Loading this month…"]),
+      expect.arrayContaining([
+        "Starting Shoestring…",
+        "Loading your budget…",
+        "Loading…",
+        "Loading this month…",
+      ]),
     );
 
     const shownAt = log.changes[0]!.t;
