@@ -161,3 +161,14 @@ These are the owner's rulings on the gaps the architect raised, the security rev
 | Desktop rail "Add transaction" button | **Forest green too**, sharing `--ss-fab`; dark shade darkened (from `#3f8a65`) so its white label passes 4.5:1. |
 | Loader centring on desktop | **Viewport centre is fine** (sits 120 px left of the content centre with the side rail). |
 | Shared loader phase across back-to-back loaders (engineer's addition) | **Keep.** The lace continues across hand-offs within 400 ms instead of restarting. |
+
+## UI fixes: quick-add keyboard (2026-11-24)
+Root cause (debugger): tapping a chip or button moves focus off the text field, so iOS dismisses the keyboard; the sheet is also lifted by the keyboard height without capping its height.
+| Topic | Decision |
+|---|---|
+| Category chip tap while typing | **Keyboard stays up**: focus goes straight back to the field (refocus approach). If it flickers on device, fall back to custom chips that never take focus. |
+| Split-row category picker (native select swaps keyboard for the iOS wheel) | **Keep the native picker**; the swap is accepted. |
+| Focus after "Add category" in a split | **Stays where it is.** |
+| Return on Payee | **"Next" to Memo**; Memo's Return still saves. |
+| Spent / Received toggle tap while typing | **Keyboard stays up** (same treatment as the sheet's buttons). |
+| The focused field disappears (Note hidden, Split off, row deleted) | **Focus moves to the nearest remaining field** (Amount, or the neighbouring row's amount) so the keyboard stays up. |

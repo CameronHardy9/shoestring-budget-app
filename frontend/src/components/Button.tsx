@@ -5,7 +5,14 @@
 // flex, self-alignment, shadow). Tailwind orders utilities by property, not by
 // their position in the class attribute, so a className such as "px-3" or
 // "text-sm" would not reliably beat the base classes here.
-import type { ReactNode } from "react";
+//
+// `keepFocus` is for controls inside a sheet where the person is typing (the
+// quick-add form): a tap must not move focus off the text field, or iOS
+// closes the keyboard and the sheet jumps. It cancels the default action of
+// mousedown (which is what moves focus on a tap or click); the press still
+// fires. Keyboard and screen-reader activation never go through mousedown, so
+// they are unchanged, and the button stays in the Tab order.
+import type { MouseEvent, ReactNode } from "react";
 import {
   Button as AriaButton,
   type ButtonProps as AriaButtonProps,
@@ -69,6 +76,11 @@ export interface ButtonProps extends Omit<
   shape?: ButtonShape;
   align?: ButtonAlign;
   weight?: ButtonWeight;
+  /**
+   * A tap or click leaves focus where it is (e.g. in the field being typed
+   * in, so the phone keyboard stays up). Keyboard focus is unaffected.
+   */
+  keepFocus?: boolean;
   /** Layout only: width, margin, flex, self-alignment, shadow. */
   className?: string;
   children: ReactNode;
@@ -80,13 +92,22 @@ export function Button({
   shape = "rounded",
   align = "center",
   weight = "semibold",
+  keepFocus = false,
   className,
   children,
+  onMouseDown,
   ...rest
 }: ButtonProps) {
+  const mouseDown = keepFocus
+    ? (e: MouseEvent<HTMLButtonElement>) => {
+        onMouseDown?.(e);
+        e.preventDefault();
+      }
+    : onMouseDown;
   return (
     <AriaButton
       {...rest}
+      {...(mouseDown ? { onMouseDown: mouseDown } : {})}
       className={cx(
         "inline-flex items-center transition-colors select-none data-[disabled]:opacity-50",
         VARIANTS[variant],

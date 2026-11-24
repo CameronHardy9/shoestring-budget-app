@@ -1,5 +1,9 @@
 // Single-choice segmented control (React Aria ToggleButtonGroup): one tab stop,
 // arrow keys move between options, the selection is never empty.
+// `keepFocus`: a tap leaves focus where it is (in the field being typed in,
+// so the phone keyboard stays up), like Button's; keyboard and screen-reader
+// operation are unchanged.
+import type { MouseEvent } from "react";
 import type { Key } from "react-aria-components";
 import { ToggleButton, ToggleButtonGroup } from "react-aria-components";
 import { cx } from "./cx.ts";
@@ -15,14 +19,21 @@ export interface SegmentedControlProps<K extends string> {
   options: readonly SegmentedOption<K>[];
   value: K;
   onChange: (value: K) => void;
+  /** A tap or click doesn't move focus (keyboard focus is unaffected). */
+  keepFocus?: boolean;
   className?: string;
 }
+
+const keepFocusOnMouseDown = (e: MouseEvent) => {
+  e.preventDefault();
+};
 
 export function SegmentedControl<K extends string>({
   label,
   options,
   value,
   onChange,
+  keepFocus = false,
   className,
 }: SegmentedControlProps<K>) {
   return (
@@ -45,6 +56,7 @@ export function SegmentedControl<K extends string>({
         <ToggleButton
           key={option.id}
           id={option.id}
+          {...(keepFocus ? { onMouseDown: keepFocusOnMouseDown } : {})}
           className={cx(
             "min-h-10 rounded-sm px-3 text-sm font-semibold text-fg-muted",
             // The selected segment has a line-strong ring (>= 3:1 against the

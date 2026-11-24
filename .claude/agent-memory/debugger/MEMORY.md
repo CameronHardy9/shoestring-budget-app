@@ -1,0 +1,2 @@
+- [iOS keyboard focus theft](ios-keyboard-focus-theft.md) — RA Radio/Button taps steal focus from inputs; sheet lift overflows top; fixes proven in WebKit
+- [Preview harness repro](diagnostic-preview-harness.md) — backend-free repro: vite preview.html + Playwright WebKit focus logging

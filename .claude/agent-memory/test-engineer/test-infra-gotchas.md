@@ -50,3 +50,9 @@ Learned on the offline PR (2026-11-17, PW 1.65):
 Learned regenerating visual baselines (2026-11-24, PW 1.65):
 - **Regenerate = delete the PNGs, then `make e2e`** (no update-snapshots knob in .github/scripts/e2e.sh; local config is `updateSnapshots: "missing"`). A "writing actual" test PASSES in 1.65, so the regenerate run proves nothing: always run `make e2e` a second time to compare. A full run takes about 7.5 min.
 - `snap()` now asserts no `data-testid="loading"` before every shot: the page-level loader is `position: fixed` (data-placement="viewport") and can sit over finished content, and an inline one can hide behind a sheet's scrim.
+
+Learned on the keyboard-focus journey (2026-11-24, PW 1.65):
+- **Focus tests on touch:** `locator.tap()` works on iphone-webkit and pixel-chromium; desktop-chrome has no touch (skip with a reason). Playwright WebKit's Tab DOES reach buttons and radios. **WebKit fires no focusout when the focused element is removed**, so a lost handoff shows up only as `activeElement === body`. Put activeElement in failure messages, not just a focus trail.
+- **Keyboard simulation works:** `Object.defineProperty(visualViewport, "height", {get})` plus `visualViewport.dispatchEvent(new Event("resize"))` drives the app's useKeyboardInset on both engines. Prove it took effect (sheet bottom ≤ innerHeight − lift) before asserting the cap.
+- **Negative checks while other agents edit in parallel:** back up the exact files right before mutating, restore with a `trap` and compare byte-for-byte. A `git diff` snapshot taken earlier can go stale when another agent edits the frontend at the same time (it happened). Keep the mutation window short, and say in the report that a parallel edit to a mutated file inside that window would be overwritten.
+- tests/ tsconfig has `erasableSyntaxOnly` (no constructor parameter properties). DOM lib types `Element.textContent` as string, so `?.`/`??` on it fails no-unnecessary-condition.
