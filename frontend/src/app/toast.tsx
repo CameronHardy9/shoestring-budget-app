@@ -50,10 +50,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
-            className="flex max-w-md items-center gap-2 rounded-full bg-fg px-4 py-2.5 text-sm font-medium text-canvas shadow-2"
+            // rounded-xl is the pill radius of one line; with more lines a full
+            // pill's corners would cut into the text.
+            className="flex max-w-md items-center gap-2 rounded-xl bg-fg px-4 py-2.5 text-sm font-medium text-canvas shadow-2"
           >
-            <Icon name="check" size={18} />
-            {t.text}
+            <Icon name="check" size={18} className="shrink-0" />
+            <span className="min-w-0 wrap-anywhere">{t.text}</span>
           </div>
         ))}
       </div>

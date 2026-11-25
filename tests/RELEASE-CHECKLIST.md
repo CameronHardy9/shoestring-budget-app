@@ -23,6 +23,7 @@ Build: ____________  Date: ____________  iPhone / iOS: ____________  Android / C
 - [ ] **Done, then a chip:** tap **Done** above the keyboard (or close it), then tap a chip: it is chosen and the keyboard **does not come back**. (Not in e2e: after a scripted blur React Aria's focus trap puts focus back in the amount, and only a phone shows whether that opens the keyboard.)
 - [ ] While the keypad is up, **Save stays visible above the keyboard** (not hidden behind it), and the sheet does not jump or zoom when typing (inputs are 16 px).
 - [ ] The overview's "Left to spend" changes by exactly that amount; the transaction shows under Recent with today's date.
+- [ ] **Long names don't move the page:** name a category "Home repairs, garden and maintenance", save something to it and save a 3-way split. On Overview (Chart, then **Table**) swipe sideways: the **page does not move** (the table may scroll inside its card), nothing is cut off at the right edge, names wrap, no amount breaks in the middle, and **+** stays where it is and opens the sheet. Same on Transactions and Budgets.
 - [ ] Split a transaction across two categories: "left to assign" counts down, Save works when it reaches "Fully assigned".
 - [ ] Edit that transaction, then delete it: totals go back.
 - [ ] Rotate to landscape and back: nothing overlaps or gets cut off.

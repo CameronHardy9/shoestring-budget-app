@@ -40,14 +40,18 @@ function Row({
         href={href}
         className="flex min-h-14 items-center gap-3 px-4 py-2 text-fg"
       >
-        <Icon name={icon} size={22} className="text-fg-muted" />
-        <span className="flex flex-1 flex-col">
+        <Icon name={icon} size={22} className="shrink-0 text-fg-muted" />
+        <span className="flex min-w-0 flex-1 flex-col">
           <span className="font-medium">{label}</span>
           {detail ? (
             <span className="text-sm text-fg-muted">{detail}</span>
           ) : null}
         </span>
-        <Icon name="chevronRight" size={18} className="text-fg-muted" />
+        <Icon
+          name="chevronRight"
+          size={18}
+          className="shrink-0 text-fg-muted"
+        />
       </Link>
     </li>
   );

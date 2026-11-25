@@ -124,7 +124,7 @@ export function AppShell({
             <span className="flex min-w-0 flex-col leading-tight">
               Shoestring
               {budgetName ? (
-                <span className="truncate text-sm font-medium text-fg-muted">
+                <span className="text-sm font-medium text-fg-muted">
                   {budgetName}
                 </span>
               ) : null}

@@ -36,7 +36,7 @@ export function Alert({ tone, children, detail, className }: AlertProps) {
         size={18}
         className="mt-px shrink-0"
       />
-      <div className="flex flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-0.5">
         <span className="font-medium">{children}</span>
         {detail ? <span className="text-fg-muted">{detail}</span> : null}
       </div>

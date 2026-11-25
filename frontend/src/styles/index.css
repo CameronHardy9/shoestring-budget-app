@@ -64,6 +64,13 @@
   --text-2xl--line-height: 2rem;
   --text-3xl: 2rem; /* 32 */
   --text-3xl--line-height: 2.5rem;
+  /* The month's total: text-3xl, smaller only where the amount (up to 9
+     characters, or longer) would not fit its container (cqi), since money
+     never wraps. */
+  --text-total: min(2rem, 17cqi);
+  --text-total--line-height: 2.5rem;
+  --text-total-long: min(2rem, 13cqi);
+  --text-total-long--line-height: 2.5rem;
   --text-display: 2.75rem; /* 44, the quick-add amount */
   --text-display--line-height: 3.25rem;
 
@@ -95,8 +102,21 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  /*
+   * A word too long for its line (names are up to 40-60 characters, with no
+   * spaces required) breaks instead of widening the page. It changes nothing
+   * that fits and does not affect min-content sizes, so a flex or grid item
+   * holding such text also needs `min-w-0` (or a minmax(0,1fr) track).
+   */
   body {
     min-height: 100dvh;
+    overflow-wrap: break-word;
+  }
+
+  /* Not control labels ("Automatic" in a narrow segment). A button that shows
+     a name opts in on the text itself with `wrap-anywhere`. */
+  button {
+    overflow-wrap: normal;
   }
 
   /*

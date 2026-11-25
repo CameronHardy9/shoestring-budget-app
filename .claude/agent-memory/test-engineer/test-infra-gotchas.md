@@ -50,7 +50,7 @@ Learned on the offline PR (2026-11-17, PW 1.65):
 Learned on the quick-add chips (2026-11-25, PW 1.65):
 - **A held touch can't be faked natively.** In Chromium's emulation a 1.2 s CDP touch still ends in mousedown/click (no long press); WebKit has no CDP. A slow press must be scripted pointer events (`slowPress` in j2), labelled as such, plus a RELEASE-CHECKLIST line.
 - **`toHaveValue` is not "React has rendered it".** The display amount's width (value.length ch) lagged a keystroke behind the DOM value in ~6 % of runs. Before comparing rects, type text that doesn't change the layout (4 characters) instead of waiting.
-- **A long category name (35 of 40 allowed characters) overflowed Overview at 375 px** (scrollWidth 419), which on Chromium mobile also shifts fixed elements so "+" taps miss. Reported 2026-11-25. Symptom: the tap hangs until timeout and the screenshot is panned.
+- **A page that is too wide on Chromium mobile grows innerWidth and shifts fixed elements, so "+" taps hang until timeout** (screenshot panned). Overview had this; fixed on fix/long-category-names, guarded by `e2e/no-sideways-scroll.spec.ts` (add new screens there; add new contract limits to its data).
 - Visual-only run without `make e2e`: e2e-up stack + e2e.sh's docker run; `CI=1` inside the container never writes a baseline (compare), empty CI writes missing ones.
 - Long negative checks: run them in the background, and never edit the spec while they run.
 - **A scripted `blur()` inside the sheet doesn't last:** React Aria's focus trap refocuses the field in a frame, so "Done closes the keyboard" can't be simulated; leave it to RELEASE-CHECKLIST.
@@ -77,3 +77,12 @@ Learned on the opening / month-switch e2e (2026-11-25, PW 1.65.1):
 - Locally, after a Playwright bump, `pnpm exec playwright install chromium` is needed (webkit and chromium can be out of step); "Executable doesn't exist" is not a test failure.
 - Never `grep` tests/.env.stack broadly: the DB URLs hold (throwaway) passwords; match `^BASE_URL=`.
 - **WebKit re-fetches a module (same URL) when a second dynamic import starts while the first fetch is pending** (held with page.route); Chromium doesn't. Never assert an exact request count for a held module; count API requests instead.
+
+Learned on the sideways-scroll spec (2026-11-25, PW 1.65.1):
+- **Leaving a page by `page.goto` while a lazy screen is loading** (e.g. right after an in-app redirect) makes WebKit reject the aborted import: React reports "Importing a module script failed." as an uncaught page error, ~50 % of runs. Wait for the destination's content first. Idle preloads don't do this (their rejection is caught). The frontend has no error boundary (reported 2026-11-25).
+- Soft assertions with the screen, width and furthest element in the message make one run list every bad screen; undoing only Overview's `grid-cols-1` fails the Table view only (names wrap now), so the chart needs the pre-fix files to go red.
+- **maxDiffPixelRatio 0.002 hides small changes** (364 px at 320x568): 4 of 6 stale quick-add shots still passed the compare. Byte/pixel-diff old vs new yourself after regenerating. No Python PIL here: diff with a Playwright page and canvas.
+- `rm "$VAR/…"` in a loop is blocked by the permission check; delete baselines by literal absolute paths.
+- API calls from one test share the 300/min global IP limit and the clock is frozen: count navigations before writing screen × width loops (resize instead of reloading).
+- **Flaky: sessions.spec.ts "after sign-out, Back" on iphone-webkit (2 of 25 on this branch, 1 of 40 with main's frontend).** Page error "/…/api/budgets due to access control checks" = a GET /api/budgets cut off by the document replacement. Likely cause: signOut runs queryClient.clear() while More is still mounted, so it refetches before location.replace. Reported to frontend-engineer 2026-11-25; not hidden in the test. WebKit words an aborted fetch this way; it is not CORS.
+- A failing Playwright run stops `make e2e` before the visual step, so a red e2e proves nothing about baselines.

@@ -91,7 +91,10 @@ export function Sheet({
             className="mx-auto mt-2 h-1 w-10 rounded-full bg-line-strong lg:hidden"
           />
           <div className="flex items-center justify-between px-4 pt-1">
-            <Heading slot="title" className="text-lg font-semibold text-fg">
+            <Heading
+              slot="title"
+              className="min-w-0 text-lg font-semibold text-fg"
+            >
               {title}
             </Heading>
             <Button
@@ -99,7 +102,7 @@ export function Sheet({
               size="icon"
               slot="close"
               aria-label="Close"
-              className="-mr-2"
+              className="-mr-2 shrink-0"
             >
               <Icon name="close" />
             </Button>
