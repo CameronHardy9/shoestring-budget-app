@@ -19,6 +19,7 @@ import {
 import { daysLeftInMonth, monthLabel, monthName } from "../../lib/dates.ts";
 import { monthFrom, useCurrentBudget } from "./BudgetLayout.tsx";
 import { TransactionRow } from "./TransactionRow.tsx";
+import { useSwitchExit } from "./useSwitchExit.ts";
 
 function Card({
   children,
@@ -177,6 +178,7 @@ export default function OverviewScreen() {
   const summary = useSummary(budget.id, month);
   const categories = useCategories(budget.id);
   const recent = useTransactions(budget.id, { month, categoryId: null }, 5);
+  const exit = useSwitchExit(summary.data !== undefined);
   const [view, setView] = useState<"chart" | "table">("chart");
 
   const header = (
@@ -185,7 +187,8 @@ export default function OverviewScreen() {
         <p className="truncate text-sm font-medium text-fg-muted">
           {budget.name}
         </p>
-        <h1 className="text-2xl font-semibold text-fg">
+        {/* Announced: a month arrow keeps focus, and this is its only label. */}
+        <h1 aria-live="polite" className="text-2xl font-semibold text-fg">
           {monthName(month)}
           {month.slice(0, 4) !== budget.currentMonth.slice(0, 4)
             ? ` ${month.slice(0, 4)}`
@@ -207,6 +210,7 @@ export default function OverviewScreen() {
         <PendingSlot
           paused={summary.isPaused}
           label="Loading this month…"
+          exit={exit}
           offlineMessage="You're offline. This month will appear when you reconnect."
         />
       </div>

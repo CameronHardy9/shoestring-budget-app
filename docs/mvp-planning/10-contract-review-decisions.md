@@ -185,3 +185,15 @@ Root cause (debugger): tapping a chip or button moves focus off the text field, 
 | Return on Payee | **"Next" to Memo**; Memo's Return still saves. |
 | Spent / Received toggle tap while typing | **Keyboard stays up** (same treatment as the sheet's buttons). |
 | The focused field disappears (Note hidden, Split off, row deleted) | **Focus moves to the nearest remaining field** (Amount, or the neighbouring row's amount) so the keyboard stays up. |
+
+## iPhone check of the UI fixes (2026-11-25)
+| Topic | Decision |
+|---|---|
+| Category chips flicker when tapped (refocus approach, #36) | **Custom chips that never take focus on tap**, the fallback agreed on 2026-11-24. |
+| Navigation bars during the opening sequence | **Not visible until the opening loader ends.** They appeared and flickered, which looked broken. Supersedes "tab bar and rail stay usable" for the opening sequence only. |
+| Loader when moving between months | **Ends as soon as the content has loaded**, with no full-cycle hold. Supersedes "Leave as is". Other page loads keep whole cycles. |
+| What flickered on chip taps (owner's iPhone) | **The keyboard.** The focus rebuild is the main fix. |
+| Selecting a chip changed its width, so chips rewrapped and the sheet moved | **Constant width**: every chip reserves the check and bold-text space, so nothing moves. Unselected chips get about 25 px wider. |
+| Transactions category filter loader | **Ends as soon as the list has loaded**, like a month change. |
+| Request that hangs during the opening (no navigation until it fails) | **Accepted as is**; no client time limit. |
+| Return in the gap between a successful save and the form reset can save a duplicate (pre-existing; reproduced only artificially) | **Fix in a separate follow-up PR**, straight after the chips. |

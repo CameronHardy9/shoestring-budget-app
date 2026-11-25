@@ -30,9 +30,20 @@ export function loadingMinHeight(rows: number): string {
  * may be that content).
  */
 export type LoaderPlacement =
-  | { placement?: "viewport"; rows?: never }
+  | {
+      placement?: "viewport";
+      rows?: never;
+      /**
+       * "cycle" (the default): the loader leaves at the end of a lace cycle.
+       * "loaded": as soon as the load is done, mid-cycle if need be. Only for
+       * moving between months, or category filters, on a screen that has
+       * shown one (owner rulings 2026-11-25; useSwitchExit).
+       */
+      exit?: "cycle" | "loaded";
+    }
   | {
       placement: "inline";
+      exit?: never;
       /** Height hint, in old skeleton rows. */
       rows?: number;
     };
@@ -62,12 +73,12 @@ export function LoadingState({
       </div>
     );
   }
-  return <PageLoadSlot label={label} />;
+  return <PageLoadSlot label={label} gated={where.exit !== "loaded"} />;
 }
 
 /** Where a page-level load is, in the page; the lace is <PageLoader>'s. */
-function PageLoadSlot({ label }: { label: string }) {
-  usePageLoad(label);
+function PageLoadSlot({ label, gated }: { label: string; gated: boolean }) {
+  usePageLoad(label, gated);
   return <div hidden data-testid="loading-slot" data-label={label} />;
 }
 

@@ -4,8 +4,10 @@
 //
 // - navigate() accepts only app-relative paths (safeReturnPath), so a value
 //   from anywhere can never send the user off-site.
-// - After each navigation, focus moves to the new page's <h1> so screen
-//   readers announce the change, and the window scrolls to the top.
+// - After each navigation to another page, focus moves to its <h1> so screen
+//   readers announce the change, and the window scrolls to the top. A change
+//   of the query alone (another month) is a control on the same page: focus
+//   stays on it.
 import {
   useEffect,
   useMemo,
@@ -65,9 +67,10 @@ export function navigate(
 ): void {
   const target = safeReturnPath(to) ?? "/";
   if (target === snapshot()) return;
+  const samePage = target.split(/[?#]/, 1)[0] === window.location.pathname;
   if (options.replace) window.history.replaceState(null, "", target);
   else window.history.pushState(null, "", target);
-  focusOnNextRender = !options.replace;
+  focusOnNextRender = !options.replace && !samePage;
   emit();
 }
 

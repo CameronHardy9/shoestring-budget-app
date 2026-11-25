@@ -32,6 +32,7 @@ import {
   forgetReturnPathUnlessFor,
   rememberReturnPath,
 } from "../lib/return-path.ts";
+import { beginOpening } from "../components/page-loader.ts";
 import { setReportUser } from "../observability/report.ts";
 import { discardStashedDraftUnlessFor } from "./draft-stash.ts";
 import { queryClient } from "./query.ts";
@@ -127,6 +128,10 @@ export function AuthProvider({
   /** Every status change; a sign-in drops what another user left behind. */
   const enter = useCallback((next: AuthStatus) => {
     if (next.kind === "signedIn") {
+      // A cold start, a back/forward-cache restore or the sign-in form: no
+      // navigation until the first page is revealed. Before the status change,
+      // so no commit in between can show any.
+      if (statusRef.current.kind !== "signedIn") beginOpening();
       forgetReturnPathUnlessFor(next.me.id);
       discardStashedDraftUnlessFor(next.me.id);
       lastUserIdRef.current = next.me.id;

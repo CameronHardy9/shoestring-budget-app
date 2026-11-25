@@ -11,8 +11,8 @@ import { findRoute, TAB_SCREENS } from "./app/routes.tsx";
 import { applyUpdate, useUpdateAvailable } from "./app/sw-register.ts";
 import { ToastProvider } from "./app/toast.tsx";
 import { Button } from "./components/Button.tsx";
-import { usePageCovered } from "./components/page-loader.ts";
 import { PageLoader } from "./components/PageLoader.tsx";
+import { PageMain } from "./components/PageMain.tsx";
 import { ErrorState, LoadingState } from "./components/States.tsx";
 import { rememberReturnPath, takeReturnPath } from "./lib/return-path.ts";
 import { NotFoundScreen } from "./screens/NotFoundScreen.tsx";
@@ -24,9 +24,9 @@ const PendingDeletionScreen = lazyScreen(
 
 function FullPage({ children }: { children: React.ReactNode }) {
   return (
-    <main inert={usePageCovered()} className="mx-auto max-w-md px-6 pt-16">
+    <PageMain interstitial className="mx-auto max-w-md px-6 pt-16">
       {children}
-    </main>
+    </PageMain>
   );
 }
 

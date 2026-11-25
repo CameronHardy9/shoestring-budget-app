@@ -1,7 +1,7 @@
 // Accessibility sweep: every route renders through the real App and guard,
 // with one <h1>, a main landmark, and no serious/critical axe violations.
-import { render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App.tsx";
 import { queryClient } from "./app/query.ts";
 import { apiError, json, mockApi } from "./test/api-mock.ts";
@@ -17,6 +17,7 @@ import {
   transaction,
 } from "./test/fixtures.ts";
 import { preloadScreens } from "./test/preload-screens.ts";
+import { stubReducedMotion } from "./test/reduced-motion.ts";
 
 const B = `/budgets/${BUDGET_ID}`;
 const signedInApi = {
@@ -45,16 +46,28 @@ const signedInApi = {
 
 beforeAll(preloadScreens);
 
+beforeEach(() => {
+  stubReducedMotion();
+});
+
 afterEach(() => {
   queryClient.clear();
 });
 
-async function check(path: string, heading: RegExp | string) {
+async function check(path: string, heading: RegExp | string, navigations = 0) {
   window.history.replaceState(null, "", path);
   const view = render(<App />);
   expect(
     await screen.findByRole("heading", { level: 1, name: heading }),
   ).toBeInTheDocument();
+  // The revealed page, navigation included (it comes with the reveal).
+  await waitFor(() => {
+    expect(view.container.querySelector("main:not([inert])")).not.toBeNull();
+    expect(screen.queryByTestId("loading-slot")).toBeNull();
+  });
+  expect(screen.queryAllByRole("navigation", { name: "Main" })).toHaveLength(
+    navigations,
+  );
   expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   expect(view.container.querySelector("main")).not.toBeNull();
   await expectNoAxeViolations(view.container);
@@ -89,6 +102,7 @@ describe("signed-in screens", () => {
     ["/confirm-email", "Link not valid"],
   ])("%s", async (path, heading) => {
     mockApi(signedInApi);
-    await check(path, heading);
+    const bare = path === "/budgets/new" || path === "/confirm-email";
+    await check(path, heading, bare ? 0 : 2);
   });
 });

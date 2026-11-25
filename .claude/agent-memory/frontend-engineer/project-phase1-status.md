@@ -1,6 +1,6 @@
 ---
 name: project-phase1-status
-description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR, lace loader, page loader session) as of 2026-11-24
+description: Frontend build status, owner decisions, device-only checks and UX rulings (MVP, hardening, lost-tap fixes, offline PR, lace loader, page loader session) as of 2026-11-25
 metadata:
   type: project
 ---
@@ -25,3 +25,5 @@ Lace loader (2026-11-23, "Loader D") was replaced on 2026-11-24 (feat/ivory-navy
 Quick-add keyboard (2026-11-24, fix/quick-add-keyboard, owner rulings): keep the keyboard up between fields by keeping focus on tap (Button `keepFocus`, ChipGroup `keepTextFocus` refocus; fallback to custom chips only if it flickers on the device), cap the sheet height above the keyboard, Payee Return = Next → Memo and Memo Return saves, split-row category stays a native select (picker wheel accepted), focus stays put after "Add category". Follow-up rulings same day: Spent/Received also keeps focus (SegmentedControl `keepFocus`); a tap that removes the focused field moves focus synchronously to the nearest field (Note hidden/Split off → Amount, bin → next row else previous). Still taking focus by design: Close, Delete confirmation, conflict panel, "Save this as a new transaction"; taps on empty sheet areas blur (normal iOS).
 **How to apply:** needs an owner check on the real iPhone PWA; see [[browser-and-tooling-quirks]].
 
+Opening without navigation + month switches (2026-11-25, fix/loader-nav-month, owner iPhone feedback on #35): the tab bar flicker was BudgetLayout's shell painting above the cover, then hidden by the app-level Suspense while Overview's chunk loaded. Now navigation is absent (not rendered) from sign-in state to the first revealed page (`beginOpening` in auth.tsx `enter`; ends with the reveal commit), grace covered plainly, and BudgetLayout has its own inner Suspense. Month switches use `exit="loaded"` via `useSwitchExit` (category filter too, owner ruling same day). Not done / reported: no client request timeout (owner accepted); lazy settings screens outside BudgetLayout still lose their shell while the chunk loads; a month load of 150-250 ms flashes the opaque cover briefly.
+**How to apply:** real-iPhone check still needed; see [[browser-and-tooling-quirks]].

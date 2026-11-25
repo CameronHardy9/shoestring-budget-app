@@ -57,7 +57,8 @@ export function MonthNav({
         icon="chevronLeft"
       />
       {showLabel ? (
-        <span className="text-sm font-semibold text-fg">
+        // Announced: focus stays on the arrow that changed it.
+        <span aria-live="polite" className="text-sm font-semibold text-fg">
           {monthLabel(month)}
         </span>
       ) : null}
