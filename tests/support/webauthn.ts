@@ -2,6 +2,8 @@
 // hand-encoded CBOR) so passkey registration and passkey assertions can run
 // through the real API with real signatures. Independent of the backend's own
 // test helper on purpose.
+// No Vitest import: the Playwright specs enrol passkeys through it too.
+import assert from "node:assert/strict";
 import {
   createHash,
   generateKeyPairSync,
@@ -9,7 +11,6 @@ import {
   sign,
 } from "node:crypto";
 import type { KeyObject } from "node:crypto";
-import { expect } from "vitest";
 import { env } from "./env.ts";
 import type { ApiClient } from "./http.ts";
 
@@ -149,7 +150,7 @@ export async function enrollPasskey(
   const options = await client.post<{ challenge: string; rp: { id?: string } }>(
     "/me/mfa/passkeys/options",
   );
-  expect(options.status, options.describe).toBe(200);
+  assert.equal(options.status, 200, options.describe);
   const res = await client.post<{
     passkey: { id: string };
     recoveryCodes: string[] | null;
@@ -157,7 +158,7 @@ export async function enrollPasskey(
     name,
     credential: authenticator.register(options.body),
   });
-  expect(res.status, res.describe).toBe(201);
+  assert.equal(res.status, 201, res.describe);
   return {
     authenticator,
     passkeyId: res.body.passkey.id,

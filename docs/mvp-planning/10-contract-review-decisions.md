@@ -198,3 +198,7 @@ Root cause (debugger): tapping a chip or button moves focus off the text field, 
 | Request that hangs during the opening (no navigation until it fails) | **Accepted as is**; no client time limit. |
 | Return in the gap between a successful save and the form reset can save a duplicate (pre-existing; reproduced only artificially) | **Fix in a separate follow-up PR**, straight after the chips. |
 | Long category names make Overview scroll sideways (found 2026-11-25; can block +) | **Fix now, in the same deploy** as #37, #39 and #40. |
+| Long payees and split names in transaction rows | **Wrap in full** (a memo used as the title stops at 3 lines). |
+| Character limits for new text (form fields only; contract, server and database unchanged) | **Category 24, payee 30, budget name 30, display name 30, memo 200.** Longer text already saved stays as it is and must remain editable. **Next release**, own PR. |
+| Members at 320 px: buttons below the name | **Accepted.** |
+| Overflow at 150-200% text size (pre-existing) | **Own task, later.** |

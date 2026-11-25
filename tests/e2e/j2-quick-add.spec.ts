@@ -721,11 +721,8 @@ test.describe("J2 quick-add", () => {
         })),
       });
       await signInAs(page, user.email);
-      // From Transactions, which shows no category names while it is empty: on
-      // Overview the long one overflows the page (product bug, reported to
-      // frontend-engineer 2026-11-25), and this test is about the sheet.
-      await page.goto(`/budgets/${budget.id}/transactions`);
-      await expect(page.getByTestId("quick-add-open")).toBeVisible();
+      await page.goto(`/budgets/${budget.id}`);
+      await expect(page.getByTestId("total-remaining")).toHaveText("$800.00");
       const tap = (l: Locator) => (hasTouch ? l.tap() : l.click());
       await tap(quickAddOpener(page));
       const sheet = page.getByTestId("quick-add-sheet");
