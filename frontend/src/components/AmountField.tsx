@@ -89,7 +89,7 @@ export function AmountField({
         className={cx(
           "flex items-baseline gap-0.5 text-fg",
           display
-            ? "justify-center"
+            ? "max-w-full justify-center"
             : "rounded-md border border-line-strong bg-surface px-3",
         )}
       >

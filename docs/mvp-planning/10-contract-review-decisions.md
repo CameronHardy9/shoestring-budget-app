@@ -197,3 +197,4 @@ Root cause (debugger): tapping a chip or button moves focus off the text field, 
 | Transactions category filter loader | **Ends as soon as the list has loaded**, like a month change. |
 | Request that hangs during the opening (no navigation until it fails) | **Accepted as is**; no client time limit. |
 | Return in the gap between a successful save and the form reset can save a duplicate (pre-existing; reproduced only artificially) | **Fix in a separate follow-up PR**, straight after the chips. |
+| Long category names make Overview scroll sideways (found 2026-11-25; can block +) | **Fix now, in the same deploy** as #37, #39 and #40. |

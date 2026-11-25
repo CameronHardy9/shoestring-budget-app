@@ -155,7 +155,7 @@ export function EmptyState({
       <span className="flex size-12 items-center justify-center rounded-full bg-brand-soft text-brand-strong">
         <Icon name={icon} size={24} />
       </span>
-      <h2 className="text-lg font-semibold text-fg">{title}</h2>
+      <h2 className="text-lg font-semibold wrap-anywhere text-fg">{title}</h2>
       {children ? (
         <div className="max-w-sm text-sm text-fg-muted">{children}</div>
       ) : null}
@@ -257,7 +257,7 @@ export function FormError({ error }: { error: unknown }) {
       data-testid="form-error"
     >
       <Icon name="alert" size={18} className="mt-px shrink-0" />
-      <div className="flex flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-0.5">
         <span className="font-medium">{described.message}</span>
         {described.diagnostics && described.requestId ? (
           <Diagnostics requestId={described.requestId} />

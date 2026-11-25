@@ -301,20 +301,26 @@ function Row({
         className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left active:bg-sunken"
         data-testid="category-row"
       >
-        <span className="flex-1 text-base font-medium text-fg">
-          {category.name}
-        </span>
-        {entry && entry.amountCents > 0 ? (
-          <Money
-            cents={entry.amountCents}
-            className="text-base font-semibold text-fg"
-          />
-        ) : (
-          <span className="text-sm text-fg-muted">
-            {category.archived ? "Archived" : "No limit"}
+        <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3">
+          <span className="min-w-0 flex-1 basis-28 text-base font-medium wrap-anywhere text-fg">
+            {category.name}
           </span>
-        )}
-        <Icon name="chevronRight" size={18} className="text-fg-muted" />
+          {entry && entry.amountCents > 0 ? (
+            <Money
+              cents={entry.amountCents}
+              className="ml-auto text-base font-semibold text-fg"
+            />
+          ) : (
+            <span className="ml-auto text-sm text-fg-muted">
+              {category.archived ? "Archived" : "No limit"}
+            </span>
+          )}
+        </span>
+        <Icon
+          name="chevronRight"
+          size={18}
+          className="shrink-0 text-fg-muted"
+        />
       </button>
     </li>
   );
@@ -389,7 +395,7 @@ export default function CategoriesScreen() {
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-4 px-4 pt-4 lg:px-8 lg:pt-8">
       <header className="flex flex-wrap items-center justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-medium text-fg-muted">{budget.name}</p>
           <h1 className="text-2xl font-semibold text-fg">
             Categories &amp; limits

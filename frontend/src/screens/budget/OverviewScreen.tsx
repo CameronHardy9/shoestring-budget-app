@@ -1,7 +1,7 @@
 // /budgets/{budgetId}: the month at a glance (J3). Every number comes from
 // GET …/summary; overspending is shown in words and with an icon, and the
 // chart has a table alternative.
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-aria-components";
 import type { CategorySummary } from "../../api/types.ts";
 import { useCategories, useSummary, useTransactions } from "../../app/data.ts";
@@ -17,6 +17,7 @@ import {
   PendingSlot,
 } from "../../components/States.tsx";
 import { daysLeftInMonth, monthLabel, monthName } from "../../lib/dates.ts";
+import { hasLongWord } from "../../lib/text.ts";
 import { monthFrom, useCurrentBudget } from "./BudgetLayout.tsx";
 import { TransactionRow } from "./TransactionRow.tsx";
 import { useSwitchExit } from "./useSwitchExit.ts";
@@ -38,14 +39,14 @@ function Card({
 function Remaining({ line }: { line: CategorySummary }) {
   if (line.remainingCents < 0) {
     return (
-      <span className="flex items-center gap-1 text-sm font-semibold text-danger">
-        <Icon name="alert" size={16} />
+      <span className="ml-auto flex flex-wrap items-center justify-end gap-x-1 text-sm font-semibold text-danger">
+        <Icon name="alert" size={16} className="shrink-0" />
         Over by <Money cents={-line.remainingCents} />
       </span>
     );
   }
   return (
-    <span className="text-sm text-fg-muted">
+    <span className="ml-auto text-sm text-fg-muted">
       <Money cents={line.remainingCents} className="font-semibold text-fg" />{" "}
       left
     </span>
@@ -67,8 +68,10 @@ export function CategoryChart({
           key={line.categoryId}
           className="flex flex-col gap-2 py-3.5 first:pt-1 last:pb-1"
         >
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="truncate text-base font-medium text-fg">
+          {/* A name that doesn't fit beside the amount gets the full width and
+              wraps, with the amount below it. */}
+          <div className="flex flex-wrap items-baseline gap-x-3">
+            <span className="min-w-0 text-base font-medium wrap-anywhere text-fg">
               {line.name}
               {line.archived ? (
                 <span className="text-sm font-normal text-fg-muted">
@@ -93,6 +96,43 @@ export function CategoryChart({
   );
 }
 
+/**
+ * Scrolls sideways inside its card when a table can't fit (money never wraps),
+ * so the page never does. Then, and only then, it is a labelled tab stop:
+ * Safari doesn't make scroll containers keyboard-focusable by itself.
+ */
+function ScrollRegion({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      setScrolls(el.scrollWidth > el.clientWidth);
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+  return (
+    <div
+      ref={ref}
+      className="-mx-1 overflow-x-auto"
+      {...(scrolls ? { role: "region", "aria-label": label, tabIndex: 0 } : {})}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function CategoryTable({
   lines,
   month,
@@ -104,7 +144,7 @@ export function CategoryTable({
 }) {
   const cell = "px-1 py-2.5 text-right";
   return (
-    <div className="-mx-1 overflow-x-auto">
+    <ScrollRegion label={`Spending by category, ${monthLabel(month)}`}>
       <table className="w-full text-left text-sm" data-testid="category-table">
         <caption className="sr-only">
           Spending by category, {monthLabel(month)}
@@ -129,7 +169,16 @@ export function CategoryTable({
           {lines.map((line) => (
             <tr key={line.categoryId}>
               <th scope="row" className="px-1 py-2.5 font-medium text-fg">
-                {line.name}
+                {hasLongWord(line.name) ? (
+                  // Breaks rather than push the amounts out of the card. Not
+                  // for every name: it would let the column squeeze "Transport"
+                  // too, as a table shares space out by its cells' minimums.
+                  <span className="block min-w-20 wrap-anywhere">
+                    {line.name}
+                  </span>
+                ) : (
+                  line.name
+                )}
               </th>
               <td className={cell}>
                 <Money cents={line.plannedCents} />
@@ -167,7 +216,7 @@ export function CategoryTable({
           </tr>
         </tfoot>
       </table>
-    </div>
+    </ScrollRegion>
   );
 }
 
@@ -182,11 +231,9 @@ export default function OverviewScreen() {
   const [view, setView] = useState<"chart" | "table">("chart");
 
   const header = (
-    <header className="flex items-center justify-between gap-2">
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-fg-muted">
-          {budget.name}
-        </p>
+    <header className="flex flex-wrap items-center justify-between gap-2">
+      <div className="min-w-0 flex-1 basis-36">
+        <p className="text-sm font-medium text-fg-muted">{budget.name}</p>
         {/* Announced: a month arrow keeps focus, and this is its only label. */}
         <h1 aria-live="polite" className="text-2xl font-semibold text-fg">
           {monthName(month)}
@@ -235,23 +282,31 @@ export default function OverviewScreen() {
   const incomeLines = data.categories.filter((c) => c.kind === "income");
   const overCount = expenseLines.filter((c) => c.remainingCents < 0).length;
   const isCurrent = month === budget.currentMonth;
+  const totalSize =
+    Math.abs(expense.remainingCents) < 1_000_000
+      ? "text-total"
+      : "text-total-long";
   const recentItems = recent.data?.pages[0]?.items ?? [];
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 pt-4 lg:px-8 lg:pt-8">
       {header}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+      {/* grid-cols-1 is minmax(0, 1fr): a plain grid's auto column grows to
+          the longest unwrapped text in it, wider than the phone. */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
         <div className="flex flex-col gap-4">
           <Card>
             <h2 className="text-sm font-medium text-fg-muted">
               {expense.remainingCents < 0 ? "Over budget by" : "Left to spend"}
             </h2>
-            <p
-              className={`mt-0.5 text-3xl font-semibold ${expense.remainingCents < 0 ? "text-danger" : "text-fg"}`}
-              data-testid="total-remaining"
-            >
-              <Money cents={Math.abs(expense.remainingCents)} />
-            </p>
+            <div className="@container mt-0.5">
+              <p
+                className={`${totalSize} font-semibold ${expense.remainingCents < 0 ? "text-danger" : "text-fg"}`}
+                data-testid="total-remaining"
+              >
+                <Money cents={Math.abs(expense.remainingCents)} />
+              </p>
+            </div>
             <p className="mt-1 text-sm text-fg-muted">
               <Money cents={expense.actualCents} /> spent of{" "}
               <Money cents={expense.plannedCents} /> planned
@@ -296,11 +351,11 @@ export default function OverviewScreen() {
             </EmptyState>
           ) : (
             <Card>
-              <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <h2 className="text-lg font-semibold text-fg">Categories</h2>
                 <SegmentedControl
                   label="Show categories as"
-                  className="w-40"
+                  className="max-w-40 flex-1 basis-34"
                   value={view}
                   onChange={setView}
                   options={[

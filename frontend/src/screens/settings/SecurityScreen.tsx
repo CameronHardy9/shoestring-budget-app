@@ -426,7 +426,7 @@ export default function SecurityScreen() {
                         key={p.id}
                         className="flex items-center justify-between gap-2 py-1.5"
                       >
-                        <span className="text-fg">{p.name}</span>
+                        <span className="min-w-0 text-fg">{p.name}</span>
                         <Button
                           variant="secondary"
                           size="sm"

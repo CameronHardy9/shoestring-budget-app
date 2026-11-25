@@ -1,6 +1,7 @@
 // One transaction line. Outflows show plain amounts; inflows show "+" in the
 // success colour plus the word "refund" or "income", never colour alone.
 import type { Category, Transaction } from "../../api/types.ts";
+import { cx } from "../../components/cx.ts";
 import { Money } from "../../components/Money.tsx";
 import { dayLabel } from "../../lib/dates.ts";
 
@@ -34,6 +35,7 @@ export function TransactionRow({
   );
   const categoryText = describeSplits(t, categories);
   const title = t.payee ?? t.memo ?? categoryText;
+  const titleIsMemo = t.payee === null && t.memo !== null;
   const detail = [
     (t.payee ?? t.memo) ? categoryText : null,
     inflow ? (allIncome ? "income" : "refund") : null,
@@ -47,13 +49,23 @@ export function TransactionRow({
       onClick={() => {
         onOpen(t);
       }}
-      className="flex min-h-14 w-full items-center gap-3 px-4 py-2.5 text-left active:bg-sunken"
+      className="flex min-h-14 w-full flex-wrap items-center gap-x-3 px-4 py-2.5 text-left active:bg-sunken"
       data-testid="transaction-row"
     >
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-base font-medium text-fg">{title}</span>
+      {/* Wraps, so whole names are readable; the amount moves below only where
+          there's no room beside it. */}
+      <span className="flex min-w-0 flex-1 basis-28 flex-col">
+        <span
+          className={cx(
+            "text-base font-medium wrap-anywhere text-fg",
+            // A memo can be 500 characters; all of it is in the edit sheet.
+            titleIsMemo && "line-clamp-3",
+          )}
+        >
+          {title}
+        </span>
         {detail ? (
-          <span className="truncate text-sm text-fg-muted">{detail}</span>
+          <span className="text-sm wrap-anywhere text-fg-muted">{detail}</span>
         ) : null}
       </span>
       <Money
@@ -61,8 +73,8 @@ export function TransactionRow({
         sign={inflow ? "always" : "never"}
         className={
           inflow
-            ? "text-base font-semibold text-success"
-            : "text-base font-semibold text-fg"
+            ? "ml-auto text-base font-semibold text-success"
+            : "ml-auto text-base font-semibold text-fg"
         }
       />
     </button>
