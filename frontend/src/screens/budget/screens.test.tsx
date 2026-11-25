@@ -421,7 +421,7 @@ describe("quick-add chip order and the recent-list prefetch", () => {
     });
     return within(group)
       .getAllByRole("radio")
-      .map((r) => r.closest("label")?.textContent ?? "");
+      .map((r) => r.textContent);
   }
 
   it("keeps the chip order through Save & new; the category just used leads next time", async () => {

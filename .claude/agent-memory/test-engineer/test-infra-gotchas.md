@@ -47,6 +47,14 @@ Learned on the offline PR (2026-11-17, PW 1.65):
 - An offline (refused) fetch still emits Playwright `request` events with its headers (Idempotency-Key observable). `page.request` ignores setOffline.
 - **Recurring false-alarm class: digit patterns vs clock-derived IDs (2026-11-17).** The Sentry gate's `8765` amount regex matched "-8765-" inside a UUIDv7 (leading groups = clock), only at certain times. Mask UUIDs, 32-hex IDs and lineno/colno/timestamp/status_code values first (support/pii-scan.ts, unit-tested). Apply the same masking to any new "value must not appear" scan.
 
+Learned on the quick-add chips (2026-11-25, PW 1.65):
+- **A held touch can't be faked natively.** In Chromium's emulation a 1.2 s CDP touch still ends in mousedown/click (no long press); WebKit has no CDP. A slow press must be scripted pointer events (`slowPress` in j2), labelled as such, plus a RELEASE-CHECKLIST line.
+- **`toHaveValue` is not "React has rendered it".** The display amount's width (value.length ch) lagged a keystroke behind the DOM value in ~6 % of runs. Before comparing rects, type text that doesn't change the layout (4 characters) instead of waiting.
+- **A long category name (35 of 40 allowed characters) overflowed Overview at 375 px** (scrollWidth 419), which on Chromium mobile also shifts fixed elements so "+" taps miss. Reported 2026-11-25. Symptom: the tap hangs until timeout and the screenshot is panned.
+- Visual-only run without `make e2e`: e2e-up stack + e2e.sh's docker run; `CI=1` inside the container never writes a baseline (compare), empty CI writes missing ones.
+- Long negative checks: run them in the background, and never edit the spec while they run.
+- **A scripted `blur()` inside the sheet doesn't last:** React Aria's focus trap refocuses the field in a frame, so "Done closes the keyboard" can't be simulated; leave it to RELEASE-CHECKLIST.
+
 Learned regenerating visual baselines (2026-11-24, PW 1.65):
 - **Regenerate = delete the PNGs, then `make e2e`** (no update-snapshots knob in .github/scripts/e2e.sh; local config is `updateSnapshots: "missing"`). A "writing actual" test PASSES in 1.65, so the regenerate run proves nothing: always run `make e2e` a second time to compare. A full run takes about 7.5 min.
 - `snap()` now asserts no `data-testid="loading"` before every shot: the page-level loader is `position: fixed` (data-placement="viewport") and can sit over finished content, and an inline one can hide behind a sheet's scrim.

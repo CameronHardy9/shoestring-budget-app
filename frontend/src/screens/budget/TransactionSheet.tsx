@@ -359,12 +359,29 @@ function Editor({
     keepIds,
   );
   const ordered = frozen ? keepKnownFirst(liveOrder, frozen.known) : liveOrder;
-  const chips = showAll ? ordered : ordered.slice(0, CHIP_LIMIT);
-  const selectedHidden =
-    draft.categoryId !== null && !chips.some((c) => c.id === draft.categoryId);
-  const visibleChips = selectedHidden
-    ? [...chips, ...ordered.filter((c) => c.id === draft.categoryId)]
-    : chips;
+  // Selected chips beyond the first few, in the order they were added. Once
+  // shown they stay until the sheet closes: tapping another chip must not take
+  // one away.
+  const [extraIds, setExtraIds] = useState<readonly string[]>([]);
+  const first = ordered.slice(0, CHIP_LIMIT);
+  const isFirst = (id: string) => first.some((c) => c.id === id);
+  const selected = draft.categoryId;
+  if (
+    frozen !== null &&
+    !showAll &&
+    selected !== null &&
+    !isFirst(selected) &&
+    !extraIds.includes(selected)
+  )
+    setExtraIds([...extraIds, selected]);
+  const visibleChips = showAll
+    ? ordered
+    : [
+        ...first,
+        ...extraIds.flatMap((id) =>
+          isFirst(id) ? [] : ordered.filter((c) => c.id === id),
+        ),
+      ];
 
   const today = budget?.today ?? "";
   const built = buildTransaction(draft, today);
@@ -627,7 +644,6 @@ function Editor({
               <ChipGroup
                 label="Category"
                 hideLabel
-                keepTextFocus
                 chips={visibleChips.map((c) => ({ id: c.id, label: c.name }))}
                 value={draft.categoryId}
                 onChange={(categoryId) => {
