@@ -3,7 +3,8 @@
 // Acceptance: the amount field opens the numeric keypad; the date defaults to
 // today in the budget timezone; splits must sum, with "left to assign".
 // Focus continuity (touch projects): no tap in the sheet takes focus out of
-// the text field, so the phone keyboard stays up.
+// the text field, so the phone keyboard stays up. Choosing a category moves
+// nothing on screen.
 import type { Locator, Page, Request } from "@playwright/test";
 import { createBudget, createUser } from "../support/factories.ts";
 import type { TestBudget } from "../support/factories.ts";
@@ -45,6 +46,8 @@ declare global {
   interface Window {
     /** focusin/focusout trail of the focus-continuity journey (init script). */
     __focusTrail?: string[];
+    /** Events the control under a slow press received (slowPress). */
+    __pressTrail?: string[];
   }
 }
 
@@ -86,8 +89,9 @@ async function recordFocusTrail(page: Page): Promise<void> {
 /**
  * Focus checks for one journey: `mark()` starts a step, `expect()` asserts
  * where focus is now and, on failure, appends the step's focus trail to the
- * error. `expectNeverLeft()` is stricter: no focusout at all since mark()
- * (the keepFocus buttons cancel mousedown, so focus must not even blink).
+ * error. `expectNeverLeft()` is stricter: no focusout and no focusin at all
+ * since mark(). The chips and the keepFocus buttons cancel mousedown; blurring
+ * and refocusing the field, even in one task, flickers the iPhone keyboard.
  */
 class FocusSteps {
   private readonly page: Page;
@@ -116,10 +120,85 @@ class FocusSteps {
     await this.expect(target, step);
     const t = await this.page.evaluate(() => [...(window.__focusTrail ?? [])]);
     expect(
-      t.filter((s) => s.startsWith("out")),
-      `${step}: focus never left the field (a keepFocus tap cancels mousedown)\n${await this.trail()}`,
+      t,
+      `${step}: no focus event at all since mark() (the tap must cancel mousedown's default, or the phone keyboard flickers)\n${await this.trail()}`,
     ).toEqual([]);
   }
+}
+
+/** How long the finger stays down in slowPress(). */
+const HOLD_MS = 1_200;
+
+/**
+ * Waits until the page's clock has moved on by `ms`. Only for input that takes
+ * time (a held finger) and for proving that a product timer did NOT act a
+ * second time; never to wait for the app to become ready.
+ */
+async function passPageTime(page: Page, ms: number): Promise<void> {
+  const until = (await page.evaluate(() => performance.now())) + ms;
+  await page.waitForFunction((t) => performance.now() >= t, until);
+}
+
+/**
+ * A slow press: one finger held on `target` for HOLD_MS, then lifted, scripted
+ * as iOS and Android deliver one: pointer and touch events, but no mouse
+ * events, no default focus change and no click. The app must act on those
+ * alone. Scripted on both engines because Playwright can't hold a touch on
+ * WebKit, and in Chromium's emulation a held DevTools touch still ends in a
+ * native click (tried). So this proves what the app does with such a press,
+ * not that the phone sends one: RELEASE-CHECKLIST.md §1 has the real check.
+ *
+ * Returns once React Aria's own 80 ms fallback for such presses is past, so an
+ * action made twice has happened by then, and checks that exactly one click,
+ * the app's own, reached the control (`appClicks` 0: it acts without one).
+ */
+async function slowPress(
+  page: Page,
+  target: Locator,
+  appClicks: 0 | 1,
+): Promise<void> {
+  await target.scrollIntoViewIfNeeded();
+  await target.evaluate((el) => {
+    const trail: string[] = [];
+    window.__pressTrail = trail;
+    for (const type of ["pointerup", "mousedown", "click"])
+      el.addEventListener(type, () => trail.push(type), true);
+  });
+  const finger = async (phase: "down" | "up") => {
+    await target.evaluate((el, phase) => {
+      const r = el.getBoundingClientRect();
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        clientX: r.x + r.width / 2,
+        clientY: r.y + r.height / 2,
+      };
+      el.dispatchEvent(
+        new PointerEvent(`pointer${phase}`, {
+          ...init,
+          pointerId: 7,
+          pointerType: "touch",
+          isPrimary: true,
+          width: 30,
+          height: 30,
+          buttons: phase === "down" ? 1 : 0,
+          pressure: phase === "down" ? 0.5 : 0,
+        }),
+      );
+      el.dispatchEvent(
+        new Event(phase === "down" ? "touchstart" : "touchend", init),
+      );
+    }, phase);
+  };
+  await finger("down");
+  await passPageTime(page, HOLD_MS);
+  await finger("up");
+  await passPageTime(page, 400);
+  expect(
+    await page.evaluate(() => window.__pressTrail),
+    "the slow press: one pointerup, then the app's own click if it makes one",
+  ).toEqual(["pointerup", ...(appClicks ? ["click"] : [])]);
 }
 
 test.describe("J2 quick-add", () => {
@@ -278,10 +357,12 @@ test.describe("J2 quick-add", () => {
   });
 
   // The owner's iPhone bug: tapping a chip or button in the sheet moved focus
-  // off the text field, so iOS closed the keyboard. Playwright's WebKit shows
-  // no keyboard, so the test proves the cause instead: after every tap, focus
-  // is still in (or handed straight to) a text field. A real-device check is
-  // still on RELEASE-CHECKLIST.md (frontend/CLAUDE.md).
+  // off the text field, so iOS closed the keyboard; handing focus back in the
+  // same task still made it flicker. Playwright's WebKit shows no keyboard, so
+  // the test proves the cause instead: a tap causes no focus event at all, or,
+  // when it removes the field being typed in, hands focus straight to another
+  // text field. A real-device check is still on RELEASE-CHECKLIST.md
+  // (frontend/CLAUDE.md).
   test("the keyboard stays up: chips, buttons and removed fields keep focus in a text field on touch", async ({
     page,
     hasTouch,
@@ -303,8 +384,8 @@ test.describe("J2 quick-add", () => {
     const budget = await openBudget(page);
     const focus = new FocusSteps(page);
 
-    // 1. Open: the amount has focus. A category chip selects and hands
-    //    focus straight back to the amount.
+    // 1. Open: the amount has focus. A category chip selects and moves no
+    //    focus.
     await quickAddOpener(page).tap();
     const sheet = page.getByTestId("quick-add-sheet");
     const amount = page.getByTestId("quick-add-amount");
@@ -317,7 +398,7 @@ test.describe("J2 quick-add", () => {
     await focus.mark();
     await chip("Groceries").tap();
     await expect(chipRadio("Groceries")).toBeChecked();
-    await focus.expect(amount, "tapping a chip keeps the amount focused");
+    await focus.expectNeverLeft(amount, "tapping a chip keeps the amount");
 
     // 2. Spent / Received (keepFocus segmented control).
     const type = sheet.getByRole("radiogroup", { name: "Type" });
@@ -352,7 +433,7 @@ test.describe("J2 quick-add", () => {
     await focus.mark();
     await chip("Dining").tap();
     await expect(chipRadio("Dining")).toBeChecked();
-    await focus.expect(memo, "tapping a chip from Memo keeps Memo focused");
+    await focus.expectNeverLeft(memo, "tapping a chip from Memo keeps Memo");
     await focus.mark();
     await note.tap();
     await expect(memo).toHaveCount(0);
@@ -371,8 +452,10 @@ test.describe("J2 quick-add", () => {
     // 5. Split: removing the row being typed in hands focus to the next row,
     //    else the previous one; "Put the rest" keeps it; Split off → amount.
     await page.keyboard.type("30");
+    await focus.mark();
     await chip("Groceries").tap();
-    await focus.expect(amount, "chip before Split keeps the amount");
+    await expect(chipRadio("Groceries")).toBeChecked();
+    await focus.expectNeverLeft(amount, "chip before Split keeps the amount");
     await focus.mark();
     await sheet.getByRole("button", { name: "Split", exact: true }).tap();
     const editor = page.getByTestId("split-editor");
@@ -444,8 +527,9 @@ test.describe("J2 quick-add", () => {
     const radios = categories.getByRole("radio");
     const count = await radios.count();
     const at = await radios.evaluateAll((els) =>
-      els.findIndex((el) => (el as HTMLInputElement).checked),
+      els.findIndex((el) => el.getAttribute("aria-checked") === "true"),
     );
+    expect(at, "a chip is checked").toBeGreaterThanOrEqual(0);
     await page.keyboard.press("ArrowRight");
     const next = radios.nth((at + 1) % count);
     await expect(next, "ArrowRight selects the next chip").toBeChecked();
@@ -512,5 +596,180 @@ test.describe("J2 quick-add", () => {
     expect(saved[0]!.splits).toEqual([
       { categoryId: budget.categories.Dining, amountCents: 1_234 },
     ]);
+  });
+
+  // Every chip is always as big as it is when selected. Before, selecting one
+  // (check mark, bold) widened it, so the chips rewrapped and the sheet and
+  // the amount jumped under the thumb.
+  for (const width of [375, 390]) {
+    test(`choosing a category moves nothing at ${width} px: every chip, the amount and the sheet keep their place`, async ({
+      page,
+      hasTouch,
+    }) => {
+      // Tall enough that nothing scrolls: scrolling would move every rect.
+      await page.setViewportSize({ width, height: 1_200 });
+      const user = await createUser({ prefix: "still" });
+      const budget = await createBudget(user, {
+        name: "Still household",
+        // The first six fill their rows so that the check mark and bold text
+        // would rewrap them; the longest is as wide as the row.
+        categories: [
+          "Groceries",
+          "Dining out",
+          "Transport",
+          "Utilities",
+          "Home repairs, garden and maintenance",
+          "Phone and internet",
+          "Subscriptions",
+          "Gifts",
+        ].map((name) => ({
+          name,
+          kind: "expense" as const,
+          plannedCents: 10_000,
+        })),
+      });
+      await signInAs(page, user.email);
+      // From Transactions, which shows no category names while it is empty: on
+      // Overview the long one overflows the page (product bug, reported to
+      // frontend-engineer 2026-11-25), and this test is about the sheet.
+      await page.goto(`/budgets/${budget.id}/transactions`);
+      await expect(page.getByTestId("quick-add-open")).toBeVisible();
+      const tap = (l: Locator) => (hasTouch ? l.tap() : l.click());
+      await tap(quickAddOpener(page));
+      const sheet = page.getByTestId("quick-add-sheet");
+      const amount = page.getByTestId("quick-add-amount");
+      await expect(amount).toBeFocused();
+      // Four characters: the amount is that wide already when empty, so a late
+      // render of the typing can't be mistaken for a tap moving it.
+      await page.keyboard.type("9.50");
+      const categories = sheet.getByRole("radiogroup", { name: "Category" });
+      const radios = categories.getByRole("radio");
+      const radio = (name: string) =>
+        categories.getByRole("radio", { name, exact: true });
+      await expect(radios).toHaveCount(6);
+      await expect(amount).toHaveValue("9.50");
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+
+      type Rects = Record<string, string>;
+      const layout = async (): Promise<Rects> => {
+        const rect = (l: Locator) =>
+          l.evaluate((el) => {
+            const { x, y, width: w, height: h } = el.getBoundingClientRect();
+            return `x ${x} y ${y} w ${w} h ${h}`;
+          });
+        const chips = await radios.evaluateAll((els) =>
+          els.map((el) => {
+            const { x, y, width: w, height: h } = el.getBoundingClientRect();
+            return [
+              `chip ${el.textContent}`,
+              `x ${x} y ${y} w ${w} h ${h}`,
+            ] as const;
+          }),
+        );
+        return {
+          ...Object.fromEntries(chips),
+          amount: await rect(amount),
+          sheet: await rect(sheet),
+          save: await rect(page.getByTestId("quick-add-save")),
+        };
+      };
+      /** Taps every chip shown, then the first again; nothing may move. */
+      const tapAll = async (when: string): Promise<string[]> => {
+        const names = await radios.allTextContents();
+        const before = await layout();
+        for (const name of [...names, names[0]!]) {
+          await tap(radio(name));
+          await expect(radio(name)).toBeChecked();
+          expect(
+            await layout(),
+            `${when}: tapping "${name}" moved or resized something`,
+          ).toEqual(before);
+        }
+        return names;
+      };
+
+      await tapAll("first six chips, none selected before the first tap");
+
+      // A chip beyond the first six, once chosen, stays where it is.
+      await tap(sheet.getByRole("button", { name: "All categories (8)" }));
+      await expect(radios).toHaveCount(8);
+      await tapAll("all eight chips");
+      await tap(radio("Gifts"));
+      await expect(radio("Gifts")).toBeChecked();
+      await tap(sheet.getByRole("button", { name: "Fewer categories" }));
+      await expect(radios).toHaveCount(7);
+      const names = await tapAll("six chips and the chosen seventh");
+      expect(names.at(-1), "the extra chip is last, and stays").toBe("Gifts");
+      await expect(radio("Gifts")).toBeVisible();
+      await expect(radio("Gifts")).not.toBeChecked();
+    });
+  }
+
+  // iOS and Android send no click after a long touch. React Aria's fallback
+  // focuses the control first, which closes the phone keyboard; the app acts
+  // before it (useSlowPress.ts).
+  test("a slow press on a chip, Received, Note and Save & new acts once and keeps focus in the amount", async ({
+    page,
+    hasTouch,
+  }) => {
+    test.skip(
+      !hasTouch,
+      "touch-only: a mouse press always gets its click, however long it is held",
+    );
+    await recordFocusTrail(page);
+    let posts = 0;
+    page.on("request", (r) => {
+      if (
+        r.method() === "POST" &&
+        new URL(r.url()).pathname.endsWith("/transactions")
+      )
+        posts += 1;
+    });
+    const budget = await openBudget(page);
+    const focus = new FocusSteps(page);
+    await quickAddOpener(page).tap();
+    const sheet = page.getByTestId("quick-add-sheet");
+    const amount = page.getByTestId("quick-add-amount");
+    await focus.expect(amount, "the amount is focused when the sheet opens");
+    await page.keyboard.type("12.34");
+
+    await focus.mark();
+    const dining = sheet.getByRole("radio", { name: "Dining", exact: true });
+    await slowPress(page, dining, 0);
+    await expect(dining).toBeChecked();
+    await focus.expectNeverLeft(amount, "a slow press on a chip");
+
+    await focus.mark();
+    const received = sheet.getByRole("radio", { name: "Received" });
+    await slowPress(page, received, 1);
+    await expect(received).toBeChecked();
+    await focus.expectNeverLeft(amount, "a slow press on Received");
+    const spent = sheet.getByRole("radio", { name: "Spent" });
+    await spent.tap();
+    await expect(spent).toBeChecked();
+    await focus.expectNeverLeft(amount, "Spent, tapped back");
+
+    // Note is a toggle: acting twice would leave it closed.
+    await focus.mark();
+    const note = sheet.getByRole("button", { name: "Note" });
+    await slowPress(page, note, 1);
+    await expect(note).toHaveAttribute("aria-pressed", "true");
+    await expect(sheet.getByLabel("Payee", { exact: true })).toBeVisible();
+    await focus.expectNeverLeft(amount, "a slow press on Note");
+
+    await focus.mark();
+    await slowPress(page, page.getByTestId("quick-add-save-new"), 1);
+    await expect(page.getByTestId("sheet-status")).toHaveText(
+      "Saved $12.34 to Dining",
+    );
+    await expect(amount).toHaveValue("");
+    await focus.expectNeverLeft(amount, "a slow press on Save & new");
+    expect(posts, "exactly one create").toBe(1);
+    const saved = await transactions(page, budget.id);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatchObject({
+      amountCents: 1_234,
+      direction: "outflow",
+    });
   });
 });

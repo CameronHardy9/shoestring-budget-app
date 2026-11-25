@@ -1,6 +1,13 @@
 import { onlineManager } from "@tanstack/react-query";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { apiError, json, mockApi } from "../../test/api-mock.ts";
 import { expectNoAxeViolations } from "../../test/axe.ts";
@@ -15,6 +22,7 @@ import {
 import { deferred, tappableAfter } from "../../test/layout.ts";
 import { renderWithApp } from "../../test/render.tsx";
 import { keys } from "../../app/data.ts";
+import { SLOW_PRESS_WAIT_MS } from "../../components/useSlowPress.ts";
 import { TransactionSheet, type SheetMode } from "./TransactionSheet.tsx";
 
 const TX = `/budgets/${BUDGET_ID}/transactions`;
@@ -123,7 +131,7 @@ describe("quick-add", () => {
     const names = () =>
       within(group)
         .getAllByRole("radio")
-        .map((r) => r.closest("label")?.textContent ?? "");
+        .map((r) => r.textContent);
     const before = names();
     // Another member adds "Pets", which would sort first on its own.
     view.client.setQueryData(keys.categories(BUDGET_ID), {
@@ -131,6 +139,75 @@ describe("quick-add", () => {
     });
     await waitFor(() => {
       expect(names()).toEqual([...before, "Pets"]);
+    });
+  });
+
+  describe("a selected chip beyond the first six", () => {
+    const eight = [
+      ...categories.filter((c) => c.kind === "expense" && !c.archived),
+      ...["Pets", "Gifts", "Books", "Travel", "Health", "Music"].map(
+        (n, i) => ({
+          ...category(20 + i, n),
+          sortOrder: 100 + i,
+        }),
+      ),
+    ];
+    const last = eight.at(-1);
+    const names = () =>
+      within(within(sheet()).getByRole("radiogroup", { name: "Category" }))
+        .getAllByRole("radio")
+        .map((r) => r.textContent);
+    const toggle = (name: RegExp) =>
+      userEvent.click(within(sheet()).getByRole("button", { name }));
+
+    async function openWith(mode?: SheetMode) {
+      mockApi({
+        ...base,
+        [`GET /budgets/${BUDGET_ID}/categories`]: json(200, { items: eight }),
+      });
+      open(mode);
+      await within(sheet()).findByRole("radiogroup", { name: "Category" });
+    }
+
+    it("stays in place when another chip is tapped (editing)", async () => {
+      if (!last) throw new Error("no category");
+      await openWith({
+        kind: "edit",
+        transaction: transaction(1, {
+          splits: [{ categoryId: last.id, amountCents: 1250 }],
+        }),
+      });
+      const before = names();
+      expect(before).toHaveLength(7);
+      expect(before.at(-1)).toBe("Music");
+      await userEvent.click(chip(before[0] ?? ""));
+      expect(names()).toEqual(before);
+      await userEvent.click(chip("Music"));
+      expect(names()).toEqual(before);
+    });
+
+    it("stays after Fewer categories, in the order chosen, until the sheet closes", async () => {
+      await openWith();
+      const six = names();
+      expect(six).toHaveLength(6);
+      await toggle(/^All categories/);
+      expect(names()).toHaveLength(eight.length);
+      await userEvent.click(chip("Music"));
+      await toggle(/^Fewer categories/);
+      expect(names()).toEqual([...six, "Music"]);
+      await userEvent.click(chip(six[0] ?? ""));
+      expect(names()).toEqual([...six, "Music"]);
+      // Choosing another one adds it after, moving nothing.
+      await toggle(/^All categories/);
+      await userEvent.click(chip("Travel"));
+      await toggle(/^Fewer categories/);
+      expect(names()).toEqual([...six, "Music", "Travel"]);
+      // One only looked at, never kept, is gone again.
+      await toggle(/^All categories/);
+      await userEvent.click(chip("Health"));
+      await userEvent.click(chip(six[1] ?? ""));
+      await toggle(/^Fewer categories/);
+      expect(names()).toEqual([...six, "Music", "Travel"]);
     });
   });
 
@@ -699,5 +776,281 @@ describe("edit and delete", () => {
     open({ kind: "edit", transaction: existing });
     await userEvent.click(await screen.findByTestId("quick-add-save"));
     expect(await screen.findByText(/was deleted/)).toBeInTheDocument();
+  });
+});
+
+// A slow touch press (no native click in time) makes the app click the button
+// itself; a late native click may still follow. Saving must not happen twice.
+describe("a slow press on Save, then a late native click", () => {
+  const ONE = `${TX}/${uuid(101)}`;
+  const existing = transaction(1, { version: 3 });
+  type Reply = ReturnType<typeof json>;
+
+  /** The sheet as the app mounts it: closing it unmounts it. */
+  function App({ mode }: { mode: SheetMode }) {
+    const [isOpen, setOpen] = useState(true);
+    return isOpen ? (
+      <TransactionSheet
+        budgetId={BUDGET_ID}
+        budget={budget}
+        mode={mode}
+        onClose={() => {
+          setOpen(false);
+        }}
+      />
+    ) : null;
+  }
+
+  const finger = {
+    pointerType: "touch",
+    isPrimary: true,
+    pointerId: 3,
+    width: 20,
+    height: 20,
+  };
+  const pastTheWait = () =>
+    new Promise((resolve) => setTimeout(resolve, SLOW_PRESS_WAIT_MS + 60));
+  async function slowPress(el: HTMLElement) {
+    fireEvent.pointerDown(el, finger);
+    fireEvent.pointerUp(el, finger);
+    await act(pastTheWait);
+  }
+  function lateClick(el: HTMLElement) {
+    fireEvent.mouseDown(el);
+    fireEvent.mouseUp(el);
+    fireEvent.click(el, { detail: 1 });
+  }
+  /** Long enough for any second request to have been made. */
+  const settle = () => act(pastTheWait);
+
+  const amount = () => screen.getByRole("textbox", { name: "Amount" });
+  const save = () => screen.getByTestId("quick-add-save");
+  const saveNew = () => screen.getByTestId("quick-add-save-new");
+  const sheetOpen = () => screen.queryByTestId("quick-add-sheet") !== null;
+  const fill = async (text: string, category: string) => {
+    await userEvent.type(amount(), text);
+    await userEvent.click(chip(category));
+  };
+  const keysOf = (calls: { headers: Headers }[]) =>
+    calls.map((c) => c.headers.get("Idempotency-Key"));
+
+  async function startCreate(reply: () => Reply | Error | Promise<Reply>) {
+    const api = mockApi({ ...base, [`POST ${TX}`]: reply });
+    renderWithApp(<App mode={{ kind: "create" }} />);
+    await within(sheet()).findByRole("radiogroup", { name: "Category" });
+    await fill("42.50", "Groceries");
+    return { posts: () => api.find("POST", TX) };
+  }
+  async function startEdit(reply: () => Reply | Error | Promise<Reply>) {
+    const api = mockApi({ ...base, [`PUT ${ONE}`]: reply });
+    renderWithApp(<App mode={{ kind: "edit", transaction: existing }} />);
+    await within(sheet()).findByRole("radiogroup", { name: "Category" });
+    await userEvent.clear(amount());
+    await userEvent.type(amount(), "23.10");
+    return { puts: () => api.find("PUT", ONE) };
+  }
+
+  it("Save & new, late click while saving: one POST, and the entry stays until it is saved", async () => {
+    const reply = deferred<Reply>();
+    const { posts } = await startCreate(() => reply.promise);
+    await slowPress(saveNew());
+    lateClick(saveNew());
+    await settle();
+    expect(posts()).toHaveLength(1);
+    expect(amount()).toHaveValue("42.50");
+    reply.resolve(json(201, transaction(1)));
+    await waitFor(() => {
+      expect(amount()).toHaveValue("");
+    });
+    await settle();
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toMatchObject({
+      amountCents: 4250,
+      splits: [{ categoryId: uuid(1), amountCents: 4250 }],
+    });
+  });
+
+  it("Save & new, late click after the form reset: one POST, a clean form, and the next entry is its own", async () => {
+    const { posts } = await startCreate(() => json(201, transaction(1)));
+    const button = saveNew();
+    await slowPress(button);
+    await waitFor(() => {
+      expect(amount()).toHaveValue("");
+    });
+    lateClick(button);
+    await settle();
+    expect(posts()).toHaveLength(1);
+    expect(amount()).toHaveValue("");
+    expect(amount()).toHaveFocus();
+    expect(amount()).toBeValid();
+    expect(
+      within(sheet()).queryByRole("radio", { name: "Groceries" }),
+    ).not.toBeChecked();
+    expect(screen.getByTestId("sheet-status")).toHaveTextContent(
+      "Saved $42.50 to Groceries",
+    );
+
+    await fill("7", "Transport");
+    await slowPress(saveNew());
+    lateClick(saveNew());
+    await settle();
+    expect(posts().map((p) => p.body)).toMatchObject([
+      { amountCents: 4250, splits: [{ categoryId: uuid(1) }] },
+      { amountCents: 700, splits: [{ categoryId: uuid(3) }] },
+    ]);
+    const [first, second] = keysOf(posts());
+    expect(second).not.toBe(first);
+  });
+
+  it("Save & new fails, then the late click: no duplicate, and the one retry has the same key", async () => {
+    let attempt = 0;
+    const { posts } = await startCreate(() =>
+      ++attempt === 1
+        ? new TypeError("Failed to fetch")
+        : json(201, transaction(1)),
+    );
+    await slowPress(saveNew());
+    await screen.findByText(/You're offline/);
+    lateClick(saveNew());
+    await settle();
+    expect(posts().length).toBeLessThanOrEqual(2);
+    // Now ask for the retry if the late click wasn't one.
+    if (posts().length === 1) await slowPress(saveNew());
+    await waitFor(() => {
+      expect(amount()).toHaveValue("");
+    });
+    await settle();
+    expect(posts()).toHaveLength(2);
+    const [first, second] = keysOf(posts());
+    expect(second).toBe(first);
+    expect(posts()[1]?.body).toEqual(posts()[0]?.body);
+  });
+
+  it("Save, late click while saving: one POST", async () => {
+    const reply = deferred<Reply>();
+    const { posts } = await startCreate(() => reply.promise);
+    await slowPress(save());
+    lateClick(save());
+    await settle();
+    expect(posts()).toHaveLength(1);
+    reply.resolve(json(201, transaction(1)));
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    await settle();
+    expect(posts()).toHaveLength(1);
+    expect(posts()[0]?.body).toMatchObject({ amountCents: 4250 });
+  });
+
+  it("Save, late click before the button can show it is saving: one POST", async () => {
+    const reply = deferred<Reply>();
+    const { posts } = await startCreate(() => reply.promise);
+    const button = save();
+    fireEvent.pointerDown(button, finger);
+    fireEvent.pointerUp(button, finger);
+    await act(async () => {
+      const pressed = new Promise((resolve) => {
+        button.addEventListener("click", resolve, { once: true });
+      });
+      await pressed;
+      // Nothing has re-rendered inside this act.
+      expect(button).toHaveAttribute("type", "submit");
+      button.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }),
+      );
+    });
+    await settle();
+    expect(posts()).toHaveLength(1);
+    reply.resolve(json(201, transaction(1)));
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("Save, late click after it saved and closed: one POST", async () => {
+    const { posts } = await startCreate(() => json(201, transaction(1)));
+    const button = save();
+    await slowPress(button);
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    lateClick(button);
+    await settle();
+    expect(posts()).toHaveLength(1);
+  });
+
+  it("Save fails, then the late click: at most one retry, with the same key", async () => {
+    let attempt = 0;
+    const { posts } = await startCreate(() =>
+      ++attempt === 1
+        ? new TypeError("Failed to fetch")
+        : json(201, transaction(1)),
+    );
+    await slowPress(save());
+    await screen.findByText(/You're offline/);
+    expect(posts()).toHaveLength(1);
+    const button = save();
+    lateClick(button);
+    lateClick(button);
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    await settle();
+    expect(posts()).toHaveLength(2);
+    const [first, second] = keysOf(posts());
+    expect(second).toBe(first);
+    expect(posts()[1]?.body).toEqual(posts()[0]?.body);
+  });
+
+  it("editing, late click while saving: one PUT", async () => {
+    const reply = deferred<Reply>();
+    const { puts } = await startEdit(() => reply.promise);
+    await slowPress(save());
+    lateClick(save());
+    await settle();
+    expect(puts()).toHaveLength(1);
+    reply.resolve(json(200, { ...existing, amountCents: 2310, version: 4 }));
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    await settle();
+    expect(puts()).toHaveLength(1);
+    expect(puts()[0]?.body).toMatchObject({ amountCents: 2310, version: 3 });
+  });
+
+  it("editing, late click after it saved and closed: one PUT", async () => {
+    const { puts } = await startEdit(() =>
+      json(200, { ...existing, amountCents: 2310, version: 4 }),
+    );
+    const button = save();
+    await slowPress(button);
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    lateClick(button);
+    await settle();
+    expect(puts()).toHaveLength(1);
+  });
+
+  it("editing fails, then the late click: at most one retry, of the same version", async () => {
+    let attempt = 0;
+    const { puts } = await startEdit(() =>
+      ++attempt === 1
+        ? new TypeError("Failed to fetch")
+        : json(200, { ...existing, amountCents: 2310, version: 4 }),
+    );
+    await slowPress(save());
+    await screen.findByText(/You're offline/);
+    const button = save();
+    lateClick(button);
+    lateClick(button);
+    await waitFor(() => {
+      expect(sheetOpen()).toBe(false);
+    });
+    await settle();
+    expect(puts()).toHaveLength(2);
+    expect(puts()[1]?.body).toEqual(puts()[0]?.body);
+    expect(puts()[0]?.body).toMatchObject({ version: 3 });
   });
 });

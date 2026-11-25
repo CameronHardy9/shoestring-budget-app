@@ -3,10 +3,10 @@
 // `keepFocus`: a tap leaves focus where it is (in the field being typed in,
 // so the phone keyboard stays up), like Button's; keyboard and screen-reader
 // operation are unchanged.
-import type { MouseEvent } from "react";
 import type { Key } from "react-aria-components";
 import { ToggleButton, ToggleButtonGroup } from "react-aria-components";
 import { cx } from "./cx.ts";
+import { useKeepFocus } from "./useKeepFocus.ts";
 
 export interface SegmentedOption<K extends string> {
   id: K;
@@ -24,9 +24,30 @@ export interface SegmentedControlProps<K extends string> {
   className?: string;
 }
 
-const keepFocusOnMouseDown = (e: MouseEvent) => {
-  e.preventDefault();
-};
+function Segment({
+  option,
+  keepFocus,
+}: {
+  option: SegmentedOption<string>;
+  keepFocus: boolean;
+}) {
+  const keep = useKeepFocus(keepFocus);
+  return (
+    <ToggleButton
+      id={option.id}
+      {...keep}
+      className={cx(
+        "min-h-10 rounded-sm px-3 text-sm font-semibold text-fg-muted",
+        // The selected segment has a line-strong ring (>= 3:1 against the
+        // track), not just a lighter fill (WCAG 1.4.11).
+        "data-[selected]:bg-surface data-[selected]:text-fg data-[selected]:shadow-1",
+        "data-[selected]:ring-1 data-[selected]:ring-line-strong",
+      )}
+    >
+      {option.label}
+    </ToggleButton>
+  );
+}
 
 export function SegmentedControl<K extends string>({
   label,
@@ -53,20 +74,7 @@ export function SegmentedControl<K extends string>({
       )}
     >
       {options.map((option) => (
-        <ToggleButton
-          key={option.id}
-          id={option.id}
-          {...(keepFocus ? { onMouseDown: keepFocusOnMouseDown } : {})}
-          className={cx(
-            "min-h-10 rounded-sm px-3 text-sm font-semibold text-fg-muted",
-            // The selected segment has a line-strong ring (>= 3:1 against the
-            // track), not just a lighter fill (WCAG 1.4.11).
-            "data-[selected]:bg-surface data-[selected]:text-fg data-[selected]:shadow-1",
-            "data-[selected]:ring-1 data-[selected]:ring-line-strong",
-          )}
-        >
-          {option.label}
-        </ToggleButton>
+        <Segment key={option.id} option={option} keepFocus={keepFocus} />
       ))}
     </ToggleButtonGroup>
   );
