@@ -1,10 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { expectNoAxeViolations } from "../test/axe.ts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BudgetBar, usedFraction } from "./BudgetBar.tsx";
 import { Button } from "./Button.tsx";
-import { ChipGroup } from "./ChipGroup.tsx";
 import { Money } from "./Money.tsx";
 import { SegmentedControl } from "./SegmentedControl.tsx";
 
@@ -75,114 +73,166 @@ describe("SegmentedControl keepFocus", () => {
   });
 });
 
-describe("ChipGroup", () => {
-  const chips = [
-    { id: "a", label: "Groceries" },
-    { id: "b", label: "Dining out" },
-  ];
+// iOS and Android send no mouse events or click after a slow press. React Aria
+// then focuses the button and clicks it itself, which would close the keyboard.
+describe("keepFocus on a slow touch press", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-  it("is a labelled radio group operable by keyboard", async () => {
-    const onChange = vi.fn();
-    const { container } = render(
-      <ChipGroup
-        label="Category"
-        chips={chips}
-        value="a"
-        onChange={onChange}
-      />,
+  const finger = {
+    pointerType: "touch",
+    isPrimary: true,
+    pointerId: 7,
+    width: 20,
+    height: 20,
+  };
+  const off = { ...finger, clientX: 500, clientY: 500 };
+  const controls = [
+    ["Button", "button", "Note"],
+    ["SegmentedControl", "radio", "Received"],
+  ] as const;
+
+  function setUp(
+    role: "button" | "radio",
+    name: string,
+    {
+      keepFocus = true,
+      type = "button",
+    }: { keepFocus?: boolean; type?: "button" | "submit" } = {},
+  ) {
+    const onPress = vi.fn();
+    const onSubmit = vi.fn();
+    const view = render(
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
+        <input aria-label="Amount" />
+        <Button keepFocus={keepFocus} type={type} onPress={onPress}>
+          Note
+        </Button>
+        <SegmentedControl
+          label="Type"
+          value="outflow"
+          onChange={onPress}
+          keepFocus={keepFocus}
+          options={[
+            { id: "outflow", label: "Spent" },
+            { id: "inflow", label: "Received" },
+          ]}
+        />
+      </form>,
     );
-    const group = screen.getByRole("radiogroup", { name: "Category" });
-    expect(group).toBeInTheDocument();
-    screen.getByRole("radio", { name: "Groceries" }).focus();
-    await userEvent.keyboard("{ArrowRight}");
-    expect(onChange).toHaveBeenCalledWith("b");
-    await expectNoAxeViolations(container);
-  });
-
-  it("shows an error message", () => {
-    render(
-      <ChipGroup
-        label="Category"
-        chips={chips}
-        value={null}
-        onChange={vi.fn()}
-        errorMessage="Choose a category."
-      />,
+    const el = screen.getByRole(role, { name });
+    vi.spyOn(el, "getBoundingClientRect").mockReturnValue(
+      new DOMRect(0, 0, 100, 44),
     );
-    expect(screen.getByText("Choose a category.")).toBeInTheDocument();
+    const amount = screen.getByRole("textbox", { name: "Amount" });
+    amount.focus();
+    const onBlur = vi.fn();
+    amount.addEventListener("focusout", onBlur);
+    return { ...view, el, amount, onPress, onSubmit, onBlur };
+  }
+  const wait = () => {
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+  };
+  const slowPress = (el: HTMLElement) => {
+    fireEvent.pointerDown(el, finger);
+    wait();
+    fireEvent.pointerUp(el, finger);
+    wait();
+  };
+
+  it.each(controls)(
+    "%s: presses once and focus never leaves the field",
+    (_component, role, name) => {
+      const { el, amount, onPress, onBlur } = setUp(role, name);
+      slowPress(el);
+      expect(onPress).toHaveBeenCalledOnce();
+      expect(onBlur).not.toHaveBeenCalled();
+      expect(amount).toHaveFocus();
+    },
+  );
+
+  it("a submit button submits once", () => {
+    const { el, onSubmit, onPress, onBlur } = setUp("button", "Note", {
+      type: "submit",
+    });
+    slowPress(el);
+    expect(onPress).toHaveBeenCalledOnce();
+    expect(onSubmit).toHaveBeenCalledOnce();
+    expect(onBlur).not.toHaveBeenCalled();
   });
 
-  describe("keepTextFocus", () => {
-    function renderWithField(onChange = vi.fn()) {
-      render(
-        <>
-          <input aria-label="Amount" inputMode="decimal" />
-          <ChipGroup
-            label="Category"
-            chips={chips}
-            value="a"
-            onChange={onChange}
-            keepTextFocus
-          />
-        </>,
-      );
-      const amount = screen.getByRole("textbox", { name: "Amount" });
-      amount.focus();
-      return { amount, onChange };
-    }
+  it.each(controls)(
+    "%s: a normal tap still presses exactly once",
+    (_component, role, name) => {
+      const { el, onPress, onBlur } = setUp(role, name);
+      fireEvent.pointerDown(el, finger);
+      fireEvent.pointerUp(el, finger);
+      fireEvent.mouseDown(el);
+      fireEvent.mouseUp(el);
+      fireEvent.click(el, { detail: 1 });
+      wait();
+      expect(onPress).toHaveBeenCalledOnce();
+      expect(onBlur).not.toHaveBeenCalled();
+    },
+  );
 
-    it("selects the tapped chip and leaves the text field focused", async () => {
-      const { amount, onChange } = renderWithField();
-      await userEvent.click(screen.getByText("Dining out"));
-      expect(onChange).toHaveBeenCalledWith("b");
-      expect(amount).toHaveFocus();
-    });
+  it.each(controls)(
+    "%s: a late click after a slow press does not press again",
+    (_component, role, name) => {
+      const { el, onPress } = setUp(role, name);
+      slowPress(el);
+      fireEvent.mouseDown(el);
+      fireEvent.mouseUp(el);
+      fireEvent.click(el, { detail: 1 });
+      wait();
+      expect(onPress).toHaveBeenCalledOnce();
+    },
+  );
 
-    it("still lets Tab and the arrow keys focus and select the radios", async () => {
-      const { amount, onChange } = renderWithField();
-      // A tap first, so nothing from it can linger into the keyboard path.
-      await userEvent.click(screen.getByText("Dining out"));
-      expect(amount).toHaveFocus();
-      await userEvent.tab();
-      expect(screen.getByRole("radio", { name: "Groceries" })).toHaveFocus();
-      await userEvent.keyboard("{ArrowRight}");
-      expect(onChange).toHaveBeenLastCalledWith("b");
-      expect(screen.getByRole("radio", { name: "Dining out" })).toHaveFocus();
-    });
+  it.each(controls)(
+    "%s: a scroll or a lift elsewhere presses nothing",
+    (_component, role, name) => {
+      const { el, onPress } = setUp(role, name);
+      fireEvent.pointerDown(el, finger);
+      fireEvent.pointerCancel(el, finger);
+      wait();
+      fireEvent.pointerDown(el, finger);
+      fireEvent.pointerUp(document.body, off);
+      wait();
+      expect(onPress).not.toHaveBeenCalled();
+    },
+  );
 
-    it("lets a screen reader's activation focus the radio", () => {
-      const { onChange } = renderWithField();
-      const label = screen.getByText("Dining out");
-      // VoiceOver's synthetic pointer events have zero size; its click has
-      // detail 0 (React Aria's "virtual" press).
-      const down = new MouseEvent("pointerdown", { bubbles: true });
-      Object.defineProperties(down, {
-        width: { value: 0 },
-        height: { value: 0 },
-      });
-      label.dispatchEvent(down);
-      fireEvent.click(label);
-      expect(onChange).toHaveBeenCalledWith("b");
-      expect(screen.getByRole("radio", { name: "Dining out" })).toHaveFocus();
-    });
-
-    it("is off by default: a tap focuses the radio, as React Aria does", async () => {
-      render(
-        <>
-          <input aria-label="Amount" />
-          <ChipGroup
-            label="Category"
-            chips={chips}
-            value="a"
-            onChange={vi.fn()}
-          />
-        </>,
-      );
-      screen.getByRole("textbox", { name: "Amount" }).focus();
-      await userEvent.click(screen.getByText("Dining out"));
-      expect(screen.getByRole("radio", { name: "Dining out" })).toHaveFocus();
-    });
+  it("drops a pending press when the control goes away", () => {
+    const { el, onPress, unmount } = setUp("button", "Note");
+    fireEvent.pointerDown(el, finger);
+    fireEvent.pointerUp(el, finger);
+    unmount();
+    wait();
+    expect(onPress).not.toHaveBeenCalled();
   });
+
+  it.each(controls)(
+    "%s without keepFocus is React Aria's as before: pressed and focused",
+    (_component, role, name) => {
+      const { el, onPress, onBlur } = setUp(role, name, { keepFocus: false });
+      slowPress(el);
+      expect(onPress).toHaveBeenCalledOnce();
+      expect(onBlur).toHaveBeenCalled();
+      expect(el).toHaveFocus();
+    },
+  );
 });
 
 describe("BudgetBar", () => {

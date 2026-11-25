@@ -8,16 +8,15 @@
 //
 // `keepFocus` is for controls inside a sheet where the person is typing (the
 // quick-add form): a tap must not move focus off the text field, or iOS
-// closes the keyboard and the sheet jumps. It cancels the default action of
-// mousedown (which is what moves focus on a tap or click); the press still
-// fires. Keyboard and screen-reader activation never go through mousedown, so
-// they are unchanged, and the button stays in the Tab order.
-import type { MouseEvent, ReactNode } from "react";
+// closes the keyboard and the sheet jumps. The press still fires, and the
+// button stays in the Tab order (see useKeepFocus.ts).
+import type { ReactNode } from "react";
 import {
   Button as AriaButton,
   type ButtonProps as AriaButtonProps,
 } from "react-aria-components";
 import { cx } from "./cx.ts";
+import { useKeepFocus } from "./useKeepFocus.ts";
 
 export type ButtonVariant =
   "primary" | "secondary" | "selected" | "ghost" | "quiet" | "danger" | "fab";
@@ -98,16 +97,11 @@ export function Button({
   onMouseDown,
   ...rest
 }: ButtonProps) {
-  const mouseDown = keepFocus
-    ? (e: MouseEvent<HTMLButtonElement>) => {
-        onMouseDown?.(e);
-        e.preventDefault();
-      }
-    : onMouseDown;
+  const keep = useKeepFocus(keepFocus, onMouseDown);
   return (
     <AriaButton
       {...rest}
-      {...(mouseDown ? { onMouseDown: mouseDown } : {})}
+      {...keep}
       className={cx(
         "inline-flex items-center transition-colors select-none data-[disabled]:opacity-50",
         VARIANTS[variant],

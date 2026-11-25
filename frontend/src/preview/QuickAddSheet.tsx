@@ -98,7 +98,6 @@ function SingleCategory() {
       <ChipGroup
         label="Category"
         hideLabel
-        keepTextFocus
         chips={[
           ...recentCategories.map((c) => ({ id: c.id, label: c.name })),
           { id: "more", label: "More…" },
