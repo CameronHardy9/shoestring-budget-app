@@ -70,3 +70,10 @@ Learned on the keyboard-focus journey (2026-11-24, PW 1.65):
 - **Keyboard simulation works:** `Object.defineProperty(visualViewport, "height", {get})` plus `visualViewport.dispatchEvent(new Event("resize"))` drives the app's useKeyboardInset on both engines. Prove it took effect (sheet bottom ≤ innerHeight − lift) before asserting the cap.
 - **Negative checks while other agents edit in parallel:** back up the exact files right before mutating, restore with a `trap` and compare byte-for-byte. A `git diff` snapshot taken earlier can go stale when another agent edits the frontend at the same time (it happened). Keep the mutation window short, and say in the report that a parallel edit to a mutated file inside that window would be overwritten.
 - tests/ tsconfig has `erasableSyntaxOnly` (no constructor parameter properties). DOM lib types `Element.textContent` as string, so `?.`/`??` on it fails no-unnecessary-condition.
+
+Learned on the opening / month-switch e2e (2026-11-25, PW 1.65.1):
+- **Skip the 3.2 s opening in a full-motion test:** `page.emulateMedia({reducedMotion:"reduce"})`, goto, then switch back to `no-preference`; page-loader.ts reads matchMedia live. Saves ~3-6 s per project.
+- **Negative checks on the dev server:** Vite strips comments (esbuild), so grepping the served module for a marker comment proves nothing; a mutation that makes the app crash also "fails" the test. Read the failure message: it must be the assertion you meant. Put the check that names the cause before the vacuity guard, and give `click({trial:true})` a short timeout (default = the 60 s test timeout).
+- Locally, after a Playwright bump, `pnpm exec playwright install chromium` is needed (webkit and chromium can be out of step); "Executable doesn't exist" is not a test failure.
+- Never `grep` tests/.env.stack broadly: the DB URLs hold (throwaway) passwords; match `^BASE_URL=`.
+- **WebKit re-fetches a module (same URL) when a second dynamic import starts while the first fetch is pending** (held with page.route); Chromium doesn't. Never assert an exact request count for a held module; count API requests instead.

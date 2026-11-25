@@ -2,7 +2,7 @@
 // sign-up from an emailed link, through the real App with a mocked API.
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getCsrfToken } from "./api/session.ts";
 import { App } from "./App.tsx";
 import { queryClient } from "./app/query.ts";
@@ -19,6 +19,7 @@ import {
   uuid,
 } from "./test/fixtures.ts";
 import { preloadScreens } from "./test/preload-screens.ts";
+import { stubReducedMotion } from "./test/reduced-motion.ts";
 
 const budgetRoutes = {
   [`GET /budgets/${BUDGET_ID}`]: json(200, budget),
@@ -32,6 +33,10 @@ const budgetRoutes = {
 };
 
 beforeAll(preloadScreens);
+
+beforeEach(() => {
+  stubReducedMotion();
+});
 
 afterEach(() => {
   queryClient.clear();
@@ -293,7 +298,8 @@ describe("session expiry mid-entry (F-54)", () => {
     });
     start(`${TX}?month=2026-10`);
     await screen.findByRole("heading", { name: "Transactions" });
-    await userEvent.click(screen.getByTestId("quick-add-open"));
+    // With the revealed page, not before it (the opening).
+    await userEvent.click(await screen.findByTestId("quick-add-open"));
     const sheet = await screen.findByTestId("quick-add-sheet");
     await userEvent.type(
       within(sheet).getByRole("textbox", { name: "Amount" }),
@@ -333,7 +339,8 @@ describe("session expiry mid-entry (F-54)", () => {
       `/budgets/${BUDGET_ID}`,
     );
     expect(screen.queryByTestId("quick-add-sheet")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("quick-add-open"));
+    // With the revealed page, not before it (the opening).
+    await userEvent.click(await screen.findByTestId("quick-add-open"));
     const sheet = await screen.findByTestId("quick-add-sheet");
     expect(within(sheet).getByRole("textbox", { name: "Amount" })).toHaveValue(
       "",

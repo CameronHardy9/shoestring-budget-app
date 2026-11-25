@@ -14,7 +14,7 @@ import { AmountField } from "../components/AmountField.tsx";
 import { Button } from "../components/Button.tsx";
 import { Icon } from "../components/Icon.tsx";
 import { LogoMark } from "../components/Logo.tsx";
-import { usePageCovered } from "../components/page-loader.ts";
+import { PageMain } from "../components/PageMain.tsx";
 import { FormError } from "../components/States.tsx";
 import { TextField } from "../components/TextField.tsx";
 import { parseMoneyInput } from "../lib/money.ts";
@@ -57,7 +57,6 @@ export default function CreateBudgetScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [showErrors, setShowErrors] = useState(false);
-  const covered = usePageCovered();
   const key = useRef(newIdempotencyKey());
 
   const parsed = starters.map((s) =>
@@ -70,10 +69,7 @@ export default function CreateBudgetScreen() {
       : {};
 
   return (
-    <main
-      inert={covered}
-      className="mx-auto flex min-h-dvh max-w-lg flex-col px-5 pt-10 pb-10"
-    >
+    <PageMain className="mx-auto flex min-h-dvh max-w-lg flex-col px-5 pt-10 pb-10">
       <div className="flex items-center gap-2.5 text-xl font-bold text-fg">
         <LogoMark />
         Shoestring
@@ -203,6 +199,6 @@ export default function CreateBudgetScreen() {
           Create budget
         </Button>
       </form>
-    </main>
+    </PageMain>
   );
 }

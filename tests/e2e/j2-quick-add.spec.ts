@@ -15,6 +15,7 @@ import {
   flushCspViolations,
   quickAddOpener,
   signInAs,
+  Taps,
   test,
 } from "./fixtures.ts";
 
@@ -40,6 +41,50 @@ async function transactions(page: Page, budgetId: string): Promise<Tx[]> {
       await page.request.get(`/api/budgets/${budgetId}/transactions`)
     ).json()) as { items: Tx[] }
   ).items;
+}
+
+/**
+ * Holds GET /api/budgets/{id} (only that resource, not its sub-resources)
+ * until release(), and counts the requests held.
+ */
+async function holdBudget(
+  page: Page,
+  budgetId: string,
+): Promise<{ release: () => void; held: () => number }> {
+  let open: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  let held = 0;
+  await page.route(
+    (url) => url.pathname === `/api/budgets/${budgetId}`,
+    async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      held += 1;
+      await gate;
+      await route.fallback();
+    },
+  );
+  return {
+    release: () => {
+      open();
+    },
+    held: () => held,
+  };
+}
+
+/** The $9.50 Groceries spend of the two "+ while loading" tests was saved. */
+async function expectEagerSpend(page: Page, budget: TestBudget): Promise<void> {
+  await expect(page.getByTestId("total-remaining")).toHaveText("$690.50");
+  const [tx] = await transactions(page, budget.id);
+  expect(tx).toMatchObject({
+    date: budget.record.today,
+    amountCents: 950,
+    direction: "outflow",
+  });
+  expect(tx!.splits).toEqual([
+    { categoryId: budget.categories.Groceries, amountCents: 950 },
+  ]);
 }
 
 declare global {
@@ -289,36 +334,80 @@ test.describe("J2 quick-add", () => {
     ]);
   });
 
-  test("+ tapped while the budget is still loading opens the sheet at once: the amount takes typing, the categories follow", async ({
+  // "+" is never ignored, and never there before it works. During the opening
+  // (a cold start) there is no navigation at all (owner ruling 2026-11-25,
+  // mvp-planning/10 "iPhone check of the UI fixes"), so nothing can be tapped
+  // early; the first tap that is possible must open the sheet. After the
+  // opening "+" stays above the page loader and works at once.
+  test("on a cold start + is absent until the page is revealed, and the first tap on it then opens the sheet", async ({
     page,
     taps,
   }) => {
     const user = await createUser({ prefix: "eager" });
     const budget = await createBudget(user, { name: "Eager household" }); // Groceries 500, Dining 200
     await signInAs(page, user.email);
+    const hold = await holdBudget(page, budget.id);
+    const plus = page
+      .getByTestId("quick-add-open")
+      .or(page.getByTestId("quick-add-open-rail"));
+    const loadingBudget = page
+      .getByTestId("loading-slot")
+      .and(page.locator('[data-label="Loading your budget…"]'));
+    try {
+      await page.goto(`/budgets/${budget.id}`);
+      await expect(
+        loadingBudget,
+        "the budget's shell is rendered, waiting for the budget",
+      ).toBeAttached();
+      await expect(page.getByTestId("loading")).toBeVisible();
+      await expect(plus, "no + in the page at all").toHaveCount(0);
+      expect(hold.held(), "the budget request is still held").toBe(1);
+    } finally {
+      hold.release();
+    }
 
-    // Hold GET /api/budgets/{id} (only that resource, not its sub-resources)
-    // until the test releases it, so the tap lands while the budget loads.
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let held = 0;
-    await page.route(
-      (url) => url.pathname === `/api/budgets/${budget.id}`,
-      async (route) => {
-        if (route.request().method() !== "GET") return route.fallback();
-        held += 1;
-        await gate;
-        await route.fallback();
-      },
-    );
+    // Nothing else is awaited first: the tap lands as soon as + exists.
+    await taps.tap(quickAddOpener(page)); // tap 1
+    const sheet = page.getByTestId("quick-add-sheet");
+    await expect(sheet, "the first tap opens the sheet").toBeVisible();
+    const amount = page.getByTestId("quick-add-amount");
+    await expect(amount, "the amount is focused at once").toBeFocused();
+    await page.keyboard.type("9.50");
+    await expect(amount).toHaveValue("9.50");
+    await taps.tap(sheet.getByText("Groceries", { exact: true })); // tap 2
+    await taps.tap(page.getByTestId("quick-add-save")); // tap 3
+    await expect(sheet).toBeHidden();
+    expect(taps.count).toBe(3);
+    await expectEagerSpend(page, budget);
+  });
+
+  test("+ tapped while another budget is still loading opens the sheet at once: the amount takes typing, the categories follow", async ({
+    page,
+    hasTouch,
+    taps,
+  }) => {
+    const user = await createUser({ prefix: "eager" });
+    const first = await createBudget(user, { name: "First household" });
+    const budget = await createBudget(user, { name: "Eager household" }); // Groceries 500, Dining 200
+    await signInAs(page, user.email);
+    await page.goto(`/budgets/${first.id}`);
+    await expect(page.getByTestId("total-remaining")).toHaveText("$700.00");
+
+    // The opening is over. Open the second budget in the app, its GET held,
+    // so the tap lands while that budget loads.
+    const hold = await holdBudget(page, budget.id);
     const sheet = page.getByTestId("quick-add-sheet");
     const loadingCategories = sheet
       .getByRole("status")
       .filter({ hasText: "Loading categories…" });
     try {
-      await page.goto(`/budgets/${budget.id}`);
+      const way = new Taps(hasTouch); // not part of the 3-tap bar
+      await way.tap(
+        page
+          .getByRole("navigation", { name: "Main" })
+          .getByRole("link", { name: "More" }),
+      );
+      await way.tap(page.getByRole("link", { name: /^Eager household/ }));
       await taps.tap(quickAddOpener(page)); // tap 1, right after navigation
       await expect(sheet).toBeVisible();
       const amount = page.getByTestId("quick-add-amount");
@@ -329,10 +418,13 @@ test.describe("J2 quick-add", () => {
       await expect(sheet.getByText("Groceries", { exact: true })).toHaveCount(
         0,
       );
-      expect(held, "the budget request was still held during all this").toBe(1);
+      expect(
+        hold.held(),
+        "the budget request was still held during all this",
+      ).toBe(1);
       await expect(page.getByTestId("total-remaining")).toHaveCount(0);
     } finally {
-      release();
+      hold.release();
     }
 
     const groceries = sheet.getByText("Groceries", { exact: true });
@@ -343,17 +435,11 @@ test.describe("J2 quick-add", () => {
     await taps.tap(page.getByTestId("quick-add-save")); // tap 3
     await expect(sheet).toBeHidden();
     expect(taps.count).toBe(3);
-
-    await expect(page.getByTestId("total-remaining")).toHaveText("$690.50");
-    const [tx] = await transactions(page, budget.id);
-    expect(tx).toMatchObject({
-      date: budget.record.today,
-      amountCents: 950,
-      direction: "outflow",
-    });
-    expect(tx!.splits).toEqual([
-      { categoryId: budget.categories.Groceries, amountCents: 950 },
-    ]);
+    await expectEagerSpend(page, budget);
+    expect(
+      await transactions(page, first.id),
+      "nothing was written to the other budget",
+    ).toEqual([]);
   });
 
   // The owner's iPhone bug: tapping a chip or button in the sheet moved focus
@@ -518,7 +604,10 @@ test.describe("J2 quick-add", () => {
 
     // 6. The keyboard path is unchanged: Tab reaches the chips' radio group,
     //    an arrow key selects the next chip.
-    await expect(chipRadio("Groceries"), "Split off keeps row 1's category").toBeChecked();
+    await expect(
+      chipRadio("Groceries"),
+      "Split off keeps row 1's category",
+    ).toBeChecked();
     await page.keyboard.press("Tab");
     await focus.expect(
       categories.getByRole("radio", { checked: true }),
@@ -592,7 +681,10 @@ test.describe("J2 quick-add", () => {
 
     const saved = await transactions(page, budget.id);
     expect(saved).toHaveLength(1);
-    expect(saved[0]).toMatchObject({ amountCents: 1_234, direction: "outflow" });
+    expect(saved[0]).toMatchObject({
+      amountCents: 1_234,
+      direction: "outflow",
+    });
     expect(saved[0]!.splits).toEqual([
       { categoryId: budget.categories.Dining, amountCents: 1_234 },
     ]);

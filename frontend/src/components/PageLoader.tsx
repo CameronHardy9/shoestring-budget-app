@@ -4,7 +4,9 @@
 // the viewport over an opaque cover, so the page beneath (inert meanwhile,
 // through usePageCovered) can't be seen, tapped or read while the lace
 // finishes its cycle. The cover sits under the tab bar and desktop rail
-// (z-30), sheets (z-40), dialogs and toasts (z-50), so "+" always works.
+// (z-30), sheets (z-40), dialogs and toasts (z-50), so "+" always works; during
+// the opening AppShell renders no tab bar or rail, and the cover is already
+// there, plain, in the grace before the lace.
 import { useLayoutEffect, useRef } from "react";
 import { LACE_SIZE_LARGE, LaceLoader } from "./LaceLoader.tsx";
 import { takeUncoverWork, usePageLoader } from "./page-loader.ts";
@@ -33,19 +35,19 @@ function restoreFocus(before: Element | null): void {
 }
 
 export function PageLoader() {
-  const { active, shown, epoch, label } = usePageLoader();
-  const wasShown = useRef(false);
+  const { active, shown, covered, epoch, label } = usePageLoader();
+  const wasCovered = useRef(false);
   useLayoutEffect(() => {
-    if (shown) {
-      wasShown.current = true;
+    if (covered) {
+      wasCovered.current = true;
       return;
     }
-    if (!wasShown.current) return;
-    wasShown.current = false;
+    if (!wasCovered.current) return;
+    wasCovered.current = false;
     const work = takeUncoverWork();
     restoreFocus(work.focusBefore);
     for (const callback of work.callbacks) callback();
-  }, [shown]);
+  }, [covered]);
   return (
     <>
       {shown && epoch !== null ? (
@@ -56,6 +58,11 @@ export function PageLoader() {
         >
           <LaceLoader size={LACE_SIZE_LARGE} epoch={epoch} />
         </div>
+      ) : covered ? (
+        <div
+          className="fixed inset-0 z-20 touch-none bg-canvas"
+          data-testid="opening-cover"
+        />
       ) : null}
       {/* In the page from the session's start, empty, so the label is a
           change a screen reader announces; set once per session. */}

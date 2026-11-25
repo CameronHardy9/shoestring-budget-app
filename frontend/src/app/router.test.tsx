@@ -1,6 +1,12 @@
 import { act, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
-import { matchPath, navigate, useLocation, withSearch } from "./router.tsx";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AppRouter,
+  matchPath,
+  navigate,
+  useLocation,
+  withSearch,
+} from "./router.tsx";
 
 afterEach(() => {
   window.history.replaceState(null, "", "/");
@@ -58,5 +64,51 @@ describe("navigate", () => {
     expect(withSearch(loc, { month: "2026-10" })).toBe(
       "/t?month=2026-10&category=a",
     );
+  });
+});
+
+describe("focus after a navigation", () => {
+  function setup() {
+    vi.useFakeTimers();
+    render(
+      <AppRouter>
+        <main>
+          <h1>Page</h1>
+          <button type="button">Control</button>
+        </main>
+      </AppRouter>,
+    );
+    const control = screen.getByRole("button", { name: "Control" });
+    control.focus();
+    return control;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const go = (to: string) => {
+    act(() => {
+      navigate(to);
+      vi.advanceTimersByTime(100);
+    });
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+  };
+
+  it("moves to the new page's heading", () => {
+    setup();
+    go("/elsewhere");
+    expect(screen.getByRole("heading", { name: "Page" })).toHaveFocus();
+  });
+
+  it("stays on the control when only the query changed (another month)", () => {
+    window.history.replaceState(null, "", "/budgets/x");
+    const control = setup();
+    go("/budgets/x?month=2026-10");
+    expect(control).toHaveFocus();
+    go("/budgets/x");
+    expect(control).toHaveFocus();
   });
 });
