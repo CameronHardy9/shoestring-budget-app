@@ -18,6 +18,7 @@ import { dayLabel, monthLabel, shortDate } from "../../lib/dates.ts";
 import { sumCents } from "../../lib/splits.ts";
 import { monthFrom, useCurrentBudget } from "./BudgetLayout.tsx";
 import { TransactionRow } from "./TransactionRow.tsx";
+import { useSwitchExit } from "./useSwitchExit.ts";
 
 export function groupByDay(
   items: readonly Transaction[],
@@ -38,6 +39,7 @@ export default function TransactionsScreen() {
     categoryParam && UUID.test(categoryParam) ? categoryParam : null;
   const categories = useCategories(budget.id);
   const list = useTransactions(budget.id, { month, categoryId });
+  const exit = useSwitchExit(list.data !== undefined);
   const items = useMemo(
     () => list.data?.pages.flatMap((p) => p.items) ?? [],
     [list.data],
@@ -82,6 +84,7 @@ export default function TransactionsScreen() {
         <PendingSlot
           paused={list.isPaused}
           label="Loading transactions…"
+          exit={exit}
           offlineMessage="You're offline. Transactions will appear when you reconnect."
         />
       ) : list.isError && items.length === 0 ? (

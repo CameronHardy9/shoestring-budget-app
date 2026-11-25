@@ -2,34 +2,33 @@
 // budget, else onboarding.
 import { useBudgets } from "../app/data.ts";
 import { Redirect } from "../app/router.tsx";
-import { usePageCovered } from "../components/page-loader.ts";
+import { PageMain } from "../components/PageMain.tsx";
 import { ErrorState, PendingSlot } from "../components/States.tsx";
 import { getLastBudgetId } from "../lib/preferences.ts";
 
 export default function HomeScreen() {
   const budgets = useBudgets();
-  const covered = usePageCovered();
   if (budgets.isPending) {
     return (
-      <main inert={covered} className="mx-auto max-w-md p-6">
+      <PageMain interstitial className="mx-auto max-w-md p-6">
         <h1 className="sr-only">Shoestring</h1>
         <PendingSlot
           paused={budgets.isPaused}
           label="Loading your budgets…"
           offlineMessage="You're offline. Your budgets will appear when you reconnect."
         />
-      </main>
+      </PageMain>
     );
   }
   if (budgets.isError) {
     return (
-      <main inert={covered} className="mx-auto max-w-md p-6">
+      <PageMain interstitial className="mx-auto max-w-md p-6">
         <h1 className="mb-4 text-2xl font-semibold text-fg">Shoestring</h1>
         <ErrorState
           error={budgets.error}
           onRetry={() => void budgets.refetch()}
         />
-      </main>
+      </PageMain>
     );
   }
   const items = budgets.data.items;

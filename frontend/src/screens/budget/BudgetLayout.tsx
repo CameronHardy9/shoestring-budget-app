@@ -3,6 +3,7 @@
 // budget, and owns the quick-add / edit sheet so "+" works on every tab.
 import {
   createContext,
+  Suspense,
   useContext,
   useEffect,
   useState,
@@ -126,7 +127,10 @@ export function BudgetLayout({
     };
     page = (
       <BudgetContext.Provider value={value}>
-        {shell(children)}
+        {/* A lazy screen suspends inside the shell. Without this the app's
+            own boundary would hide the whole shell, and the tab bar would
+            blink out and back (seen on the owner's iPhone, 2026-11-25). */}
+        {shell(<Suspense fallback={<LoadingState />}>{children}</Suspense>)}
       </BudgetContext.Provider>
     );
   }

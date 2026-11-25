@@ -32,6 +32,7 @@ import { TextField } from "../../components/TextField.tsx";
 import { monthLabel, monthName, shiftMonth } from "../../lib/dates.ts";
 import { centsToInputString, parseMoneyInput } from "../../lib/money.ts";
 import { monthFrom, useCurrentBudget } from "./BudgetLayout.tsx";
+import { useSwitchExit } from "./useSwitchExit.ts";
 
 type PlanEntry = Schemas["PlanEntry"];
 type Editing = { kind: "new" } | { kind: "edit"; category: Category } | null;
@@ -327,6 +328,9 @@ export default function CategoriesScreen() {
   const month = monthFrom(location.search, budget);
   const categories = useCategories(budget.id);
   const plan = usePlan(budget.id, month);
+  const exit = useSwitchExit(
+    categories.data !== undefined && plan.data !== undefined,
+  );
   const [editing, setEditing] = useState<Editing>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [confirmReplace, setConfirmReplace] = useState(false);
@@ -401,6 +405,7 @@ export default function CategoriesScreen() {
             (plan.isPending && plan.isPaused)
           }
           label="Loading categories…"
+          exit={exit}
           offlineMessage="You're offline. Categories and limits will appear when you reconnect."
         />
       ) : categories.isError || plan.isError ? (

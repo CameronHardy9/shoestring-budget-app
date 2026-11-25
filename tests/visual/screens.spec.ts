@@ -32,6 +32,8 @@ async function settle(page: Page): Promise<void> {
     page.getByTestId("loading"),
     "a loader is still on screen; wait for the data it stands for before the screenshot",
   ).toHaveCount(0);
+  // Nor the opening's plain cover (no navigation yet under it).
+  await expect(page.getByTestId("opening-cover")).toHaveCount(0);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await page.evaluate(() => {
     (document.activeElement as HTMLElement | null)?.blur();

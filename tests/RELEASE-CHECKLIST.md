@@ -13,6 +13,9 @@ Build: ____________  Date: ____________  iPhone / iOS: ____________  Android / C
 
 ## 1. Smoke test on your phone (iPhone Safari, then installed app)
 - [ ] Sign in with your password (and second factor if you use one). A "new sign-in" email arrives.
+- [ ] **Opening without navigation:** close the app fully (swipe it away in the installed app; close the tab in Safari) and open it again. Only the lace shows, no tab bar and no **+**, until the page appears; then the page and the whole tab bar come together. Nothing flickers, jumps or shows for a moment first. Same right after **signing in**. On a computer: same for the side rail, and the page doesn't move sideways when it appears.
+- [ ] After that the tab bar **never disappears or blinks**: tap every tab once (also right after opening), and open another budget from More.
+- [ ] **Month switch:** on Overview, Transactions and Budgets, tap the month arrows, quickly and slowly. The new month shows as soon as it has loaded (no full lace animation each time), the tab bar stays, and the same arrow can be tapped again at once.
 - [ ] **Quick-add, one-handed:** tap **+**. The **numeric keypad opens by itself** with the amount focused. Type an amount, tap a category, tap **Save**: 3 taps, under 10 seconds.
 - [ ] **The keyboard stays up** while you tap in the sheet: with the keypad up, tap a category chip, **Received** then **Spent**, **Note**, **Split** and **Add category**, and a split row's bin while typing in that row. The keyboard never closes and the sheet never jumps; the title and amount stay on screen. In **Payee** the Return key says **Next** and moves to Memo without saving. (Playwright's WebKit shows no keyboard; e2e proves focus only.)
 - [ ] While the keypad is up, **Save stays visible above the keyboard** (not hidden behind it), and the sheet does not jump or zoom when typing (inputs are 16 px).
@@ -47,6 +50,7 @@ Turn on: Settings › Accessibility › VoiceOver (or triple-click the side butt
 - [ ] Split editor: each row's category and amount are announced; "left to assign" is announced as it changes.
 - [ ] Dialogs (delete, re-auth): focus moves into the dialog, the title is read, and closing returns focus to where you were.
 - [ ] Navigating between tabs announces the new screen's heading.
+- [ ] Month arrows (Overview): activating one announces the new month, and VoiceOver stays on the arrow. While the app opens, no tab or **+** can be reached by swiping.
 
 ## 5. TalkBack (Android Chrome)
 Turn on: Settings › Accessibility › TalkBack.
