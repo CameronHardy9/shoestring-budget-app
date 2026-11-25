@@ -14,7 +14,15 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     groups:
+      # On its own because this PR can't pass e2e as opened: it also needs the
+      # Playwright image moved by hand (see the docker entry below). Keeping it
+      # out of npm-minor-and-patch stops it blocking everything else.
+      playwright:
+        patterns: ["@playwright/test", playwright-core]
+        update-types: [minor, patch]
       npm-minor-and-patch:
+        patterns: ["*"]
+        exclude-patterns: ["@playwright/test", playwright-core]
         update-types: [minor, patch]
     ignore:
       # Node major upgrades are a deliberate decision (LTS line pinned in .nvmrc).
@@ -62,8 +70,14 @@ updates:
       # Stay on the Node 24 LTS line until the owner decides to move.
       - dependency-name: node
         update-types: [version-update:semver-major]
-      # Must move in the same PR as @playwright/test in tests/package.json;
-      # make e2e fails with a clear message when the two differ.
+      # Ignored because the image must equal @playwright/test in tests/package.json,
+      # and Dependabot can't change both in one PR (make e2e stops when they
+      # differ). To handle a PR from the npm "playwright" group: on our own branch,
+      # apply its version bumps AND move the playwright line in .github/tools/Dockerfile
+      # to the same vX.Y.Z-noble tag, with the index digest printed by
+      #   docker buildx imagetools inspect mcr.microsoft.com/playwright:vX.Y.Z-noble
+      # Compare browsers.json in the old and new playwright-core: if the Chromium or
+      # WebKit revision changed, the visual baselines may need regenerating.
       - dependency-name: mcr.microsoft.com/playwright
     commit-message:
       prefix: "chore(docker)"

@@ -330,8 +330,8 @@ No new production endpoint, role, integration or data flow.
 
 ### 5.11 Sentry integration (review 2026-11-17, `feat/sentry`)
 New surfaces and flows:
-- **Server SDK** (@sentry/node 11.10.0, bundled into a lazy `dist/chunks/esm-*.js`, loaded only with `SENTRY_DSN`) in the service and the admin jobs. It sends 5xx events, A6 email-quota alerts (60%, the non-priority cutoff, and 100%, one-shot per UTC day; 80% before F-60) and A3 purge cron check-ins.
-- **Browser SDK** (@sentry/browser 11.10.0, a lazy chunk started after `load`, DSN baked in at build time on main only).
+- **Server SDK** (@sentry/node 11.12.0, bundled into a lazy `dist/chunks/esm-*.js`, loaded only with `SENTRY_DSN`) in the service and the admin jobs. It sends 5xx events, A6 email-quota alerts (60%, the non-priority cutoff, and 100%, one-shot per UTC day; 80% before F-60) and A3 purge cron check-ins.
+- **Browser SDK** (@sentry/browser 11.12.0, a lazy chunk started after `load`, DSN baked in at build time on main only).
 - **CSP reports** now reach the `shoestring-api` project (`report-to csp`).
 - **Boot entry:** `boot-*.js` runs first and captures the link token (F-50).
 - **CI `sourcemaps` job:** main only, GitHub environment `sentry`, org token. Maps never ship in the image or as artifacts.
